@@ -100,7 +100,8 @@ cd vaptvupt && make
 **Apache 2.0** | [LICENSE](LICENSE).
 
 Originally added on [Zupt v2.0-RC](https://github.com/cristiancmoises/zupt/releases) MIT + Apache 2.0.
-I'm working alone on this project.
 
-© 2026 Cristian Cezar Moisés
+
+© 2026 Cristian Cezar Moisés | [In Code We Trust](https://wiki.securityops.co)
+
 ```
