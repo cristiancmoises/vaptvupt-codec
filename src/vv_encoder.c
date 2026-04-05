@@ -233,13 +233,13 @@ static size_t emit_seq(uint8_t *dst, const uint8_t *lits,
  * hash insertions, speeding up compression by 15-25% at L3+.
  * ═══════════════════════════════════════════════════════════════ */
 
-static size_t compress_block(const uint8_t *src, size_t src_len,
+static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_len,
                              uint8_t *dst, size_t dst_cap,
                              matcher_t *m, vv_mode_t mode) {
     uint8_t *op = dst;
-    int32_t pos = 0;
-    int32_t end = (int32_t)src_len;
-    const uint8_t *lit_start = src;
+    int32_t pos = (int32_t)start_pos;
+    int32_t end = (int32_t)(start_pos + block_len);
+    const uint8_t *lit_start = src + start_pos;
     int off_bytes = (m->wlog > 16) ? 3 : 2;
 
     while (pos < end - (int32_t)VV_MIN_MATCH) {
@@ -457,11 +457,11 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
         if (trial_buf) {
             /* PERF: use greedy depth=4 for trials — 10× faster than lazy-48 */
             matcher_t m16; matcher_init(&m16, 16, 4);
-            size_t sz16 = compress_block(src, trial_len, trial_buf, trial_cap, &m16, VV_MODE_ULTRA_FAST);
+            size_t sz16 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m16, VV_MODE_ULTRA_FAST);
             matcher_free(&m16);
 
             matcher_t m20; matcher_init(&m20, 20, 4);
-            size_t sz20 = compress_block(src, trial_len, trial_buf, trial_cap, &m20, VV_MODE_ULTRA_FAST);
+            size_t sz20 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m20, VV_MODE_ULTRA_FAST);
             matcher_free(&m20);
 
             free(trial_buf);
@@ -518,7 +518,8 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
         size_t braw = remaining > VV_MAX_BLOCK_SIZE ? VV_MAX_BLOCK_SIZE : remaining;
         int last = (remaining <= VV_MAX_BLOCK_SIZE);
 
-        size_t csz = compress_block(ip, braw, tmp, tcap, &m, opts->mode);
+        size_t block_start = (size_t)(ip - src);
+        size_t csz = compress_block(src, block_start, braw, tmp, tcap, &m, opts->mode);
 
         if (csz == 0 || csz >= braw) {
             /* Incompressible: store raw */

@@ -97,7 +97,8 @@ static inline void match_overlap(uint8_t *d, uint32_t off, size_t n) {
 
 static vv_error_t decode_block_tokens(
     const uint8_t *ip, size_t ip_len,
-    uint8_t *op, size_t dst_cap, size_t *out_len, int off_bytes)
+    uint8_t *op, size_t dst_cap, size_t *out_len, int off_bytes,
+    const uint8_t *dst_base)  /* Base of full output buffer for cross-block offset validation */
 {
     const uint8_t *const ip_end = ip + ip_len;
     uint8_t *const op_start = op;
@@ -171,7 +172,7 @@ static vv_error_t decode_block_tokens(
             mlen += (uint32_t)read_ext_len(&ip, ip_end);
 
         /* ── Validate offset ── */
-        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - op_start), 0))
+        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - dst_base), 0))
             return VV_ERR_CORRUPT;
 
         /* ── Match copy (inline AVX2, tiered by offset) ── */
@@ -214,7 +215,7 @@ static vv_error_t decode_block_tokens(
         if (__builtin_expect(mc == 15, 0))
             mlen += read_ext_len(&ip, ip_end);
 
-        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - op_start), 0))
+        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - dst_base), 0))
             return VV_ERR_CORRUPT;
         if (__builtin_expect(op + mlen > op_end, 0))
             return VV_ERR_OVERFLOW;
@@ -238,7 +239,8 @@ static vv_error_t decode_block_tokens(
 static vv_error_t decode_stripped_tokens(
     const uint8_t *ip, size_t ip_len,       /* Stripped token stream */
     const uint8_t *lit_buf, size_t lit_len,  /* Pre-decoded literals */
-    uint8_t *op, size_t dst_cap, size_t *out_len, int off_bytes)
+    uint8_t *op, size_t dst_cap, size_t *out_len, int off_bytes,
+    const uint8_t *dst_base)
 {
     const uint8_t *ip_end = ip + ip_len;
     uint8_t *op_start = op;
@@ -277,7 +279,7 @@ static vv_error_t decode_stripped_tokens(
             mlen += read_ext_len(&ip, ip_end);
 
         /* Validate */
-        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - op_start), 0))
+        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - dst_base), 0))
             return VV_ERR_CORRUPT;
         if (__builtin_expect(op + mlen > op_end, 0))
             return VV_ERR_OVERFLOW;
@@ -299,7 +301,8 @@ static vv_error_t decode_stripped_tokens(
 
 static vv_error_t decode_block_huffman(
     const uint8_t *data, size_t data_len,
-    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes)
+    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
+    const uint8_t *dst_base)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -324,7 +327,7 @@ static vv_error_t decode_block_huffman(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes);
+                                             output, decomp_size, out_len, off_bytes, dst_base);
     free(lit_buf);
     return err;
 }
@@ -337,7 +340,8 @@ static vv_error_t decode_block_huffman(
 
 static vv_error_t decode_block_ans(
     const uint8_t *data, size_t data_len,
-    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes)
+    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
+    const uint8_t *dst_base)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -361,7 +365,7 @@ static vv_error_t decode_block_ans(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes);
+                                             output, decomp_size, out_len, off_bytes, dst_base);
     free(lit_buf);
     return err;
 }
@@ -372,7 +376,8 @@ static vv_error_t decode_block_ans(
 
 static vv_error_t decode_block_ans4(
     const uint8_t *data, size_t data_len,
-    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes)
+    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
+    const uint8_t *dst_base)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -394,7 +399,7 @@ static vv_error_t decode_block_ans4(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes);
+                                             output, decomp_size, out_len, off_bytes, dst_base);
     free(lit_buf);
     return err;
 }
@@ -405,7 +410,8 @@ static vv_error_t decode_block_ans4(
 
 static vv_error_t decode_block_ctx(
     const uint8_t *data, size_t data_len,
-    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes)
+    uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
+    const uint8_t *dst_base)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -427,7 +433,7 @@ static vv_error_t decode_block_ctx(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes);
+                                             output, decomp_size, out_len, off_bytes, dst_base);
     free(lit_buf);
     return err;
 }
@@ -480,7 +486,7 @@ int64_t vv_decompress(const uint8_t *src, size_t src_len,
             if (ip + csz > ip_end) return VV_ERR_CORRUPT;
 
             size_t actual = 0;
-            vv_error_t err = decode_block_tokens(ip, csz, op, dsz, &actual, off_bytes);
+            vv_error_t err = decode_block_tokens(ip, csz, op, dsz, &actual, off_bytes, dst);
             if (err != VV_OK) return err;
             if (actual != dsz) return VV_ERR_CORRUPT;
             ip += csz; op += dsz;
@@ -500,17 +506,17 @@ int64_t vv_decompress(const uint8_t *src, size_t src_len,
             vv_error_t err;
 
             if (tag == VV_ENTROPY_ANS) {
-                err = decode_block_ans(bdata, bdata_len, op, dsz, &actual, off_bytes);
+                err = decode_block_ans(bdata, bdata_len, op, dsz, &actual, off_bytes, dst);
             } else if (tag == VV_ENTROPY_ANS4) {
-                err = decode_block_ans4(bdata, bdata_len, op, dsz, &actual, off_bytes);
+                err = decode_block_ans4(bdata, bdata_len, op, dsz, &actual, off_bytes, dst);
             } else if (tag == VV_ENTROPY_CTX) {
-                err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, off_bytes);
+                err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, off_bytes, dst);
             } else if (tag == VV_ENTROPY_SEQ) {
                 /* Sequence coding: ANS on literals + ML + OF */
-                err = vva_decode_sequences(bdata, bdata_len, op, dsz, &actual);
+                err = vva_decode_sequences(bdata, bdata_len, op, dsz, &actual, dst);
                 if (err != VV_OK) err = VV_ERR_CORRUPT;
             } else if (tag == VV_ENTROPY_HUFFMAN) {
-                err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, off_bytes);
+                err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, off_bytes, dst);
             } else {
                 return VV_ERR_CORRUPT;
             }

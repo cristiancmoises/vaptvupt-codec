@@ -1643,7 +1643,8 @@ seq_fail:
  * ═══════════════════════════════════════════════════════════════ */
 
 vva_error_t vva_decode_sequences(const uint8_t *src, size_t src_len,
-                                  uint8_t *dst, size_t dst_cap, size_t *dst_len) {
+                                  uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                  const uint8_t *dst_base) {
     const uint8_t *p = src, *end = src + src_len;
 
     /* Read literal section: [4B lit_count] [1B lit_fmt] [4B lit_enc_len] */
@@ -1800,7 +1801,7 @@ vva_error_t vva_decode_sequences(const uint8_t *src, size_t src_len,
         uint32_t matchlen = ml_decode(ml_code, ml_extra_val);
 
         /* Validate and execute match copy */
-        if (offset == 0 || offset > (uint32_t)(op - dst)) {
+        if (offset == 0 || offset > (uint32_t)(op - dst_base)) {
             free(dec_ml); free(dec_of); free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
