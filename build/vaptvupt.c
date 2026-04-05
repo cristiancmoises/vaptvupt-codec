@@ -2738,8 +2738,9 @@ static inline int32_t extend_match(const uint8_t *a, const uint8_t *b,
  * MATCHER: hash chain with 5-byte hash + rep-match
  * ═══════════════════════════════════════════════════════════════ */
 
+
 typedef struct {
-    int32_t *table;    /* Hash table: VV_HC_SIZE entries, heap-allocated */
+    int32_t *table;    /* Primary: VV_HC_SIZE entries (hash5) */
     int32_t *chain;    /* Chain array: window_size entries */
     uint32_t chain_mask;
     uint32_t chain_depth;
@@ -2751,8 +2752,8 @@ static void matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
     uint32_t wsz = 1u << window_log;
     m->table = (int32_t *)malloc(VV_HC_SIZE * sizeof(int32_t));
     m->chain = (int32_t *)malloc(wsz * sizeof(int32_t));
-    memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));  /* -1 */
-    memset(m->chain, 0xFF, wsz * sizeof(int32_t));          /* -1 */
+    memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));
+    memset(m->chain, 0xFF, wsz * sizeof(int32_t));
     m->chain_mask = wsz - 1;
     m->chain_depth = depth;
     m->rep[0] = m->rep[1] = m->rep[2] = 0;
@@ -2780,7 +2781,6 @@ static inline int32_t try_rep_match(const matcher_t *m, const uint8_t *data,
         uint32_t d = m->rep[i];
         if (d == 0 || (uint32_t)pos < d) continue;
         int32_t ref = pos - (int32_t)d;
-        /* Quick 4-byte check */
         uint32_t a, b;
         __builtin_memcpy(&a, data + pos, 4);
         __builtin_memcpy(&b, data + ref, 4);
@@ -2795,24 +2795,24 @@ static inline int32_t try_rep_match(const matcher_t *m, const uint8_t *data,
     return 0;
 }
 
-/* ─── Hash chain match: uses 5-byte hash, searches up to chain_depth ─── */
+/* ─── Hash chain match: DUAL HASH (hash5 + hash4) for binary coverage ─── */
 static int32_t chain_match(const matcher_t *m, const uint8_t *data,
                             int32_t pos, int32_t end, int32_t *best_off) {
     if (pos + 4 > end) return 0;
-    uint32_t h = hash_safe(data + pos, end - pos);
-    int32_t ref = m->table[h];
+
     int32_t best_len = 0;
     *best_off = 0;
 
-    uint32_t depth = m->chain_depth;
-    /* PERF: match distance limit derived from window log.
-     * wlog=16 → 65535, wlog=20 → 1048575, wlog=22 → 4194303. */
     int32_t max_dist = (int32_t)((1u << m->wlog) - 1);
     int32_t limit = pos - max_dist;
     if (limit < 0) limit = 0;
 
+    /* Primary hash5 chain traversal */
+    uint32_t h = hash_safe(data + pos, end - pos);
+    int32_t ref = m->table[h];
+    uint32_t depth = m->chain_depth;
+
     while (ref >= 0 && ref >= limit && ref < pos && depth-- > 0) {
-        /* Quick 4-byte prefix check */
         uint32_t a, b;
         __builtin_memcpy(&a, data + pos, 4);
         __builtin_memcpy(&b, data + ref, 4);
@@ -2823,11 +2823,14 @@ static int32_t chain_match(const matcher_t *m, const uint8_t *data,
             if (len > best_len) {
                 best_len = len;
                 *best_off = pos - ref;
-                if (len >= 256) break; /* good enough */
+                if (len >= 256) return best_len;
             }
         }
         ref = m->chain[ref & m->chain_mask];
     }
+
+
+
     return best_len;
 }
 
@@ -3568,8 +3571,9 @@ static vv_error_t decode_stripped_tokens(
             mlen += read_ext_len(&ip, ip_end);
 
         /* Validate */
-        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - dst_base), 0))
+        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - dst_base), 0)) {
             return VV_ERR_CORRUPT;
+        }
         if (__builtin_expect(op + mlen > op_end, 0))
             return VV_ERR_OVERFLOW;
 

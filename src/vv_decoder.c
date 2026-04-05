@@ -279,8 +279,9 @@ static vv_error_t decode_stripped_tokens(
             mlen += read_ext_len(&ip, ip_end);
 
         /* Validate */
-        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - dst_base), 0))
+        if (__builtin_expect(offset == 0 || offset > (uint32_t)(op - dst_base), 0)) {
             return VV_ERR_CORRUPT;
+        }
         if (__builtin_expect(op + mlen > op_end, 0))
             return VV_ERR_OVERFLOW;
 
