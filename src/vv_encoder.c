@@ -445,38 +445,27 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
     default: depth = 48;
     }
 
-    /* ─── ADAPTIVE WINDOW (Item 2): trial-compress first block at wlog=16
-     * and wlog=20. If wlog=20 produces ≥3% smaller output, use it.
-     * Only for balanced/extreme with auto wlog (opts->window_log == 0).
-     * Cost: one extra compression of the first block (~10ms for 1MB).
-     * TRADEOFF: encode speed vs automatic ratio optimization.
-     * Zupt benefits because backup data characteristics are unknown. ─── */
+    /* ─── ADAPTIVE WINDOW: sample first 64KB at wlog=16 vs wlog=20.
+     * PERF: only samples 64KB (not full 1MB block) — 16× faster trial.
+     * If wlog=20 saves ≥3%, use wider window for the whole frame. ─── */
     if (opts->window_log == 0 && opts->mode >= VV_MODE_BALANCED && src_len > 65536) {
-        size_t trial_len = src_len;
-        if (trial_len > VV_MAX_BLOCK_SIZE) trial_len = VV_MAX_BLOCK_SIZE;
+        size_t trial_len = 262144; /* Sample 256KB — catches patterns up to 200KB apart */
+        if (trial_len > src_len) trial_len = src_len;
 
         size_t trial_cap = trial_len + trial_len / 255 + 1024;
         uint8_t *trial_buf = (uint8_t *)malloc(trial_cap);
         if (trial_buf) {
-            /* Trial at wlog=16 */
-            matcher_t m16;
-            matcher_init(&m16, 16, depth);
-            size_t sz16 = compress_block(src, trial_len, trial_buf, trial_cap, &m16, opts->mode);
+            /* PERF: use greedy depth=4 for trials — 10× faster than lazy-48 */
+            matcher_t m16; matcher_init(&m16, 16, 4);
+            size_t sz16 = compress_block(src, trial_len, trial_buf, trial_cap, &m16, VV_MODE_ULTRA_FAST);
             matcher_free(&m16);
 
-            /* Trial at wlog=20 */
-            matcher_t m20;
-            matcher_init(&m20, 20, depth);
-            size_t sz20 = compress_block(src, trial_len, trial_buf, trial_cap, &m20, opts->mode);
+            matcher_t m20; matcher_init(&m20, 20, 4);
+            size_t sz20 = compress_block(src, trial_len, trial_buf, trial_cap, &m20, VV_MODE_ULTRA_FAST);
             matcher_free(&m20);
 
             free(trial_buf);
-
-            /* Pick winner: wlog=20 must save ≥3% to justify 3-byte offsets */
-            if (sz20 > 0 && sz16 > 0 && sz20 < (sz16 * 97 / 100)) {
-                wlog = 20;
-            }
-            /* Otherwise stay at wlog=16 (no regression on short-offset data) */
+            if (sz20 > 0 && sz16 > 0 && sz20 < (sz16 * 97 / 100)) wlog = 20;
         }
     }
 

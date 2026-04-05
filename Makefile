@@ -12,7 +12,7 @@ ifeq ($(ARCH),x86_64)
   CFLAGS += -mavx2
 endif
 
-CORE_SRC = src/vv_encoder.c src/vv_decoder.c src/vv_simd.c src/vv_xxh64.c src/vv_huffman.c src/vv_ans.c
+CORE_SRC = src/vv_encoder.c src/vv_decoder.c src/vv_simd.c src/vv_xxh64.c src/vv_huffman.c src/vv_ans.c src/vaptvupt_api.c
 SOURCES  = src/main.c $(CORE_SRC)
 TARGET   = vaptvupt
 
@@ -80,3 +80,17 @@ bench: $(TARGET)
 
 clean:
 	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) *.vv *.orig
+
+amalg:
+	@mkdir -p build
+	@echo "/* VaptVupt amalgamation — single-file build for Zupt */" > build/vaptvupt.h
+	@echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> build/vaptvupt.h
+	@cat include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h >> build/vaptvupt.h
+	@echo "/* VaptVupt amalgamation — single-file build */" > build/vaptvupt.c
+	@echo '#include "vaptvupt.h"' >> build/vaptvupt.c
+	@for f in src/vv_xxh64.c src/vv_simd.c src/vv_huffman.c src/vv_ans.c src/vv_encoder.c src/vv_decoder.c src/vaptvupt_api.c; do \
+		echo "" >> build/vaptvupt.c; \
+		echo "/* ── $$f ── */" >> build/vaptvupt.c; \
+		grep -v '#include "' $$f >> build/vaptvupt.c; \
+	done
+	@echo "Amalgamation: build/vaptvupt.c + build/vaptvupt.h"
