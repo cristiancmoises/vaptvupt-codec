@@ -1,9 +1,5 @@
-# VaptVupt
 
-**Fast LZ77 + tANS entropy codec**  
-Pure C11 · Zero dependencies 
-
-**Compress everything. Trust nothing. Encrypt always.** (codec only)
+<img width="900" height="220" alt="vaptvupt" src="https://github.com/user-attachments/assets/dd02986d-2a8f-42da-a27c-58e334d9917a" />
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Language](https://img.shields.io/badge/language-C11-green)
