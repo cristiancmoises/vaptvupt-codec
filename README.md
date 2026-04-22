@@ -1,8 +1,8 @@
-# VaptVupt
+# VAPTVUPT
+## **A compression codec purpose-built for secure backup tool.** 
+Pure C11, zero runtime dependencies, single-file amalgamation. 
 
-**A compression codec purpose-built for secure backup tools.** Pure
-C11, zero runtime dependencies, single-file amalgamation. Produces an
-open wire format ([FORMAT.md](FORMAT.md)) stable since v1.0.0, with
+Produces an open wire format ([FORMAT.md](FORMAT.md)) stable since v1.0.0, with
 byte-exact reference decoders in Python and JavaScript.
 
 **Current version: v2.40.0.** 6,557 tests + 10,200-case differential
