@@ -1,5 +1,5 @@
 # VAPTVUPT
-## **A compression codec purpose-built for secure backup tool.** 
+## **A compression codec purpose-built for Zupt a secure backup tool.** 
 Pure C11, zero runtime dependencies, single-file amalgamation. 
 
 Produces an open wire format ([FORMAT.md](FORMAT.md)) stable since v1.0.0, with
