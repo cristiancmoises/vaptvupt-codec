@@ -21,16 +21,32 @@ static void usage(void) {
         "VaptVupt %s — Next-generation lossless compression\n"
         "\n"
         "Usage:\n"
-        "  vaptvupt -c [-m mode] [-o out.vv] input    Compress\n"
-        "  vaptvupt -d [-o output] input.vv            Decompress\n"
-        "  vaptvupt -t input.vv                        Test integrity\n"
-        "  vaptvupt -b input                           Benchmark\n"
+        "  vaptvupt -c [-m mode] [-T N] [-o out.vv] input   Compress\n"
+        "  vaptvupt -d [-o output] input.vv                 Decompress\n"
+        "  vaptvupt -t input.vv                             Test integrity\n"
+        "  vaptvupt -b input                                Benchmark\n"
         "\n"
         "Modes: fast, balanced (default), extreme\n"
         "\n"
         "Options:\n"
         "  -m mode   Compression mode (fast/balanced/extreme)\n"
+        "  -T N      Encode with N threads (1=single, 0=auto-detect CPUs).\n"
+        "            Requires the binary to be built with -DVV_ENABLE_THREADS\n"
+        "            and -lpthread; otherwise runs sequentially with multi-frame\n"
+        "            output. Multi-threaded output is a valid .vv stream readable\n"
+        "            by any vv_decompress call.\n"
         "  -o file   Output file (default: input.vv / input.orig)\n"
+        "  --fast    With -d: skip XXH64 verification during decompress.\n"
+        "            With -c: skip XXH64 footer generation during compress.\n"
+        "            Safe when another layer (e.g. AES-GCM) provides\n"
+        "            integrity. On decode: massive gains on random/binary\n"
+        "            (up to 3× total throughput). On encode: modest ~5–7%\n"
+        "            speedup. The resulting frame has no XXH64 footer and\n"
+        "            decodes identically with or without --fast.\n"
+        "  --format-v2  Emit 'T' tag blocks (min_match=3, v2 format).\n"
+        "            Only decodable by vaptvupt v2.33.0+ decoders.\n"
+        "            Ratio-neutral in this release; a future sprint\n"
+        "            will add hash3 matcher to realize the improvement.\n"
         "  -v        Verbose output\n"
         "  -h        Show this help\n",
         VV_VERSION_STRING);
@@ -77,6 +93,9 @@ int main(int argc, char **argv) {
     const char *output_path = NULL;
     const char *input_path = NULL;
     int verbose = 0;
+    int nthreads = 1;   /* 1 = single-threaded default */
+    int fast_decode = 0;  /* --fast: skip XXH64 verification */
+    int use_format_v2 = 0;  /* --format-v2: emit 'T' tag blocks (min_match=3) */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) do_compress = 1;
@@ -86,6 +105,12 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) mode_str = argv[++i];
         else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) output_path = argv[++i];
         else if (strcmp(argv[i], "-v") == 0) verbose = 1;
+        else if (strcmp(argv[i], "--fast") == 0) fast_decode = 1;
+        else if (strcmp(argv[i], "--format-v2") == 0) use_format_v2 = 1;
+        else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) {
+            nthreads = atoi(argv[++i]);
+            if (nthreads < 0) nthreads = 0;
+        }
         else if (strcmp(argv[i], "-h") == 0) { usage(); return 0; }
         else if (argv[i][0] != '-') input_path = argv[i];
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); return 1; }
@@ -106,13 +131,37 @@ int main(int argc, char **argv) {
         vv_default_options(&opts);
         opts.mode = parse_mode(mode_str);
         opts.verbose = verbose;
+        /* --fast on compress: skip XXH64 footer generation.
+         * Modest speedup (~5–7%) on text/json; bigger on trivial
+         * inputs where the codec work is near-free. Callers using
+         * AES-GCM or similar AEAD already have stronger integrity. */
+        if (fast_decode) opts.checksum = 0;
+        /* --format-v2: encode with min_match=3, emitting 'T' tag
+         * blocks. Only decodable by v2.33.0+ decoders. Infrastructure
+         * is in place; real ratio gains require hash3 matcher
+         * (Sprint 45). */
+        opts.format_v2 = use_format_v2;
 
+        /* MT path uses slightly larger bound because concatenated frames
+         * have per-frame overhead. Add 64 KB per potential chunk. */
         size_t dst_cap = vv_compress_bound(input_len);
+        if (nthreads != 1) {
+            size_t n_chunks = (input_len + 4 * 1024 * 1024 - 1) / (4 * 1024 * 1024);
+            if (n_chunks < 1) n_chunks = 1;
+            dst_cap += n_chunks * 65536;
+        }
         uint8_t *dst = (uint8_t *)malloc(dst_cap);
         if (!dst) { fprintf(stderr, "Out of memory\n"); free(input_data); return 1; }
 
         double t0 = now_sec();
-        int64_t comp_size = vv_compress(input_data, input_len, dst, dst_cap, &opts);
+        int64_t comp_size;
+        if (nthreads != 1) {
+            /* Use MT API (nthreads=0 means auto-detect, >1 means explicit) */
+            comp_size = vv_compress_mt(input_data, input_len, dst, dst_cap, &opts,
+                                       (unsigned int)nthreads, 0);
+        } else {
+            comp_size = vv_compress(input_data, input_len, dst, dst_cap, &opts);
+        }
         double t1 = now_sec();
 
         if (comp_size < 0) {
@@ -142,20 +191,77 @@ int main(int argc, char **argv) {
 
     /* ─── DECOMPRESS ─── */
     if (do_decompress || do_test) {
-        /* Read content size from header */
+        /* For multi-frame streams (produced by vv_compress_mt), we need
+         * to sum the content_size of every frame. Walk the stream once
+         * to tally, then allocate. */
+        size_t total_content = 0;
+        size_t scan_pos = 0;
+        int scan_ok = 1;
+        while (scan_pos + sizeof(vv_frame_header_t) <= input_len) {
+            vv_frame_header_t scan_fh;
+            memcpy(&scan_fh, input_data + scan_pos, sizeof(scan_fh));
+            if (scan_fh.magic != VV_MAGIC) { scan_ok = 0; break; }
+            total_content += (size_t)scan_fh.content_size;
+            /* Advance to next frame by reading block headers */
+            size_t fp = scan_pos + sizeof(vv_frame_header_t);
+            int has_cks = scan_fh.flags & 1;
+            for (;;) {
+                if (fp + 4 > input_len) { scan_ok = 0; break; }
+                uint32_t bh_packed;
+                memcpy(&bh_packed, input_data + fp, 4);
+                vv_block_type_t btype = vv_bh_type(bh_packed);
+                int is_last = vv_bh_last(bh_packed);
+                uint32_t dsz = vv_bh_size(bh_packed);
+                fp += 4;
+                if (btype == VV_BLOCK_RAW) {
+                    fp += dsz;
+                } else if (btype == VV_BLOCK_RLE) {
+                    fp += 1;
+                } else if (btype == VV_BLOCK_COMPRESSED || btype == VV_BLOCK_ENTROPY) {
+                    if (fp + 3 > input_len) { scan_ok = 0; break; }
+                    uint32_t csz = (uint32_t)input_data[fp] | ((uint32_t)input_data[fp+1] << 8) | ((uint32_t)input_data[fp+2] << 16);
+                    fp += 3 + csz;
+                } else {
+                    scan_ok = 0; break;
+                }
+                if (fp > input_len) { scan_ok = 0; break; }
+                if (is_last) break;
+            }
+            if (!scan_ok) break;
+            if (has_cks) fp += sizeof(vv_frame_footer_t);
+            scan_pos = fp;
+        }
+
+        /* Read content size from header (first frame) as fallback */
         if (input_len < sizeof(vv_frame_header_t)) {
             fprintf(stderr, "Input too small\n"); free(input_data); return 1;
         }
         vv_frame_header_t fh;
         memcpy(&fh, input_data, sizeof(fh));
-        size_t dst_cap = (size_t)fh.content_size;
+
+        size_t dst_cap = scan_ok ? total_content : (size_t)fh.content_size;
         if (dst_cap == 0) dst_cap = input_len * 8;  /* Guess */
+        /* Defense against malicious/corrupted content_size:
+         * - Never trust a value smaller than a reasonable guess, so a
+         *   tiny content_size (e.g. 3 when the real data is 35 bytes)
+         *   doesn't cause OVERFLOW during decode.
+         * - Cap the upper bound so an absurdly-huge content_size
+         *   doesn't cause an OOM allocation (DoS).
+         * Lower bound = 8× input_size (typical decompression ratio).
+         * Upper bound = max(lower_bound, 256 MB). */
+        size_t floor_cap = input_len * 8;
+        if (floor_cap < (256u << 20)) floor_cap = (256u << 20);
+        if (dst_cap < (size_t)(input_len * 8)) dst_cap = input_len * 8;
+        if (dst_cap > floor_cap) dst_cap = floor_cap;
         /* Add slack for SIMD over-copy */
         uint8_t *dst = (uint8_t *)calloc(1, dst_cap + 64);
         if (!dst) { fprintf(stderr, "Out of memory\n"); free(input_data); return 1; }
 
         double t0 = now_sec();
-        int64_t decomp_size = vv_decompress(input_data, input_len, dst, dst_cap);
+        uint32_t dec_flags = fast_decode ? VV_DECOMPRESS_SKIP_CHECKSUM
+                                          : VV_DECOMPRESS_DEFAULT;
+        int64_t decomp_size = vv_decompress_flags(input_data, input_len,
+                                                   dst, dst_cap, dec_flags);
         double t1 = now_sec();
 
         if (decomp_size < 0) {

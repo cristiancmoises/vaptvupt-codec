@@ -517,7 +517,7 @@ vvh_error_t vvh_decode(const uint8_t *src, size_t src_len,
         int sym = (int)(entry & 0xFF);
         int len = (int)((entry >> 8) & 0xF);
 
-        if (__builtin_expect(len > 0, 1)) {
+        if (VV_LIKELY(len > 0)) {
             /* Fast path: code ≤ 12 bits */
             br_consume(&r, len);
             dst[i] = (uint8_t)sym;

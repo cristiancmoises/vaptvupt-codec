@@ -38,3 +38,25 @@ int64_t vvz_decompress(const uint8_t *src, size_t src_len,
 size_t vvz_compress_bound(size_t src_len) {
     return vv_compress_bound(src_len);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+ * Frame metadata accessor
+ * ═══════════════════════════════════════════════════════════════ */
+
+int vv_get_frame_info(const uint8_t *src, size_t src_len,
+                      vv_frame_info_t *info) {
+    if (!src || !info) return VV_ERR_PARAM;
+    if (src_len < sizeof(vv_frame_header_t)) return VV_ERR_CORRUPT;
+
+    vv_frame_header_t fh;
+    memcpy(&fh, src, sizeof(fh));
+    if (fh.magic != VV_MAGIC) return VV_ERR_BAD_MAGIC;
+    if (fh.version != 1) return VV_ERR_CORRUPT;
+
+    info->version = fh.version;
+    info->has_checksum = (fh.flags & 1) ? 1 : 0;
+    info->mode_hint = fh.mode_hint;
+    info->window_log = fh.window_log;
+    info->content_size = fh.content_size;
+    return VV_OK;
+}
