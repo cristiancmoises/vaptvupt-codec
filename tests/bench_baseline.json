@@ -7,25 +7,25 @@
     "ultra_fast": 852
   },
   "csv": {
-    "balanced": 18907,
-    "extreme": 18891,
+    "balanced": 18191,
+    "extreme": 18208,
     "gzip9": 19359,
     "input_size": 67812,
-    "ultra_fast": 18907
+    "ultra_fast": 18191
   },
   "json-mixed": {
-    "balanced": 29166,
-    "extreme": 29201,
+    "balanced": 27433,
+    "extreme": 27447,
     "gzip9": 27990,
     "input_size": 118545,
-    "ultra_fast": 29166
+    "ultra_fast": 27433
   },
   "json-small": {
-    "balanced": 3999,
-    "extreme": 4177,
+    "balanced": 3755,
+    "extreme": 3916,
     "gzip9": 5426,
     "input_size": 49780,
-    "ultra_fast": 3999
+    "ultra_fast": 3755
   },
   "random": {
     "balanced": 50032,
@@ -42,31 +42,31 @@
     "ultra_fast": 100
   },
   "source-like": {
-    "balanced": 879,
-    "extreme": 879,
+    "balanced": 817,
+    "extreme": 817,
     "gzip9": 976,
     "input_size": 38490,
-    "ultra_fast": 879
+    "ultra_fast": 817
   },
   "text-large": {
-    "balanced": 19185,
-    "extreme": 18850,
+    "balanced": 18998,
+    "extreme": 18680,
     "gzip9": 14529,
     "input_size": 74307,
-    "ultra_fast": 19185
+    "ultra_fast": 18998
   },
   "text-simple": {
-    "balanced": 12767,
-    "extreme": 12215,
+    "balanced": 12571,
+    "extreme": 12034,
     "gzip9": 9116,
     "input_size": 58558,
-    "ultra_fast": 12767
+    "ultra_fast": 12571
   },
   "text-varied": {
-    "balanced": 11321,
-    "extreme": 10451,
+    "balanced": 11117,
+    "extreme": 10315,
     "gzip9": 7591,
     "input_size": 55798,
-    "ultra_fast": 11321
+    "ultra_fast": 11117
   }
 }

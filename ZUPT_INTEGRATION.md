@@ -1,10 +1,10 @@
-# Integrating VaptVupt 2.40.0 into Zupt 2.1.6
+# Integrating VaptVupt 2.46.1 into Zupt 2.1.6
 
 This document is the **canonical integration reference** for the Zupt
-2.1.6 team when embedding VaptVupt 2.40.0 as the compression layer
+2.1.6 team when embedding VaptVupt 2.46.1 as the compression layer
 beneath Zupt's AES-256-GCM + ML-KEM envelope.
 
-Written against: `vaptvupt-2.40.0`, April 22 2026.
+Written against: `vaptvupt-2.46.1`, April 22 2026.
 
 ---
 
@@ -13,12 +13,12 @@ Written against: `vaptvupt-2.40.0`, April 22 2026.
 1. **Link against the amalgamation** — `build/vaptvupt.c` + `build/vaptvupt.h`. No Makefile wiring required.
 2. **Use `VV_DECOMPRESS_SKIP_CHECKSUM` on decode** — Zupt's outer GCM tag already authenticates the compressed bytes. XXH64 is redundant work; skipping it delivers 2-5× decode on random data.
 3. **Use `opts.format_v2 = 1` on encode** — delivers 4-7% better binary compression with zero format-compat risk (v2.33.0+ decoders read v2 frames transparently).
-4. **Set `opts.fast_path = 1` on encode** — matches Zupt's write throughput pattern (encoder skips XXH64 generation, saving ~10% encode time; decoder side still verifies if `--fast` omitted).
+4. **Set `opts.checksum = 0` on encode** — skips the XXH64 footer on the encoder side (saving ~10% encode time), since Zupt's outer AES-GCM already authenticates the compressed bytes. Pair with `VV_DECOMPRESS_SKIP_CHECKSUM` on decode (point #2) for the full savings.
 5. **Treat any non-OK decode return as a frame-level reject** — do NOT attempt recovery. Pass the error up to Zupt's transaction layer, which will retry from the previous snapshot.
 
 ---
 
-## Why VaptVupt 2.40.0 for Zupt 2.1.6
+## Why VaptVupt 2.46.1 for Zupt 2.1.6
 
 Zupt's threat model places VaptVupt **inside** the AEAD envelope:
 
@@ -64,7 +64,7 @@ int zupt_compress_for_archive(const uint8_t *plaintext, size_t plaintext_len,
     vv_default_options(&opts);
     opts.mode = VV_MODE_EXTREME;   /* or BALANCED for backup speed */
     opts.format_v2 = 1;            /* 4-7% better binary ratio */
-    opts.fast_path = 1;            /* skip XXH64 generation */
+    opts.checksum = 0;             /* skip XXH64 generation — Zupt's AES-GCM authenticates */
 
     size_t cap = vv_compress_bound(plaintext_len);
     uint8_t *buf = malloc(cap);
@@ -216,7 +216,7 @@ compression ratio** on real-world content.
 Before declaring the VaptVupt integration production-ready:
 
 - [ ] Link against `build/vaptvupt.c` + `build/vaptvupt.h` (not `src/*.c`)
-- [ ] All Zupt tests pass with VaptVupt 2.40.0 (should be drop-in)
+- [ ] All Zupt tests pass with VaptVupt 2.46.1 (should be drop-in)
 - [ ] Measure end-to-end backup throughput; confirm no regression
       vs Zupt 2.1.5's prior compression layer
 - [ ] Measure end-to-end restore throughput; confirm expected
@@ -230,9 +230,9 @@ Before declaring the VaptVupt integration production-ready:
       layer; Zupt should verify the AEAD-outside-codec layering)
 - [ ] Review this document's "Threat Model" section with Zupt's
       security team; confirm the non-guarantees are acceptable
-- [ ] Update Zupt's SBOM to list VaptVupt 2.40.0 as a component
-- [ ] Document the GPL-3.0 license compatibility (Zupt must be
-      GPL-3.0+ or use VaptVupt via IPC rather than linking)
+- [ ] Update Zupt's SBOM to list VaptVupt 2.46.1 as a component
+- [ ] Document the GPL-2.0-or-later license compatibility (Zupt must be
+      GPL-2.0+ or use VaptVupt via IPC rather than linking)
 
 ---
 
@@ -282,7 +282,7 @@ For issues: file against VaptVupt repository with:
 
 ## Version Pinning Recommendation
 
-Pin Zupt 2.1.6 to **VaptVupt 2.40.0 exactly**. Future 2.40.x patch
+Pin Zupt 2.1.6 to **VaptVupt 2.46.1 exactly**. Future 2.40.x patch
 releases will maintain wire-format and API stability, but the
 production validation for Zupt 2.1.6 is done against this specific
 VaptVupt version. Upgrading to 2.41+ should go through Zupt 2.1.7+

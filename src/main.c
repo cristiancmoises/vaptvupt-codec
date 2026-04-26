@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
  * VaptVupt CLI — Command-line interface
  *
  * Usage:
@@ -40,7 +42,7 @@ static void usage(void) {
         "            With -c: skip XXH64 footer generation during compress.\n"
         "            Safe when another layer (e.g. AES-GCM) provides\n"
         "            integrity. On decode: massive gains on random/binary\n"
-        "            (up to 3× total throughput). On encode: modest ~5–7%\n"
+        "            (up to 3× total throughput). On encode: modest ~5-7%%\n"
         "            speedup. The resulting frame has no XXH64 footer and\n"
         "            decodes identically with or without --fast.\n"
         "  --format-v2  Emit 'T' tag blocks (min_match=3, v2 format).\n"

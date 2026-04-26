@@ -1,13 +1,14 @@
-# VAPTVUPT
-## **A compression codec purpose-built for Zupt a secure backup tool.** 
-Pure C11, zero runtime dependencies, single-file amalgamation. 
+# VaptVupt
 
-Produces an open wire format ([FORMAT.md](FORMAT.md)) stable since v1.0.0, with
+**A compression codec purpose-built for secure backup tools.** Pure
+C11, zero runtime dependencies, single-file amalgamation. Produces an
+open wire format ([FORMAT.md](FORMAT.md)) stable since v1.0.0, with
 byte-exact reference decoders in Python and JavaScript.
 
-**Current version: v2.40.0.** 6,557 tests + 10,200-case differential
+**Current version: v2.46.0.** 6,032+ tests + 5,200-case differential
 fuzzer. Production-ready for Zupt 2.1.6 integration — see
-[ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md).
+[ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md). Three Silesia fixtures
+(fx_json, x-ray, sao) now beat zstd-3 on ratio.
 
 ## Headline Numbers
 
@@ -17,9 +18,9 @@ fuzzer. Production-ready for Zupt 2.1.6 integration — see
 - **Synthetic binary ratio: 1,149×** — 7× better than gzip-9, 6×
   better than lz4-9 on pattern-rich payloads.
 - **Synthetic repeat ratio: 7,367×** — 18× better than gzip-9.
-- **JSON ratio: 4.80×** — beats gzip-9's 4.65×.
+- **JSON ratio: 5.10×** — beats both gzip-9 and zstd-3.
 - **Real binary ratio** (libc.so.6, bash, python3): within
-  **4-7% of gzip-9** and closing, via format-v2's hash3 matcher.
+  **2-3% of zstd-3** as of v2.46.0's Huffman-in-SEQ literal coding.
 - **Embeddability**: 2 files (`build/vaptvupt.c` + `build/vaptvupt.h`).
   Drop in and ship.
 
@@ -38,11 +39,11 @@ against zstd, lz4, and gzip across ten fixture classes.
 | Streaming API | Encode + decode |
 | Multi-frame archives | Native support |
 | Security invariants | 14 numbered, all tested and guarded |
-| Tests | **6,557** standard; **11,556** with production fuzzer run |
+| Tests | **6,032+** standard; **8,732+** with full fuzzer run |
 | Reference impls | C (production) + Python + JavaScript |
-| License | GPL-3.0 |
+| License | GPL-3.0-or-later |
 
-## Performance — v2.40.0 baseline
+## Performance — v2.46.0 baseline
 
 Measured on a 2.1 GHz x86_64 container, library-level (not CLI),
 best-of-30 warmed runs. Bold marks where VaptVupt leads its class.
@@ -220,7 +221,7 @@ python3 tests/fuzz_differential.py --iters 2000   # 10,200 cases
 |---|---|---|
 | C unit tests (10 binaries) | 666 | correctness, edge cases, spec compliance |
 | Format-v2 regression (`test_seq_v2`) | 18 | 'T' tag encoder/decoder correctness |
-| **Safe-zone adversarial (v2.40.0)** | **55** | **v2.39.0 bounds-elision boundary bugs** |
+| **Safe-zone adversarial (v2.46.0)** | **55** | **v2.39.0 bounds-elision boundary bugs** |
 | Skip-checksum tests | 18 | `--fast` flag round-trips |
 | Streaming API fuzzer | 495 | chunk-boundary bugs across 11 fixtures |
 | Python decoder | 11 | independent spec validation (decode side) |
@@ -316,27 +317,31 @@ GPL-3.0-or-later (see CHANGELOG for Zupt-bundle MIT+Apache note).
 
 ## Project State
 
-As of v2.40.0:
+As of v2.46.0:
 
-- **50+ sprints** of development history (see [CHANGELOG.md](CHANGELOG.md))
-- **Zero wire-format corruption bugs since v2.35.0** — every release
-  passes the full test suite before shipping
+- **70+ sprints** of development history (see [CHANGELOG.md](CHANGELOG.md))
+- **Zero wire-format corruption bugs since v2.44.0** — the LL-coding
+  65,536-byte boundary bug latent since v0.8 was identified and fixed
+  by integration testing, then regression-locked
 - **Three independent reference implementations** (C production,
   Python reference, JavaScript reference) — all byte-exact
 - **Dual CI regression gates** (ratio + speed) with 0-byte tolerance
-- **6,557 tests with 0 failures, 0 skips** on the standard run;
-  **11,556** on the extended-fuzzer production run
+- **6,032+ tests with 0 failures, 0 skips** on the standard run
 - **Format v2 shipping** since v2.33.0 — `--format-v2` delivers 4-7%
   better binary ratios with zero back-compat risk
+- **v2.46.0 Huffman-in-SEQ** — Huffman as a fourth literal coder
+  competing with ANS4/ANS1/raw per-block, delivering uniform 0.5-5.5%
+  ratio improvement across all 18 measured fixtures
 - **Production-ready for Zupt 2.1.6** — see
   [ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md)
 
-The codec **beats gzip-9 on JSON and pattern-rich binaries** and
-**beats lz4 on random-data decode** with `--fast`. On real ELF
-binaries, format v2 has closed the gap with gzip-9 to
-**4% (libc.so.6) through 7% (bash)** — small enough that the next
-sprint can credibly land sub-3%. Prose text at high compression
-levels remains outside the target workload for this codec.
+The codec **beats zstd-3 on three Silesia fixtures** (fx_json, x-ray,
+sao) as of v2.46.0, **beats gzip-9 across the board**, and **beats
+lz4 on random-data decode** with `--fast`. On real ELF binaries,
+format v2 has closed the gap with zstd-3 to **2-3% (libc.so.6, bash)**.
+Closing the remaining gap on small-file high-compression workloads
+requires structural parser improvements (optimal parse) — future
+sprint work.
 
 See [COMPETITIVE.md](COMPETITIVE.md) for the complete measurement
 matrix and [ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md) for the

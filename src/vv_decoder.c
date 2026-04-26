@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
  * VaptVupt — Decoder v2 (Sprint 1)
  *
  * KEY CHANGES:

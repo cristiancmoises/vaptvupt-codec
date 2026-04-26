@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
  * VaptVupt — Canonical Huffman Codec
  *
  * Standalone header: can be used independently with VV_HUFFMAN_STANDALONE.

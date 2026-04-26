@@ -1,0 +1,23 @@
+                  GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies of this
+ license document, but changing it is not allowed.
+
+VaptVupt is licensed under GPL-3.0-or-later. You may choose to apply
+either version 3 of the GNU General Public License or any later version
+published by the Free Software Foundation.
+
+The full text of the GNU General Public License version 3 is available
+at:
+    https://www.gnu.org/licenses/gpl-3.0.txt
+
+Note that GPL-3.0 is NOT compatible with the Linux kernel, which is
+licensed under GPL-2.0 only. Kernel integration would require a
+separate license decision (e.g., dual-licensing or a kernel-only
+GPL-2.0 fork).
+
+For the SPDX identifier and per-file license metadata, see the
+"SPDX-License-Identifier: GPL-3.0-or-later" headers at the top of each
+source file.

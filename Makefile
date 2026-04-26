@@ -68,6 +68,9 @@ TEST12_BIN = test_seq_v2
 TEST13_SRC = tests/test_safezone_adversarial.c $(CORE_SRC)
 TEST13_BIN = test_safezone_adversarial
 
+TEST14_SRC = tests/test_large_boundary.c $(CORE_SRC)
+TEST14_BIN = test_large_boundary
+
 .PHONY: all clean test python-test fuzz bench-update speed-update run_roundtrip run_huffman bench check-debug
 
 all: $(TARGET)
@@ -168,7 +171,13 @@ $(TEST13_BIN): $(TEST13_SRC)
 	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST13_SRC)) /tmp/vv_simd_t13.o /tmp/vv_decoder_t13.o $(LDFLAGS) -o $(TEST13_BIN)
 	@rm -f /tmp/vv_simd_t13.o /tmp/vv_decoder_t13.o
 
-test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TARGET)
+$(TEST14_BIN): $(TEST14_SRC)
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t14.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t14.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST14_SRC)) /tmp/vv_simd_t14.o /tmp/vv_decoder_t14.o $(LDFLAGS) -o $(TEST14_BIN)
+	@rm -f /tmp/vv_simd_t14.o /tmp/vv_decoder_t14.o
+
+test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TARGET)
 	./$(TEST1_BIN)
 	./$(TEST2_BIN)
 	./$(TEST3_BIN)
@@ -182,6 +191,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST11_BIN)
 	./$(TEST12_BIN)
 	./$(TEST13_BIN)
+	./$(TEST14_BIN)
 	@if command -v python3 >/dev/null 2>&1 ; then \
 		echo "" ; \
 		echo "Python reference decoder self-test (validates FORMAT.md decode side):" ; \
@@ -266,7 +276,7 @@ clean:
 amalg:
 	@mkdir -p build
 	@echo "/* VaptVupt amalgamation — single-file build for Zupt */" > build/vaptvupt.h
-	@echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> build/vaptvupt.h
+	@echo "/* SPDX-License-Identifier: GPL-2.0-or-later */" >> build/vaptvupt.h
 	@for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h; do \
 		grep -v '#include "' $$f >> build/vaptvupt.h; \
 	done

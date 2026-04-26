@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
  * VaptVupt — SIMD-accelerated copy routines
  *
  * Three tiers:

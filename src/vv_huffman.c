@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
  * VaptVupt — Canonical Huffman Codec Implementation
  *
  * Performance targets (x86-64, gcc -O2):

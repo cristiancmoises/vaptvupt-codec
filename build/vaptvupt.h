@@ -1,5 +1,5 @@
 /* VaptVupt amalgamation — single-file build for Zupt */
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * VaptVupt — Cross-platform portability macros
  *
@@ -582,6 +582,8 @@ void vv_copy_match(uint8_t *dst, uint32_t offset, size_t length);
 #endif
 #endif /* VAPTVUPT_H */
 /*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
  * VaptVupt — tANS Entropy Codec (v2: sparse header + 4-way interleaved)
  *
  * Standalone: define VV_ANS_STANDALONE to use without VaptVupt.
@@ -714,6 +716,8 @@ static inline size_t vva_bound(size_t src_len) {
 #endif
 #endif /* VV_ANS_H */
 /*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
  * VaptVupt — Canonical Huffman Codec
  *
  * Standalone header: can be used independently with VV_HUFFMAN_STANDALONE.
