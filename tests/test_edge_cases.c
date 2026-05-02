@@ -285,14 +285,14 @@ static void test_null_parameters(void) {
     r = vv_compress(buf, sizeof(buf), NULL, sizeof(out), &opts);
     if (r < 0) PASS(); else FAIL("expected error");
 
-    TEST("vv_compress: NULL opts returns error (per API contract)");
-    /* The documented contract requires opts != NULL. The function
-     * correctly rejects NULL opts with VV_ERR_PARAM. If we ever
-     * decide to allow NULL opts (apply defaults), this test should
-     * be updated to expect csz > 0. */
+    TEST("vv_compress: NULL opts uses defaults (Sprint 95 audit)");
+    /* The original contract required opts != NULL. Sprint 95 audit
+     * found this was inconsistent with vv_cstream_create which already
+     * accepted NULL (after Sprint 89 fix). Both APIs now accept NULL
+     * opts and fall back to vv_default_options. */
     int64_t csz = vv_compress(buf, sizeof(buf), out, sizeof(out), NULL);
-    if (csz < 0) PASS();
-    else { char m[40]; snprintf(m, sizeof(m), "got %lld (expected error)", (long long)csz); FAIL(m); }
+    if (csz > 0) PASS();
+    else { char m[40]; snprintf(m, sizeof(m), "got %lld (expected success)", (long long)csz); FAIL(m); }
 
     TEST("vv_decompress: NULL src returns error");
     r = vv_decompress(NULL, 100, out, sizeof(out));

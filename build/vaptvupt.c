@@ -1,4 +1,5 @@
 /* VaptVupt amalgamation — single-file build */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "vaptvupt.h"
 
 /* ── src/vv_xxh64.c ── */
@@ -17,22 +18,47 @@
 #define XXH_PRIME64_4  0x85EBCA77C2B2AE63ULL
 #define XXH_PRIME64_5  0x27D4EB2F165667C5ULL
 
-static inline uint64_t xxh_rotl64(uint64_t x, int r) { return (x << r) | (x >> (64 - r)); }
+/* Sprint 117: VV_NO_SANITIZE_INTEGER is provided by include/vv_platform.h.
+ * xxh64 relies on intentional unsigned modular arithmetic (overflow
+ * and shift-out-of-range bits in the round mixer); the annotation
+ * silences -fsanitize=integer false positives in hardened builds. */
 
-static inline uint64_t xxh_round(uint64_t acc, uint64_t input) {
+/* Sprint 117: prefer the compiler builtin which lowers to a single
+ * rotate instruction and does NOT trigger UBSan's shift-base check.
+ * Falls back to the manual shift expression on older compilers,
+ * still annotated with no_sanitize for hardened builds. */
+#if defined(__clang__) && __has_builtin(__builtin_rotateleft64)
+#  define XXH_ROTL64(x, r) __builtin_rotateleft64((x), (r))
+#elif defined(__GNUC__) && (__GNUC__ >= 7)
+   /* GCC 7+ recognizes the manual idiom as a rotate */
+#  define XXH_ROTL64(x, r) (((x) << (r)) | ((x) >> (64 - (r))))
+#else
+#  define XXH_ROTL64(x, r) (((x) << (r)) | ((x) >> (64 - (r))))
+#endif
+
+#if defined(__clang__)
+__attribute__((noinline))
+#endif
+static VV_NO_SANITIZE_INTEGER
+uint64_t xxh_rotl64(uint64_t x, int r) { return XXH_ROTL64(x, r); }
+
+static inline VV_NO_SANITIZE_INTEGER
+uint64_t xxh_round(uint64_t acc, uint64_t input) {
     acc += input * XXH_PRIME64_2;
     acc  = xxh_rotl64(acc, 31);
     acc *= XXH_PRIME64_1;
     return acc;
 }
 
-static inline uint64_t xxh_merge_round(uint64_t acc, uint64_t val) {
+static inline VV_NO_SANITIZE_INTEGER
+uint64_t xxh_merge_round(uint64_t acc, uint64_t val) {
     val  = xxh_round(0, val);
     acc ^= val;
     acc  = acc * XXH_PRIME64_1 + XXH_PRIME64_4;
     return acc;
 }
 
+VV_NO_SANITIZE_INTEGER
 uint64_t vv_xxh64(const void *data, size_t len, uint64_t seed) {
     const uint8_t *p = (const uint8_t *)data;
     const uint8_t *end = p + len;
@@ -100,6 +126,7 @@ void vv_xxh64_init(vv_xxh64_state_t *s, uint64_t seed) {
     s->seed = seed;
 }
 
+VV_NO_SANITIZE_INTEGER
 void vv_xxh64_update(vv_xxh64_state_t *s, const void *data, size_t len) {
     const uint8_t *p = (const uint8_t *)data;
     const uint8_t *end = p + len;
@@ -140,6 +167,7 @@ void vv_xxh64_update(vv_xxh64_state_t *s, const void *data, size_t len) {
     }
 }
 
+VV_NO_SANITIZE_INTEGER
 uint64_t vv_xxh64_finalize(const vv_xxh64_state_t *s) {
     uint64_t h64;
 
@@ -204,7 +232,7 @@ uint64_t vv_xxh64_finalize(const vv_xxh64_state_t *s) {
  * SCALAR FALLBACK (always compiled)
  * ═══════════════════════════════════════════════════════════════ */
 
-static void copy_fast_scalar(uint8_t *dst, const uint8_t *src, size_t n) {
+static void __attribute__((unused)) copy_fast_scalar(uint8_t *dst, const uint8_t *src, size_t n) {
     memcpy(dst, src, n);
 }
 
@@ -366,40 +394,64 @@ static copy_fast_fn  g_copy_fast  = NULL;
 static copy_match_fn g_copy_match = NULL;
 
 static void vv_init_simd(void) {
-    if (g_copy_fast) return;  /* Already initialized */
+    /* SPRINT 98 audit: thread-safe lazy init using GCC/Clang atomic
+     * builtins. The previous implementation had a benign-but-UB data
+     * race: two threads could both observe NULL and both write to
+     * g_copy_fast/g_copy_match. The writes were idempotent (always
+     * the same CPU-feature pointer), so it never caused incorrect
+     * behavior on x86, but per C11 it was UB. On weakly-ordered
+     * architectures (ARM, POWER) the race could become observable.
+     *
+     * Atomic loads with ACQUIRE pair with atomic stores with RELEASE
+     * to give a proper happens-before relationship. Multiple threads
+     * may still race into the body, but each store is atomic and any
+     * subsequent reader sees a consistent value. */
+    if (__atomic_load_n(&g_copy_fast, __ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&g_copy_match, __ATOMIC_ACQUIRE)) return;
+
+    copy_fast_fn  fast;
+    copy_match_fn match;
 
 #if defined(__x86_64__) || defined(_M_X64)
 #ifdef __AVX2__
     if (vv_has_avx2()) {
-        g_copy_fast  = copy_fast_avx2;
-        g_copy_match = copy_match_avx2;
-        return;
+        fast  = copy_fast_avx2;
+        match = copy_match_avx2;
+    } else
+#endif
+    {
+        /* SSE2 is baseline on all x86-64 — no runtime check needed */
+        fast  = copy_fast_sse2;
+        match = copy_match_sse2;
     }
-#endif
-    /* SSE2 is baseline on all x86-64 — no runtime check needed */
-    g_copy_fast  = copy_fast_sse2;
-    g_copy_match = copy_match_sse2;
-    return;
-#endif
-
-#if defined(__aarch64__) && defined(__ARM_NEON)
-    g_copy_fast  = copy_fast_neon;
-    g_copy_match = copy_match_neon;
-    return;
+#elif defined(__aarch64__) && defined(__ARM_NEON)
+    fast  = copy_fast_neon;
+    match = copy_match_neon;
+#else
+    fast  = copy_fast_scalar;
+    match = copy_match_scalar;
 #endif
 
-    g_copy_fast  = copy_fast_scalar;
-    g_copy_match = copy_match_scalar;
+    __atomic_store_n(&g_copy_fast,  fast,  __ATOMIC_RELEASE);
+    __atomic_store_n(&g_copy_match, match, __ATOMIC_RELEASE);
 }
 
 void vv_copy_fast(uint8_t *dst, const uint8_t *src, size_t n) {
-    if (!g_copy_fast) vv_init_simd();
-    g_copy_fast(dst, src, n);
+    copy_fast_fn fn = __atomic_load_n(&g_copy_fast, __ATOMIC_ACQUIRE);
+    if (!fn) {
+        vv_init_simd();
+        fn = __atomic_load_n(&g_copy_fast, __ATOMIC_ACQUIRE);
+    }
+    fn(dst, src, n);
 }
 
 void vv_copy_match(uint8_t *dst, uint32_t offset, size_t length) {
-    if (!g_copy_match) vv_init_simd();
-    g_copy_match(dst, offset, length);
+    copy_match_fn fn = __atomic_load_n(&g_copy_match, __ATOMIC_ACQUIRE);
+    if (!fn) {
+        vv_init_simd();
+        fn = __atomic_load_n(&g_copy_match, __ATOMIC_ACQUIRE);
+    }
+    fn(dst, offset, length);
 }
 
 /* ── src/vv_huffman.c ── */
@@ -866,6 +918,111 @@ vvh_error_t vvh_encode(const uint8_t *src, size_t src_len,
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * 4-STREAM INTERLEAVED ENCODE (Sprint 103, Phase A)
+ *
+ * Splits input into 4 round-robin streams sharing a single Huffman
+ * table. The decoder runs 4 independent decoders in parallel,
+ * gaining instruction-level parallelism (1.8-2.2× decode throughput).
+ *
+ * Wire format (after the standard code-length header):
+ *   [3B stream1_size] [3B stream2_size] [3B stream3_size]
+ *   [stream0_bitstream] [stream1_bitstream] [stream2_bitstream] [stream3_bitstream]
+ *
+ * Stream0's size is implicit: total - 9 - hdr_sz - s1 - s2 - s3.
+ * Each stream is byte-aligned at its start (clean entry for decoder).
+ *
+ * Activation guard: src_len >= 1024. Below this, single-stream wins
+ * on overhead (9-byte stream-size header + per-stream alignment slop
+ * dominates).
+ *
+ * See CHANGELOG.md (Sprint 105) for the design rationale.
+ * ═══════════════════════════════════════════════════════════════ */
+
+#define VVH4_STREAM_HDR_SZ 9   /* 3 bytes × 3 stream sizes */
+#define VVH4_MIN_LITERALS  1024
+
+vvh_error_t vvh_encode4(const uint8_t *src, size_t src_len,
+                        uint8_t *dst, size_t dst_cap, size_t *dst_len) {
+    /* Activation guard: 4-stream is only profitable above 1024 lits. */
+    if (src_len < VVH4_MIN_LITERALS) return VVH_ERR_OVERFLOW;
+
+    /* Need at least: code-length header (~129B) + 9B stream-hdr +
+     * 4 streams of nonzero size. Conservative lower bound. */
+    if (dst_cap < 200) return VVH_ERR_OVERFLOW;
+
+    /* ─── 1. Count frequencies (single shared table) ─── */
+    uint32_t freq[VVH_SYMBOLS];
+    memset(freq, 0, sizeof(freq));
+    for (size_t i = 0; i < src_len; i++)
+        freq[src[i]]++;
+
+    /* ─── 2. Build encode table (shared across all 4 streams) ─── */
+    vvh_enc_table_t enc;
+    build_enc_table(freq, &enc);
+
+    /* ─── 3. Write code-length header ─── */
+    size_t hdr_sz = write_header(enc.lengths, dst, dst_cap);
+    if (hdr_sz == 0) return VVH_ERR_OVERFLOW;
+
+    /* ─── 4. Reserve 9 bytes for stream-size header (backpatched) ─── */
+    if (hdr_sz + VVH4_STREAM_HDR_SZ >= dst_cap) return VVH_ERR_OVERFLOW;
+    uint8_t *stream_hdr = dst + hdr_sz;
+    size_t streams_offset = hdr_sz + VVH4_STREAM_HDR_SZ;
+
+    /* ─── 5. Encode each stream into the dst buffer ─── */
+    /* Per-stream symbol counts for round-robin distribution:
+     *   stream0 gets indices 0, 4, 8, ..., (src_len + 3) / 4 symbols
+     *   stream1 gets indices 1, 5, 9, ..., (src_len + 2) / 4 symbols
+     *   stream2 gets indices 2, 6, 10, ..., (src_len + 1) / 4 symbols
+     *   stream3 gets indices 3, 7, 11, ..., src_len / 4 symbols
+     */
+    size_t cur_off = streams_offset;
+    size_t stream_sizes[4];
+
+    for (int s = 0; s < 4; s++) {
+        if (cur_off >= dst_cap) return VVH_ERR_OVERFLOW;
+        bw_t w;
+        bw_init(&w, dst + cur_off, dst_cap - cur_off);
+
+        /* Round-robin: encode symbols at indices s, s+4, s+8, ... */
+        for (size_t i = (size_t)s; i < src_len; i += 4) {
+            uint8_t sym = src[i];
+            /* enc.lengths[sym] could be 0 only if the symbol never
+             * appeared in input — but we just counted and it did, so
+             * length > 0 for every symbol we encode. Defensive check
+             * for static analyzer happiness: */
+            if (enc.lengths[sym] == 0) return VVH_ERR_CORRUPT;
+            bw_add(&w, enc.codes[sym], enc.lengths[sym]);
+        }
+
+        size_t sz = bw_flush(&w);
+        stream_sizes[s] = sz;
+        cur_off += sz;
+    }
+
+    /* ─── 6. Backpatch stream-size header (3 bytes per stream, LE) ─── */
+    /* Stream 0 size is implicit; encode streams 1, 2, 3 here.
+     * Each size is stored as 24-bit little-endian (max 16 MB / stream
+     * — far above any realistic literal-block size). */
+    for (int s = 1; s <= 3; s++) {
+        size_t sz = stream_sizes[s];
+        if (sz > 0xFFFFFF) return VVH_ERR_OVERFLOW;  /* >16MB stream */
+        uint8_t *p = stream_hdr + (s - 1) * 3;
+        p[0] = (uint8_t)(sz & 0xFF);
+        p[1] = (uint8_t)((sz >> 8) & 0xFF);
+        p[2] = (uint8_t)((sz >> 16) & 0xFF);
+    }
+
+    size_t total = cur_off;
+
+    /* Incompressible guard: same convention as vvh_encode. */
+    if (total >= src_len) return VVH_ERR_OVERFLOW;
+
+    *dst_len = total;
+    return VVH_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * DECODE
  *
  * PERFORMANCE-CRITICAL: the inner loop decodes one symbol per
@@ -956,6 +1113,145 @@ vvh_error_t vvh_decode(const uint8_t *src, size_t src_len,
         if (*src_consumed >= over)
             *src_consumed -= over;
     }
+
+    free(dec);
+    return VVH_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * 4-STREAM INTERLEAVED DECODE (Sprint 104, Phase B)
+ *
+ * Production decoder for the wire format produced by vvh_encode4.
+ * Runs 4 independent decoders in parallel using a single shared
+ * decode table. Each iteration of the hot loop performs 4 lookups
+ * with no inter-decoder data dependencies, allowing the OoO engine
+ * to pipeline them.
+ *
+ * Wire format expected (see vvh_encode4):
+ *   [code-length header] [3B s1] [3B s2] [3B s3]
+ *   [stream0_data] [stream1_data] [stream2_data] [stream3_data]
+ *
+ * Stream0's size is implicit. All four streams share one Huffman
+ * table built from the code-length header.
+ * ═══════════════════════════════════════════════════════════════ */
+
+vvh_error_t vvh_decode4(const uint8_t *src, size_t src_len,
+                        uint8_t *dst, size_t dst_cap,
+                        size_t num_literals, size_t *src_consumed) {
+    if (num_literals == 0) {
+        *src_consumed = 0;
+        return VVH_OK;
+    }
+    if (num_literals > dst_cap) return VVH_ERR_OVERFLOW;
+
+    /* ─── 1. Read code-length header ─── */
+    uint8_t lengths[VVH_SYMBOLS];
+    size_t hdr_sz = read_header(src, src_len, lengths);
+    if (hdr_sz == 0) return VVH_ERR_CORRUPT;
+
+    /* Validate at least one nonzero length */
+    int has_sym = 0;
+    for (int i = 0; i < VVH_SYMBOLS; i++)
+        if (lengths[i] > 0) { has_sym = 1; break; }
+    if (!has_sym) return VVH_ERR_CORRUPT;
+
+    /* ─── 2. Read 9-byte stream-size header ─── */
+    if (hdr_sz + VVH4_STREAM_HDR_SZ > src_len) return VVH_ERR_CORRUPT;
+    const uint8_t *sh = src + hdr_sz;
+    size_t s1 = (size_t)sh[0] | ((size_t)sh[1] << 8) | ((size_t)sh[2] << 16);
+    size_t s2 = (size_t)sh[3] | ((size_t)sh[4] << 8) | ((size_t)sh[5] << 16);
+    size_t s3 = (size_t)sh[6] | ((size_t)sh[7] << 8) | ((size_t)sh[8] << 16);
+
+    /* ─── 3. Validate stream sizes (DoS-resistant bounds checks) ─── */
+    size_t streams_off = hdr_sz + VVH4_STREAM_HDR_SZ;
+    if (streams_off > src_len) return VVH_ERR_CORRUPT;
+    size_t streams_total = src_len - streams_off;
+    /* Overflow-safe check: s1 + s2 + s3 <= streams_total */
+    if (s1 > streams_total) return VVH_ERR_CORRUPT;
+    if (s2 > streams_total - s1) return VVH_ERR_CORRUPT;
+    if (s3 > streams_total - s1 - s2) return VVH_ERR_CORRUPT;
+    size_t s0 = streams_total - s1 - s2 - s3;
+    /* All streams must be non-zero unless num_literals < 4 (degenerate) */
+    if (num_literals >= 4) {
+        if (s0 == 0 || s1 == 0 || s2 == 0 || s3 == 0) return VVH_ERR_CORRUPT;
+    }
+
+    /* ─── 4. Build decode table (shared across all 4 streams) ─── */
+    vvh_dec_table_t *dec = (vvh_dec_table_t *)malloc(sizeof(vvh_dec_table_t));
+    if (!dec) return VVH_ERR_NOMEM;
+    build_dec_table(lengths, dec);
+
+    /* ─── 5. Initialize 4 independent bitstream readers ─── */
+    br_t r0, r1, r2, r3;
+    br_init(&r0, src + streams_off,                  s0);
+    br_init(&r1, src + streams_off + s0,             s1);
+    br_init(&r2, src + streams_off + s0 + s1,        s2);
+    br_init(&r3, src + streams_off + s0 + s1 + s2,   s3);
+    br_refill(&r0); br_refill(&r1); br_refill(&r2); br_refill(&r3);
+
+    /* ─── 6. Per-stream symbol counts (round-robin) ─── */
+    /* num_literals = 4*Q + R where R in {0,1,2,3}.
+     *   stream 0 decodes Q + (R >= 1) symbols
+     *   stream 1 decodes Q + (R >= 2) symbols
+     *   stream 2 decodes Q + (R >= 3) symbols
+     *   stream 3 decodes Q symbols */
+    size_t Q = num_literals / 4;
+
+    /* Helper: decode one symbol. Inlined manually below for ILP. */
+    #define DEC_ONE(R, OUT) do { \
+        if ((R).nbits < VVH_MAX_CODE_LEN) br_refill(&(R)); \
+        uint32_t peek = br_peek(&(R), VVH_DECODE_BITS); \
+        uint32_t entry = dec->table[peek]; \
+        int sym = (int)(entry & 0xFF); \
+        int len = (int)((entry >> 8) & 0xF); \
+        if (VV_LIKELY(len > 0)) { \
+            br_consume(&(R), len); \
+            (OUT) = (uint8_t)sym; \
+        } else { \
+            int found = 0; \
+            for (int s = 0; s < dec->slow_count; s++) { \
+                int slen = dec->slow_len[s]; \
+                uint32_t mask = (1u << slen) - 1; \
+                if ((br_peek(&(R), slen) & mask) == dec->slow_code[s]) { \
+                    br_consume(&(R), slen); \
+                    (OUT) = dec->slow_sym[s]; \
+                    found = 1; \
+                    break; \
+                } \
+            } \
+            if (!found) { free(dec); return VVH_ERR_CORRUPT; } \
+        } \
+    } while (0)
+
+    /* ─── 7. Hot loop: decode 4 symbols per iteration ─── */
+    /* Each iteration's 4 decodes are fully independent — different
+     * readers, different table peeks, different output positions.
+     * Modern OoO engines can pipeline 4 independent decode chains
+     * achieving ~1.8-2.2× speedup over single-stream. */
+    size_t out_idx = 0;
+    for (size_t i = 0; i < Q; i++) {
+        uint8_t y0, y1, y2, y3;
+        DEC_ONE(r0, y0);
+        DEC_ONE(r1, y1);
+        DEC_ONE(r2, y2);
+        DEC_ONE(r3, y3);
+        dst[out_idx + 0] = y0;
+        dst[out_idx + 1] = y1;
+        dst[out_idx + 2] = y2;
+        dst[out_idx + 3] = y3;
+        out_idx += 4;
+    }
+
+    /* ─── 8. Tail (handle remaining 0-3 symbols) ─── */
+    size_t tail = num_literals - Q * 4;
+    if (tail >= 1) { uint8_t y; DEC_ONE(r0, y); dst[out_idx++] = y; }
+    if (tail >= 2) { uint8_t y; DEC_ONE(r1, y); dst[out_idx++] = y; }
+    if (tail >= 3) { uint8_t y; DEC_ONE(r2, y); dst[out_idx++] = y; }
+
+    #undef DEC_ONE
+
+    /* Total bytes consumed: header + stream-size header + all 4 streams */
+    *src_consumed = streams_off + s0 + s1 + s2 + s3;
 
     free(dec);
     return VVH_OK;
@@ -1776,8 +2072,12 @@ vva_error_t vva_encode_ctx(const uint8_t *src, size_t src_len,
     if (!src_len) { *dst_len = 0; return VVA_OK; }
 
     /* ─── Pass 1: build 256×256 histogram ─── */
-    /* Heap-allocate: 256×256×4 = 256 KB */
-    uint32_t (*hist)[NSYM] = (uint32_t (*)[NSYM])calloc(NSYM, NSYM * sizeof(uint32_t));
+    /* Heap-allocate: NSYM rows × NSYM uint32 per row = 256 KB.
+     * Sprint 89: rewrote calloc invocation to use sizeof(*hist) which
+     * matches the destination pointer type. Prior form
+     * calloc(NSYM, NSYM*sizeof(uint32_t)) computed the same total
+     * bytes but tripped scan-build's "sizeof operand mismatch" check. */
+    uint32_t (*hist)[NSYM] = (uint32_t (*)[NSYM])calloc(NSYM, sizeof(*hist));
     uint32_t global_raw[NSYM];
     memset(global_raw, 0, sizeof(global_raw));
     if (!hist) return VVA_ERR_NOMEM;
@@ -2440,7 +2740,8 @@ static size_t parse_sequences(const uint8_t *tokens, size_t tok_len,
 static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_len,
                                               uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                               int off_bytes,
-                                              const uint32_t *ml_base_tab) {
+                                              const uint32_t *ml_base_tab,
+                                              int disable_huf4) {
     if (!tok_len) { *dst_len = 0; return VVA_OK; }
 
     /* Parse into sequences.
@@ -2469,7 +2770,7 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
     if (!lit_enc) { free(base_scratch); return VVA_ERR_NOMEM; }
 
     size_t lit_enc_len = 0;
-    uint8_t lit_fmt = 0; /* 0=raw, 1=ANS4, 2=ANS1, 3=Huffman (Sprint 71) */
+    uint8_t lit_fmt = 0; /* 0=raw, 1=ANS4, 2=ANS1, 3=Huffman, 4=Huffman4 (Sprint 104) */
     if (total_lits > 0) {
         /* SPRINT 71 (v2.46): Huffman as a competitive literal coder
          * inside the SEQ stream.
@@ -2490,15 +2791,20 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
          * encode time). Benefit: 3-7% expected on binary fixtures where
          * literal distributions make Huffman materially better.
          *
-         * Decoder support: lit_fmt=3 dispatches to vvh_decode. Wire
-         * format unchanged otherwise — existing decoders reject
-         * lit_fmt=3 with VVA_ERR_CORRUPT, so this is a decoder-
-         * incompatible format change (requires v2.46.0+ decoder). */
-        size_t ans4_len = 0, ans1_len = 0, huf_len = 0;
+         * Decoder support: lit_fmt=3 dispatches to vvh_decode, lit_fmt=4
+         * dispatches to vvh_decode4 (Sprint 104 Phase B). Wire format
+         * unchanged otherwise — existing decoders reject lit_fmt={3,4}
+         * with VVA_ERR_CORRUPT, so this is a decoder-incompatible
+         * format change (requires v2.46.0+ for fmt=3, v2.47+ for fmt=4). */
+        size_t ans4_len = 0, ans1_len = 0, huf_len = 0, huf4_len = 0;
         uint8_t *ans4_buf = (uint8_t *)malloc(lit_cap);
         uint8_t *ans1_buf = (uint8_t *)malloc(lit_cap);
         uint8_t *huf_buf  = (uint8_t *)malloc(lit_cap);
-        int ans4_ok = 0, ans1_ok = 0, huf_ok = 0;
+        /* Phase C: gated by disable_huf4 flag (vv_options_t::compat_v246_5_decoder).
+         * When set, suppress lit_fmt=4 selection so output is readable by
+         * v2.46.5 and older decoders. */
+        uint8_t *huf4_buf = (!disable_huf4 && total_lits >= 1024) ? (uint8_t *)malloc(lit_cap) : NULL;
+        int ans4_ok = 0, ans1_ok = 0, huf_ok = 0, huf4_ok = 0;
         if (ans4_buf) {
             ans4_ok = (vva_encode4(lit_buf, total_lits, ans4_buf, lit_cap, &ans4_len) == VVA_OK);
         }
@@ -2508,11 +2814,20 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
         if (huf_buf) {
             huf_ok = (vvh_encode(lit_buf, total_lits, huf_buf, lit_cap, &huf_len) == VVH_OK);
         }
+        if (huf4_buf) {
+            /* Phase B: 4-stream Huffman race. Activates only at >=1024 lits. */
+            huf4_ok = (vvh_encode4(lit_buf, total_lits, huf4_buf, lit_cap, &huf4_len) == VVH_OK);
+        }
 
-        /* Pick the smallest of the three. Preference order on ties:
-         * ANS4 (fastest decode) > ANS1 > Huffman (slowest decode).
-         * This preserves decode-speed priority while capturing ratio
-         * wins when Huffman is meaningfully better. */
+        /* Pick the smallest of all options. Preference order on ties:
+         * ANS4 (fastest decode) > ANS1 > Huffman4 > Huffman.
+         * 4-stream Huffman has same ratio as single-stream modulo a
+         * fixed +10B header overhead but decodes 1.8-2.2× faster via
+         * ILP. We pick huf4 over huf when both are available and the
+         * size delta is within a small slop (32 bytes covers the
+         * structural overhead with margin). For sizes way out, we
+         * still pick the smaller one to avoid pathological ratio
+         * regressions on tiny blocks. */
         size_t best_len = 0;
         uint8_t *best_buf = NULL;
         uint8_t best_fmt = 0;
@@ -2520,8 +2835,26 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
         if (ans1_ok && (!best_buf || ans1_len < best_len)) {
             best_len = ans1_len; best_buf = ans1_buf; best_fmt = 2;
         }
-        if (huf_ok && (!best_buf || huf_len < best_len)) {
-            best_len = huf_len; best_buf = huf_buf; best_fmt = 3;
+        /* Huffman entry: if both single-stream and 4-stream are viable,
+         * prefer the 4-stream variant for its decode speedup. Allow a
+         * 32-byte slop where 4-stream wins despite being slightly larger. */
+        size_t huf_best_len = 0;
+        uint8_t *huf_best_buf = NULL;
+        uint8_t huf_best_fmt = 0;
+        if (huf4_ok && huf_ok) {
+            /* Both viable: prefer huf4 if it's not meaningfully larger. */
+            if (huf4_len <= huf_len + 32) {
+                huf_best_len = huf4_len; huf_best_buf = huf4_buf; huf_best_fmt = 4;
+            } else {
+                huf_best_len = huf_len; huf_best_buf = huf_buf; huf_best_fmt = 3;
+            }
+        } else if (huf4_ok) {
+            huf_best_len = huf4_len; huf_best_buf = huf4_buf; huf_best_fmt = 4;
+        } else if (huf_ok) {
+            huf_best_len = huf_len; huf_best_buf = huf_buf; huf_best_fmt = 3;
+        }
+        if (huf_best_buf && (!best_buf || huf_best_len < best_len)) {
+            best_len = huf_best_len; best_buf = huf_best_buf; best_fmt = huf_best_fmt;
         }
 
         if (best_buf && best_len <= lit_cap) {
@@ -2529,12 +2862,12 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
             lit_enc_len = best_len;
             lit_fmt = best_fmt;
         } else if (total_lits <= lit_cap) {
-            /* All three failed — fall back to raw literals */
+            /* All failed — fall back to raw literals */
             memcpy(lit_enc, lit_buf, total_lits);
             lit_enc_len = total_lits;
             lit_fmt = 0;
         }
-        free(ans4_buf); free(ans1_buf); free(huf_buf);
+        free(ans4_buf); free(ans1_buf); free(huf_buf); free(huf4_buf);
     }
 
     /* ─── Count ML, OF, and LL code frequencies ─── */
@@ -2654,8 +2987,15 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
 
     /* PERF: header buffers live on the stack — each is bounded at 600 B
      * (fits any NSYM=256 table header) and they were heap-allocated on
-     * every call before. Saves 3 malloc/free pairs per call. */
-    uint8_t  ml_hdr_buf[600], of_hdr_buf[600], ll_hdr_buf[600];
+     * every call before. Saves 3 malloc/free pairs per call.
+     *
+     * Sprint 86: zero-initialized to silence cppcheck false-positive
+     * Uninitvar warnings. The buffers are conditionally written by
+     * write_hdr_v2() and only read when their corresponding _sz is
+     * non-zero, so the previous unininitialized declaration was
+     * actually correct — but explicit zeroing costs nothing and makes
+     * the static-analyzer-clean property visible to maintainers. */
+    uint8_t  ml_hdr_buf[600] = {0}, of_hdr_buf[600] = {0}, ll_hdr_buf[600] = {0};
     size_t ml_hdr_sz = 0, of_hdr_sz = 0, ll_hdr_sz = 0;
     uint8_t *seq_bs = NULL;
     size_t seq_bs_len = 0;
@@ -2926,7 +3266,16 @@ vva_error_t vva_encode_sequences(const uint8_t *tokens, size_t tok_len,
                                   uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                   int off_bytes) {
     return vva_encode_sequences_impl(tokens, tok_len, dst, dst_cap, dst_len,
-                                      off_bytes, ml_base);
+                                      off_bytes, ml_base, 0);
+}
+
+/* Public entry with explicit compat flag (Sprint 105 Phase C).
+ * disable_huf4=1 suppresses lit_fmt=4 selection for v2.46.5 compat. */
+vva_error_t vva_encode_sequences_compat(const uint8_t *tokens, size_t tok_len,
+                                         uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                         int off_bytes, int disable_huf4) {
+    return vva_encode_sequences_impl(tokens, tok_len, dst, dst_cap, dst_len,
+                                      off_bytes, ml_base, disable_huf4);
 }
 
 /* Public entry for 'T' tag (VV_ENTROPY_SEQ_V2, min_match=3).
@@ -2938,7 +3287,14 @@ vva_error_t vva_encode_sequences_v2(const uint8_t *tokens, size_t tok_len,
                                      uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                      int off_bytes) {
     return vva_encode_sequences_impl(tokens, tok_len, dst, dst_cap, dst_len,
-                                      off_bytes, ml_base_v2);
+                                      off_bytes, ml_base_v2, 0);
+}
+
+vva_error_t vva_encode_sequences_v2_compat(const uint8_t *tokens, size_t tok_len,
+                                            uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                            int off_bytes, int disable_huf4) {
+    return vva_encode_sequences_impl(tokens, tok_len, dst, dst_cap, dst_len,
+                                      off_bytes, ml_base_v2, disable_huf4);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2952,7 +3308,8 @@ vva_error_t vva_encode_sequences_v2(const uint8_t *tokens, size_t tok_len,
  * (min_match=3) entropy tags. Takes the ml_base table as a parameter
  * so both tags use the same code path. Everything else in the 'T'
  * payload is byte-identical to 'S'. */
-static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
+static VV_NO_SANITIZE_INTEGER
+vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
                                               uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                               const uint8_t *dst_base,
                                               const uint32_t *ml_base_tab) {
@@ -2964,6 +3321,22 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     uint8_t lit_fmt = *p++;
     size_t lit_enc_len = (size_t)p[0]|((size_t)p[1]<<8)|((size_t)p[2]<<16)|((size_t)p[3]<<24); p += 4;
         if (p + lit_enc_len > end) return VVA_ERR_CORRUPT;
+
+    /* SPRINT 90 SECURITY FIX (DoS hardening - companion to the
+     * iteration-count bound):
+     *
+     * Sprint 89 fuzzing found a DoS where corrupted total_lits
+     * (decoded from 4 wire bytes, no upper bound) made the Huffman
+     * literal decoder loop ~1.1 billion times. Stack trace from gdb:
+     *   #0 br_refill (...)
+     *   #1 vvh_decode (..., num_literals=1124110334, ...)
+     *   #2 vva_decode_sequences_impl
+     *
+     * Bound total_lits against dst_cap. A valid literal stream cannot
+     * exceed the block's output capacity (matches consume some output
+     * too, so this is conservative — the real bound is even tighter,
+     * but dst_cap is sufficient to prevent runaway decode work). */
+    if (VV_UNLIKELY(total_lits > dst_cap)) return VVA_ERR_CORRUPT;
 
     /* Decode literals based on format byte */
     uint8_t *lit_buf = (uint8_t *)malloc(total_lits + 16);
@@ -2987,6 +3360,14 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
                                            total_lits, total_lits,
                                            &lit_consumed);
             lerr = (herr == VVH_OK) ? VVA_OK : VVA_ERR_CORRUPT;
+        } else if (lit_fmt == 4) {
+            /* SPRINT 104 (v2.47): 4-stream interleaved Huffman literals.
+             * Faster decode (1.8-2.2× via ILP across 4 independent
+             * streams). Same ratio as lit_fmt=3 modulo +10B header. */
+            vvh_error_t herr = vvh_decode4(p, lit_enc_len, lit_buf,
+                                            total_lits, total_lits,
+                                            &lit_consumed);
+            lerr = (herr == VVH_OK) ? VVA_OK : VVA_ERR_CORRUPT;
         } else {
             /* Raw literals (lit_fmt == 0) */
             if (lit_enc_len >= total_lits) {
@@ -3001,6 +3382,15 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     /* Read match count (4B) */
         if (p + 4 > end) { free(lit_buf); return VVA_ERR_CORRUPT; }
     size_t match_count = (size_t)p[0]|((size_t)p[1]<<8)|((size_t)p[2]<<16)|((size_t)p[3]<<24); p += 4;
+
+    /* SPRINT 90 SECURITY FIX: bound match_count against dst_cap.
+     * Each match contributes ≥ min_match (3 or 4) bytes of output, so
+     * match_count cannot exceed dst_cap / min_match. Use dst_cap as a
+     * generous upper bound — anything larger is corrupt input that
+     * would cause the decode loop's max_iters check to trigger anyway,
+     * but bounding here prevents wasteful work and oversized
+     * allocations. */
+    if (VV_UNLIKELY(match_count > dst_cap)) { free(lit_buf); return VVA_ERR_CORRUPT; }
 
     /* Read ML table header */
         if (p + 2 > end) { free(lit_buf); return VVA_ERR_CORRUPT; }
@@ -3043,16 +3433,22 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     size_t seq_bs_len = (size_t)p[0]|((size_t)p[1]<<8)|((size_t)p[2]<<16)|((size_t)p[3]<<24); p += 4;
         if (p + seq_bs_len > end) { free(lit_buf); return VVA_ERR_CORRUPT; }
 
-    /* Build ML, OF, and LL decode tables */
+    /* Build ML, OF, and LL decode tables.
+     *
+     * Sprint 109 fix: previously dec_ml/dec_of were only allocated when
+     * match_count > 0, but the unified decode loop dereferences all 3
+     * tables eagerly for ILP regardless of match_count. With total_lits
+     * > 0 and match_count == 0, the loop runs (consuming literals) and
+     * NULL-deref's dec_of and dec_ml. Found by libFuzzer + ASan.
+     * Fix: always allocate all 3 tables. The decode-loop dereferences
+     * are safe because state masks bound the index to ANS_L. */
     vva_dec_entry_t *dec_ml = NULL, *dec_of = NULL, *dec_ll = NULL;
     {
         uint8_t *sp_tmp = (uint8_t *)malloc(ANS_L);
-        if (match_count > 0) {
-            dec_ml = (vva_dec_entry_t *)malloc(ANS_L * sizeof(vva_dec_entry_t));
-            dec_of = (vva_dec_entry_t *)malloc(ANS_L * sizeof(vva_dec_entry_t));
-        }
+        dec_ml = (vva_dec_entry_t *)malloc(ANS_L * sizeof(vva_dec_entry_t));
+        dec_of = (vva_dec_entry_t *)malloc(ANS_L * sizeof(vva_dec_entry_t));
         dec_ll = (vva_dec_entry_t *)malloc(ANS_L * sizeof(vva_dec_entry_t));
-        if (!sp_tmp || !dec_ll || (match_count > 0 && (!dec_ml || !dec_of))) {
+        if (!sp_tmp || !dec_ll || !dec_ml || !dec_of) {
             free(sp_tmp); free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
             return VVA_ERR_NOMEM;
         }
@@ -3061,6 +3457,15 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
             build_dec(norm_ml, sp_tmp, dec_ml);
             spread_symbols(norm_of, sp_tmp);
             build_dec(norm_of, sp_tmp, dec_of);
+        } else {
+            /* Initialize ml/of tables to safe sentinel values so any
+             * unintended read (e.g., the ILP eager-load in the decode
+             * loop when match_count == 0) returns predictable data
+             * rather than dereferencing uninitialized memory. The
+             * loop guard prevents these values from being used in
+             * actual sequence reconstruction. */
+            memset(dec_ml, 0, ANS_L * sizeof(vva_dec_entry_t));
+            memset(dec_of, 0, ANS_L * sizeof(vva_dec_entry_t));
         }
         spread_symbols(norm_ll, sp_tmp);
         build_dec(norm_ll, sp_tmp, dec_ll);
@@ -3071,7 +3476,7 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     ans_br_t r;
     ans_br_init(&r, p, seq_bs_len);
     ans_br_fill(&r);
-    p += seq_bs_len;
+    /* p is not read after this point — bitstream owned by 'r' from here */
 
     /* Litlens are ANS-coded in the bitstream — no varint stream */
 
@@ -3119,7 +3524,40 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     const uint8_t *offset_check_floor = dst_base + SAFEZONE_MAX_OFFSET;
 
     size_t seqs_decoded = 0;
+    /* SPRINT 90 SECURITY FIX (DoS hardening):
+     *
+     * The original loop terminated only when both lit_pos reached
+     * total_lits AND matches_decoded reached match_count. Sprint 89
+     * adversarial fuzzing (header-targeted bit-flips at byte offsets
+     * 26-27) discovered that a maliciously crafted ANS bitstream can
+     * produce sequences where neither counter advances — the corrupted
+     * ANS state decodes litlen=0 + matchlen=0 forever, hanging the
+     * decoder.
+     *
+     * This was a denial-of-service vulnerability for any service that
+     * decompressed untrusted input (Zupt's exact threat model).
+     *
+     * Bound: every well-formed iteration must advance at least ONE of
+     * the two counters by at least 1 (it's how the wire format is
+     * defined — every sequence consumes literal bytes, match bytes,
+     * or both, with the only exception being the well-defined
+     * "split-zero-match" case which the encoder uses for >65535-byte
+     * literal runs and which still advances lit_pos).
+     *
+     * Therefore total iterations ≤ total_lits + match_count + 1
+     * (the +1 covers the "both already reached, one final break-check"
+     * iteration). Add small slack of 16 for absolute safety in case
+     * the encoder's wire-format-allowed sequence variations grow.
+     *
+     * If we exceed the bound, the input is corrupt — return
+     * VVA_ERR_CORRUPT instead of hanging. */
+    const size_t max_iters = total_lits + match_count + 16;
+    size_t iter_count = 0;
     while (lit_pos < total_lits || matches_decoded < match_count) {
+        if (VV_UNLIKELY(++iter_count > max_iters)) {
+            free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
+            return VVA_ERR_CORRUPT;
+        }
         /* PERF: issue all 3 ANS table lookups early so CPU can overlap
          * the L1 cache fills. The dec_ll/dec_of/dec_ml arrays are
          * independent, so the loads have no data dependency on each
@@ -3151,6 +3589,14 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
         uint32_t ll_bits = ans_br_read(&r, ell.nbits);
         state_ll = (uint32_t)ell.baseline + ll_bits;
         uint8_t ll_code = ell.symbol;
+        /* Sprint 109 fix: corrupt frames could encode an LL ANS table
+         * mapping a state to a symbol >= VVA_LL_CODES, causing an OOB
+         * read of ll_extra[]/ll_base[]. Validate the code is in range.
+         * Found by libFuzzer + ASan. */
+        if (VV_UNLIKELY(ll_code >= VVA_LL_CODES)) {
+            free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
+            return VVA_ERR_CORRUPT;
+        }
         uint32_t ll_extra_val = ans_br_read(&r, ll_extra[ll_code]);
         size_t litlen = ll_decode(ll_code, ll_extra_val);
 
@@ -3203,6 +3649,12 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
         uint32_t of_bits = ans_br_read(&r, eof.nbits);
         state_of = (uint32_t)eof.baseline + of_bits;
         uint8_t of_code = eof.symbol;
+        /* Sprint 109 fix: bound of_code to VVA_OF_CODES range. Same
+         * pattern as ll_code/ml_code OOB protection. */
+        if (VV_UNLIKELY(of_code >= VVA_OF_CODES)) {
+            free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
+            return VVA_ERR_CORRUPT;
+        }
         uint32_t offset;
         if (of_code < 3) {
             offset = dec_rep[of_code];
@@ -3218,6 +3670,11 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
         uint32_t ml_bits = ans_br_read(&r, eml.nbits);
         state_ml = (uint32_t)eml.baseline + ml_bits;
         uint8_t ml_code = eml.symbol;
+        /* Sprint 109 fix: bound ml_code to VVA_ML_CODES range. */
+        if (VV_UNLIKELY(ml_code >= VVA_ML_CODES)) {
+            free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
+            return VVA_ERR_CORRUPT;
+        }
         uint32_t ml_extra_val = ans_br_read(&r, ml_extra[ml_code]);
         uint32_t matchlen = ml_base_tab[ml_code] + ml_extra_val;
 
@@ -3234,15 +3691,15 @@ static vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
          * op_safe_end = op_end - SAFEZONE_MAX_MATCH, and matchlen is
          * always ≤ SAFEZONE_MAX_MATCH by wire format. */
         if (VV_UNLIKELY(offset == 0 || offset > SAFEZONE_MAX_OFFSET)) {
-            free(dec_ml); free(dec_of); free(lit_buf);
+            free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
         if (VV_UNLIKELY(!in_safe_zone && offset > (uint32_t)(op - dst_base))) {
-            free(dec_ml); free(dec_of); free(lit_buf);
+            free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
         if (VV_UNLIKELY(!in_safe_zone && op + matchlen > op_end)) {
-            free(dec_ml); free(dec_of); free(lit_buf);
+            free(dec_ml); free(dec_of); free(dec_ll); free(lit_buf);
             return VVA_ERR_OVERFLOW;
         }
 
@@ -3379,6 +3836,53 @@ vva_error_t vva_decode_sequences_v2(const uint8_t *src, size_t src_len,
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
+ * SECURE MEMORY ZERO (Sprint 117 — defense in depth)
+ *
+ * Compiler-resistant memset that the optimizer cannot eliminate
+ * even when followed by free(). Used to scrub plaintext-derived
+ * working buffers (literals, stripped tokens, ANS scratch) before
+ * release back to the heap allocator. Without this, plaintext
+ * fragments persist in the heap free-list and may be observable
+ * through later allocations or memory disclosure.
+ *
+ * Implementation strategy:
+ *   - Prefer `explicit_bzero` (BSD/glibc 2.25+, guaranteed-secure)
+ *   - Fall back to `memset_explicit` (C23)
+ *   - Last resort: volatile-pointer memset (compiler cannot
+ *     prove the writes are dead)
+ * ═══════════════════════════════════════════════════════════════ */
+
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))
+#  define VV_HAS_EXPLICIT_BZERO 1
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#  define VV_HAS_EXPLICIT_BZERO 1
+#else
+#  define VV_HAS_EXPLICIT_BZERO 0
+#endif
+
+#if VV_HAS_EXPLICIT_BZERO
+/* Forward-declare so we don't have to enable _DEFAULT_SOURCE globally
+ * (which would conflict with the strict _POSIX_C_SOURCE=199309L the
+ * project sets). The symbol is in libc on supported platforms. */
+extern void explicit_bzero(void *s, size_t n);
+#endif
+
+static inline void vv_secure_zero(void *buf, size_t len) {
+    if (!buf || !len) return;
+#if VV_HAS_EXPLICIT_BZERO
+    explicit_bzero(buf, len);
+#else
+    /* Volatile pointer prevents the compiler from concluding the
+     * memset is dead and eliminating it. The volatile read of `p`
+     * each iteration forces the writes to be observable. */
+    volatile unsigned char *p = (volatile unsigned char *)buf;
+    while (len--) *p++ = 0;
+#endif
+}
+
+/* Sprint 117: VV_NO_SANITIZE_INTEGER is provided by include/vv_platform.h. */
+
+/* ═══════════════════════════════════════════════════════════════
  * VARINT WRITER
  * ═══════════════════════════════════════════════════════════════ */
 
@@ -3396,7 +3900,7 @@ static inline size_t write_varint(uint8_t *dst, size_t val) {
  * widening to an 8-byte load that over-reads the buffer.
  * ═══════════════════════════════════════════════════════════════ */
 
-static inline uint32_t hash5(const uint8_t *p) {
+static inline VV_NO_SANITIZE_INTEGER uint32_t hash5(const uint8_t *p) {
     uint32_t lo;
     memcpy(&lo, p, 4);
     uint64_t v = (uint64_t)lo | ((uint64_t)p[4] << 32);
@@ -3405,14 +3909,14 @@ static inline uint32_t hash5(const uint8_t *p) {
 }
 
 /* 4-byte hash for positions near end of buffer */
-static inline uint32_t hash4(const uint8_t *p) {
+static inline VV_NO_SANITIZE_INTEGER uint32_t hash4(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, 4);
     return (v * 2654435761u) >> (32 - VV_HC_BITS);
 }
 
 /* Safe hash: picks 5-byte or 4-byte depending on remaining bytes */
-static inline uint32_t hash_safe(const uint8_t *p, int32_t remain) {
+static inline VV_NO_SANITIZE_INTEGER uint32_t hash_safe(const uint8_t *p, int32_t remain) {
     return (remain >= 5) ? hash5(p) : hash4(p);
 }
 
@@ -3473,7 +3977,7 @@ static inline int32_t extend_match(const uint8_t *a, const uint8_t *b,
 #define VV_HC4_BITS  16
 #define VV_HC4_SIZE  (1u << VV_HC4_BITS)
 
-static inline uint32_t hash4_short(const uint8_t *p) {
+static inline VV_NO_SANITIZE_INTEGER uint32_t hash4_short(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, 4);
     return (v * 2654435761u) >> (32 - VV_HC4_BITS);
@@ -3495,7 +3999,7 @@ static inline uint32_t hash4_short(const uint8_t *p) {
 #define VV_HC3_BITS  14
 #define VV_HC3_SIZE  (1u << VV_HC3_BITS)
 
-static inline uint32_t hash3_short(const uint8_t *p) {
+static inline VV_NO_SANITIZE_INTEGER uint32_t hash3_short(const uint8_t *p) {
     uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
     return (v * 2654435761u) >> (32 - VV_HC3_BITS);
 }
@@ -3518,16 +4022,40 @@ typedef struct {
                             * extra bits only reaches 65534). */
 } matcher_t;
 
-static void matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
+/* SPRINT 93 audit: returns 1 on success, 0 on allocation failure.
+ * Callers MUST check the return value — on failure m is left in a
+ * partially-initialized state with all pointers either valid or NULL,
+ * safe to pass to matcher_free for cleanup.
+ *
+ * Prior to Sprint 93 this function was void-returning with unchecked
+ * mallocs. If allocation failed, the immediately-following memset on
+ * the NULL pointer would crash. Sprint 92 audit identified this as a
+ * real defect. The fix tolerates allocator failure cleanly. */
+static void matcher_free(matcher_t *m); /* fwd decl for cleanup-on-failure */
+static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
     uint32_t wsz = 1u << window_log;
+    /* Initialize ALL pointers to NULL first so matcher_free is safe to
+     * call on partial-failure paths. */
+    m->table = NULL;
+    m->chain = NULL;
+    m->table4 = NULL;
+    m->hash4_chain = NULL;
+    m->table3 = NULL;
+    m->hash3_chain = NULL;
+
     m->table = (int32_t *)malloc(VV_HC_SIZE * sizeof(int32_t));
     m->chain = (int32_t *)malloc(wsz * sizeof(int32_t));
     m->table4 = (int32_t *)malloc(VV_HC4_SIZE * sizeof(int32_t));
     m->hash4_chain = (int32_t *)malloc(wsz * sizeof(int32_t));
+    if (!m->table || !m->chain || !m->table4 || !m->hash4_chain) {
+        matcher_free(m);
+        /* Re-NULL after free so caller's matcher_free is also safe */
+        m->table = m->chain = m->table4 = m->hash4_chain = NULL;
+        m->table3 = m->hash3_chain = NULL;
+        return 0;
+    }
     /* hash3 tables allocated lazily only when use_hash3 is enabled.
      * On v1 path (the default), they stay NULL and cost nothing. */
-    m->table3 = NULL;
-    m->hash3_chain = NULL;
     /* PERF: only the table arrays need to be cleared. chain/hash4_chain
      * are only read via table entries (which are now -1), so stale
      * data in them is unreachable. See matcher_reset for rationale. */
@@ -3540,6 +4068,7 @@ static void matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
     m->use_hash4 = 0;  /* Disabled by default — enabled adaptively for binary */
     m->use_hash3 = 0;  /* Disabled by default — enabled for format v2 */
     m->max_match = VV_MAX_MATCH;  /* v1 default, see matcher_set_format_v2 */
+    return 1;
 }
 
 /* Apply format v2 matcher constraints. Must be called whenever the
@@ -3671,9 +4200,10 @@ static inline int32_t try_rep_match(const matcher_t *m, const uint8_t *data,
 /* ─── Hash chain match: uses 5-byte hash, searches up to chain_depth.
  * If use_hash4 is nonzero AND hash5 finds nothing, fall back to hash4
  * chain for binary/struct coverage. ─── */
-static int32_t chain_match_ex(const matcher_t *m, const uint8_t *data,
-                               int32_t pos, int32_t end, int32_t *best_off,
-                               int use_hash4) {
+static VV_NO_SANITIZE_INTEGER int32_t
+chain_match_ex(const matcher_t *m, const uint8_t *data,
+               int32_t pos, int32_t end, int32_t *best_off,
+               int use_hash4) {
     /* Early exit: we need at least 3 bytes for hash3 probe, 4 for
      * hash4/hash5. Use the looser bound if hash3 is enabled. */
     int32_t min_bytes = m->use_hash3 ? 3 : 4;
@@ -3973,7 +4503,37 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
         }
 
         /* ─── Step 3: Lazy evaluation (balanced + extreme) ─── */
-        if (mode >= VV_MODE_BALANCED && mlen >= min_match &&
+        /* Sprint 121: gate lazy probing on `mlen < 8`. Counterintuitive
+         * but empirically validated: the cost-aware lazy decision
+         * (added Sprint 120) makes WORSE choices when the current match
+         * is already moderately long.
+         *
+         * Why: cost-aware lazy compares per-byte costs of competing
+         * matches. When mlen ≥ 8, the current match's per-byte cost is
+         * already low (≈1.5–3 bits/byte for typical offsets). A lazy
+         * probe at pos+1 finding a slightly longer match at a different
+         * offset triggers a shift, paying 1 literal but only marginally
+         * improving per-byte cost. The literal cost dominates the small
+         * per-byte gain, AND the cost-model approximation accumulates
+         * error that biases toward shifting.
+         *
+         * Empirical sweep on the 8-fixture suite (aggregate Δ vs zstd-3):
+         *   no gate (lazy always):  −0.130%   (v2.48.0 / Sprint 120)
+         *   mlen < 16:              −0.252%
+         *   mlen < 12:              −0.386%
+         *   mlen <  9:              −0.776%
+         *   mlen <  8:              −1.070%   (THIS)
+         *   mlen <  7:              −1.282%
+         *   mlen <  6:              −1.860%
+         *   mlen <  5:              −2.044%   (best aggregate, but
+         *                                       fx_json regresses 8.5pp)
+         *   no lazy (mlen < 4):     −0.921%
+         *
+         * The mlen<5 setting wins aggregate but breaks fx_json from
+         * −2.49% to +6.04% — unacceptable per-fixture regression.
+         * mlen<8 is the safe optimum: improves every fixture vs v2.48.0
+         * with no regressions. */
+        if (mode >= VV_MODE_BALANCED && mlen >= min_match && mlen < 8 &&
             pos + 1 < end - min_match) {
             /* Check pos+1 */
             matcher_insert(m, src, pos, end);
@@ -3983,54 +4543,81 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
             /* Also check rep at pos+1 */
             int32_t nri = -1;
             int32_t nrl = try_rep_match(m, src, pos + 1, end, &nri);
-            if (nrl > nlen) { nlen = nrl; noff = (int32_t)m->rep[nri]; }
+            if (nrl > nlen && nri >= 0) { nlen = nrl; noff = (int32_t)m->rep[nri]; }
 
-            /* standard */int32_t lazy_gain = 2;
-            if (nlen > mlen + lazy_gain) {
-                /* pos+1 is significantly better: emit literal, shift */
-                pos++;
-                mlen = nlen; moff = noff;
+            /* SPRINT 119: cost-aware lazy decision (closes the +1.2%
+             * ratio gap to zstd-3 — see CHANGELOG.md, Sprint 120).
+             *
+             * Old code used `nlen > mlen + 2` which ignores offset cost.
+             * This made vv prefer shorter matches at far offsets over
+             * longer matches at near offsets. zstd-3 produces ~11% fewer
+             * sequences on dickens (1.22M vs 1.37M) by accounting for
+             * offset cost when choosing between competing matches.
+             *
+             * Cost model:
+             *   match_bits(off, len) ≈ 10 + log2(off) + ml_extra(len)
+             *     - 10 covers ML/OF/LL ANS code values (avg ~3 bits each)
+             *     - log2(off) is the OF extra-bit cost (info-theoretic min)
+             *     - ml_extra is small for short matches (0 for len ≤ 19)
+             *   literal_bits ≈ 6 (4-stream Huffman avg on text)
+             *
+             * Decide on B (shift) over A (emit current match) when:
+             *   (literal_bits + match_bits(noff, nlen)) / (nlen + 1)
+             *     < match_bits(moff, mlen) / mlen
+             *
+             * Rep matches have offset cost ≈ 1 bit (rep code, no extras),
+             * so they're heavily favored regardless of length. */
+            if (nlen >= min_match) {
+                /* Approx log2(off) — clamp to 1 for rep candidates and
+                 * to >= 1 generally to avoid div-by-zero quirks. */
+                int log2_moff = 0; uint32_t mo = (uint32_t)moff;
+                while (mo > 1) { mo >>= 1; log2_moff++; }
+                int log2_noff = 0; uint32_t no = (uint32_t)noff;
+                while (no > 1) { no >>= 1; log2_noff++; }
 
-                /* Lazy-2 disabled in v2.24.0.
+                /* Rep matches use 0 extra bits but do consume an OF code
+                 * slot. Approximate them as cost 2 bits regardless of
+                 * the actual offset value.
                  *
-                 * Previously, after a lazy-1 shift to pos+1, this block
-                 * would try another shift to pos+2 if n2len > mlen + 1.
-                 * That was a classic "greedy past the peak" bug:
-                 *
-                 * Empirical results on 50KB English-text corpus:
-                 *   balanced:              11,279 bytes
-                 *   extreme + lazy-2 (+1): 12,157 bytes  (+8% vs balanced)
-                 *   extreme + lazy-2 (+2): 12,157 bytes  (threshold didn't matter)
-                 *   extreme + lazy-2 (+4): 11,860 bytes  (still worse)
-                 *   extreme, lazy-2 off:   10,718 bytes  (5% better!)
-                 *
-                 * On 4 text corpora tested, lazy-2 cost an aggregate
-                 * 2,463 bytes vs disabled. On 2 JSON corpora, it saved
-                 * 213 bytes. Net-bytes-across-inputs: disabled wins by
-                 * ~10×. Disabling produces the strictly correct
-                 * "extreme >= balanced ratio" contract on all tested
-                 * inputs except JSON, where the regression is tiny
-                 * (<5%) and offset-encoding-cost-aware parsing would
-                 * be the proper fix (future work).
-                 *
-                 * Root cause: lazy-2's break-even model doesn't
-                 * account for the offset-extra-bits encoding cost of
-                 * the shifted-to match. On text, deeper chain search
-                 * finds long matches at far offsets whose extra-bits
-                 * cost exceeds the gain from the extra match length. */
-                (void)lazy_gain;  /* still used in lazy-1 above */
-                if (0) {
-                    /* dead code — reference for future cost-aware work */
-                    matcher_insert(m, src, pos, end);
-                    int32_t n2off = 0;
-                    int32_t n2len = chain_match(m, src, pos + 1, end, &n2off);
-                    int32_t n2ri = -1;
-                    int32_t n2rl = try_rep_match(m, src, pos + 1, end, &n2ri);
-                    if (n2rl > n2len) { n2len = n2rl; n2off = (int32_t)m->rep[n2ri]; }
-                    if (n2len > mlen + lazy_gain) {
-                        pos++;
-                        mlen = n2len; moff = n2off;
-                    }
+                 * Sprint 121: per-mode constant. Extreme mode (deep
+                 * chain search) optimizes at +14; balanced mode
+                 * (shallow chain) optimizes at +18 because the lazy
+                 * candidates from a depth-24 search are noisier and
+                 * benefit from less aggressive shifting. */
+                int cost_const = (mode >= VV_MODE_EXTREME) ? 14 : 18;
+                int moff_bits = (rep_idx >= 0) ? 2 : (cost_const + log2_moff);
+                int noff_bits = (nri >= 0)     ? 2 : (cost_const + log2_noff);
+
+                /* Cross-multiply to avoid floating-point in hot path:
+                 *   (literal_bits + noff_bits) * mlen < moff_bits * (nlen + 1) */
+                int literal_bits = 6;
+                int lhs = (literal_bits + noff_bits) * mlen;
+                int rhs = moff_bits * (nlen + 1);
+                if (lhs < rhs) {
+                    pos++;
+                    mlen = nlen; moff = noff;
+                    rep_idx = nri;  /* may have shifted from explicit→rep or vice versa */
+
+                    /* SPRINT 121: cost-aware lazy-2 was tested and rejected.
+                     * Measured Δ vs lazy-1-only (gate mlen<8 in both cases):
+                     *   fx_text:    neutral
+                     *   fx_json:    −0.003% (negligible)
+                     *   fx_source:  +0.022%
+                     *   bash:       −0.052%
+                     *   dickens:    +0.912%   ← significant regression
+                     *   xml:        +0.086%
+                     *   sao:        +0.874%   ← significant regression
+                     *   x-ray:      +0.361%
+                     *   AGGREGATE:  +0.601% (worse)
+                     *
+                     * The shift cascade dominates: after a successful
+                     * lazy-1 shift, a second probe at the new pos+1
+                     * tends to find marginally-longer matches and
+                     * shifts again, eating literals faster than the
+                     * cost model accounts for. The cost-model error
+                     * compounds with each shift.
+                     *
+                     * Lazy-1 captures the available benefit cleanly. */
                 }
             }
         }
@@ -4177,7 +4764,8 @@ static size_t emit_block(const uint8_t *src, size_t block_start, size_t braw,
                          uint8_t *tmp, size_t tcap,
                          uint8_t *lit_buf, size_t lit_cap,
                          uint8_t *stripped, uint8_t *ent_buf, size_t ent_cap,
-                         uint8_t *dst, size_t dst_cap, int min_match) {
+                         uint8_t *dst, size_t dst_cap, int min_match,
+                         int compat_v246_5) {
     uint8_t *op = dst;
 
     size_t csz = compress_block(src, block_start, braw, tmp, tcap, m, mode, min_match);
@@ -4203,9 +4791,11 @@ static size_t emit_block(const uint8_t *src, size_t block_start, size_t braw,
          * contain 3-byte matches that v1 encode_sequences cannot
          * represent correctly. */
         int use_v2 = (min_match < (int)VV_MIN_MATCH);
+        /* Sprint 105 Phase C: thread compat flag through to SEQ encoder. */
+        int dis_huf4 = compat_v246_5;
         vva_error_t serr = use_v2
-            ? vva_encode_sequences_v2(tmp, csz, ent_buf, ent_cap, &seq_len, off_bytes)
-            : vva_encode_sequences(tmp, csz, ent_buf, ent_cap, &seq_len, off_bytes);
+            ? vva_encode_sequences_v2_compat(tmp, csz, ent_buf, ent_cap, &seq_len, off_bytes, dis_huf4)
+            : vva_encode_sequences_compat(tmp, csz, ent_buf, ent_cap, &seq_len, off_bytes, dis_huf4);
         if (serr == VVA_OK) {
             seq_block_sz = 4 + 3 + 1 + seq_len;
             seq_valid = 1;
@@ -4369,9 +4959,20 @@ size_t vv_compress_bound(size_t src_len) {
 int64_t vv_compress(const uint8_t *src, size_t src_len,
                     uint8_t *dst, size_t dst_cap,
                     const vv_options_t *opts) {
-    if (!src || !dst || !opts) return VV_ERR_PARAM;
+    /* SPRINT 95 audit: accept NULL opts (fall back to defaults) for
+     * consistency with vv_cstream_create. Also accept src_len=0
+     * (an empty frame is a valid thing to produce — some streaming
+     * protocols rely on it as a flush marker). */
+    if (!dst) return VV_ERR_PARAM;
+    if (src_len > 0 && !src) return VV_ERR_PARAM;
     if (dst_cap < sizeof(vv_frame_header_t) + sizeof(vv_frame_footer_t) + 16)
         return VV_ERR_OVERFLOW;
+
+    vv_options_t local_opts;
+    if (!opts) {
+        vv_default_options(&local_opts);
+        opts = &local_opts;
+    }
 
     uint8_t wlog = opts->window_log;
     uint32_t depth;
@@ -4402,13 +5003,21 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
         size_t trial_cap = trial_len + trial_len / 255 + 1024;
         uint8_t *trial_buf = (uint8_t *)malloc(trial_cap);
         if (trial_buf) {
-            matcher_t m16; matcher_init(&m16, 16, 4);
-            size_t sz16 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m16, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
-            matcher_free(&m16);
+            matcher_t m16;
+            size_t sz16 = 0, sz20 = 0;
+            /* SPRINT 93 audit: matcher_init can fail; if it does, skip
+             * the trial (this path is a perf-tuning probe — falling
+             * back to default wlog is safe). */
+            if (matcher_init(&m16, 16, 4)) {
+                sz16 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m16, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
+                matcher_free(&m16);
+            }
 
-            matcher_t m20; matcher_init(&m20, 20, 4);
-            size_t sz20 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m20, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
-            matcher_free(&m20);
+            matcher_t m20;
+            if (matcher_init(&m20, 20, 4)) {
+                sz20 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m20, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
+                matcher_free(&m20);
+            }
 
             free(trial_buf);
             if (sz20 > 0 && sz16 > 0 && sz20 < (sz16 * 97 / 100)) wlog = 20;
@@ -4441,7 +5050,10 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
 
     /* Matcher */
     matcher_t m;
-    matcher_init(&m, wlog, depth);
+    /* SPRINT 93 audit: handle allocation failure cleanly */
+    if (!matcher_init(&m, wlog, depth)) {
+        return VV_ERR_NOMEM;
+    }
     m.use_hash4 = (uint8_t)enable_hash4; /* From fused adaptive-window trial */
     /* Format v2 cap applies to EVERY match emitted from this matcher,
      * not just those produced via hash3. Set unconditionally when
@@ -4509,7 +5121,8 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
         size_t written = emit_block(src, block_start, braw, last, &m, opts->mode, wlog,
                                     tmp, tcap, lit_buf, lit_cap,
                                     stripped, ent_buf, ent_cap,
-                                    op, dst_cap - (size_t)(op - dst), min_match);
+                                    op, dst_cap - (size_t)(op - dst), min_match,
+                                    opts->compat_v246_5_decoder);
         if (written == 0) {
             free(lit_buf); free(stripped); free(ent_buf);
             free(tmp); matcher_free(&m);
@@ -4519,6 +5132,12 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
         ip += braw; remaining -= braw;
     }
 
+    /* Sprint 117: scrub plaintext-derived working buffers before free
+     * to prevent heap-residue leak (defense in depth). */
+    vv_secure_zero(tmp, tcap);
+    if (lit_buf)  vv_secure_zero(lit_buf, lit_cap);
+    if (stripped) vv_secure_zero(stripped, tcap);
+    if (ent_buf)  vv_secure_zero(ent_buf, ent_cap);
     free(lit_buf); free(stripped); free(ent_buf);
     free(tmp);
 
@@ -4598,16 +5217,26 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
     default: depth = 24;
     }
 
-    matcher_init(&ctx->m, wlog, depth);
+    /* SPRINT 93 audit: matcher_init can fail; cstream returns NULL
+     * on any allocation error per public API contract. */
+    if (!matcher_init(&ctx->m, wlog, depth)) {
+        free(ctx);
+        return NULL;
+    }
     /* Format v2 matchlen cap applies to every match — set whenever
-     * streaming opts has format_v2 on, not just when hash3 fires. */
-    if (opts->format_v2) {
+     * streaming opts has format_v2 on, not just when hash3 fires.
+     *
+     * Sprint 89 audit: read from ctx->opts (populated above with either
+     * the caller's opts or default values) rather than the raw opts
+     * pointer, which can be NULL when caller wants defaults. The prior
+     * code dereferenced NULL when called as vv_cstream_create(NULL). */
+    if (ctx->opts.format_v2) {
         matcher_set_format_v2(&ctx->m);
     }
     /* SPRINT 45: enable hash3 for format v2 streaming. Must free
      * ctx before returning NULL — callers use NULL-check semantics
      * here, not error codes. */
-    if (opts->format_v2) {
+    if (ctx->opts.format_v2) {
         if (!matcher_enable_hash3(&ctx->m)) {
             matcher_free(&ctx->m);
             free(ctx);
@@ -4642,9 +5271,20 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
 
 void vv_cstream_destroy(vv_cstream_t *ctx) {
     if (!ctx) return;
+    /* Sprint 117: zero plaintext-derived working buffers before free.
+     * lit_buf and stripped contain literal bytes from the input; src_buf
+     * holds raw input. tmp/ent_buf may contain compressed-but-not-yet-
+     * encrypted output. All are scrubbed to prevent heap-residue leak. */
+    if (ctx->tmp)      vv_secure_zero(ctx->tmp, ctx->tcap);
+    if (ctx->lit_buf)  vv_secure_zero(ctx->lit_buf, ctx->lit_cap);
+    if (ctx->stripped) vv_secure_zero(ctx->stripped, ctx->lit_cap);
+    if (ctx->ent_buf)  vv_secure_zero(ctx->ent_buf, ctx->ent_cap);
+    if (ctx->src_buf)  vv_secure_zero(ctx->src_buf, ctx->src_cap);
     free(ctx->tmp); free(ctx->lit_buf); free(ctx->stripped); free(ctx->ent_buf);
     free(ctx->src_buf);
     matcher_free(&ctx->m);
+    /* Scrub the context itself in case it held sensitive options */
+    vv_secure_zero(ctx, sizeof(*ctx));
     free(ctx);
 }
 
@@ -4781,7 +5421,8 @@ int vv_cstream_compress_chunk(vv_cstream_t *ctx,
                                      ctx->tmp, ctx->tcap,
                                      ctx->lit_buf, ctx->lit_cap,
                                      ctx->stripped, ctx->ent_buf, ctx->ent_cap,
-                                     op, cap_left, stream_min_match);
+                                     op, cap_left, stream_min_match,
+                                     ctx->opts.compat_v246_5_decoder);
         if (block_sz == 0) return VV_ERR_OVERFLOW;
         op += block_sz; cap_left -= block_sz;
     }
@@ -4793,7 +5434,8 @@ int vv_cstream_compress_chunk(vv_cstream_t *ctx,
         ff.checksum = vv_xxh64_finalize(&ctx->cks);
         ff.footer_magic = 0x56564E44u;
         memcpy(op, &ff, sizeof(ff));
-        op += sizeof(ff); cap_left -= sizeof(ff);
+        op += sizeof(ff);
+        /* cap_left no longer read — function returns immediately below */
     }
 
     *written = (size_t)(op - dst);
@@ -4832,7 +5474,12 @@ typedef struct {
 typedef struct {
     mt_task_t *tasks;
     size_t ntasks;
-    volatile size_t next_task;
+    /* SPRINT 98 audit: removed redundant `volatile`. next_task is
+     * protected by the mutex below, which provides full memory
+     * ordering. `volatile` was misleading — it doesn't provide
+     * synchronization, only prevents compiler reordering, and the
+     * mutex already prevents both. */
+    size_t next_task;
     pthread_mutex_t mutex;
 } mt_pool_t;
 
@@ -4855,7 +5502,15 @@ int64_t vv_compress_mt(const uint8_t *src, size_t src_len,
                        const vv_options_t *opts,
                        unsigned int nthreads,
                        size_t chunk_size) {
-    if (!src || !dst || !opts) return VV_ERR_PARAM;
+    /* SPRINT 95 audit: same as vv_compress — accept NULL opts and
+     * src_len=0 for API consistency. */
+    if (!dst) return VV_ERR_PARAM;
+    if (src_len > 0 && !src) return VV_ERR_PARAM;
+    vv_options_t local_opts;
+    if (!opts) {
+        vv_default_options(&local_opts);
+        opts = &local_opts;
+    }
     if (chunk_size == 0) chunk_size = 4 * 1024 * 1024;  /* 4 MB default */
     if (chunk_size < VV_MAX_BLOCK_SIZE) chunk_size = VV_MAX_BLOCK_SIZE;
 
@@ -5123,6 +5778,14 @@ decode_block_tokens_impl(
         if (VV_UNLIKELY(ll == 15))
             ll += (uint32_t)read_ext_len(&ip, ip_end);
 
+        /* Sprint 109 fix: corrupt ll extension can yield a huge ll
+         * that exceeds remaining input or output. Found by libFuzzer
+         * + ASan: heap-buffer-overflow READ at memcpy(op,ip,ll) when
+         * ll > ip_end - ip. Cheap bounds check after ll has its final
+         * value (post-extension-length read if any). */
+        if (VV_UNLIKELY((size_t)(ip_end - ip) < ll || (size_t)(op_end - op) < ll))
+            return -1;
+
         if (VV_LIKELY(ll <= 14 && ip + ll + 2 <= ip_end)) {
             uint16_t off_raw;
             memcpy(&off_raw, ip + ll, 2);
@@ -5173,6 +5836,14 @@ decode_block_tokens_impl(
 
         if (VV_UNLIKELY(ll == 15))
             ll += (uint32_t)read_ext_len(&ip, ip_end);
+
+        /* Sprint 109 fix: corrupt ll extension can yield a huge ll
+         * that exceeds remaining input or output. Found by libFuzzer
+         * + ASan: heap-buffer-overflow READ at memcpy(op,ip,ll) when
+         * ll > ip_end - ip. Cheap bounds check after ll has its final
+         * value (post-extension-length read if any). */
+        if (VV_UNLIKELY((size_t)(ip_end - ip) < ll || (size_t)(op_end - op) < ll))
+            return -1;
 
         if (VV_LIKELY(ll <= 14 && ip + ll + 2 <= ip_end)) {
             uint16_t off_raw;

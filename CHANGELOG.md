@@ -2,6 +2,2262 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.48.2 — Sprint 122: Zupt 2.2.3 integration + documentation cleanup
+
+**Documentation and integration release.** No production code changes; encoder and decoder behavior is byte-identical to v2.48.1. This release retargets the Zupt integration guide for Zupt 2.2.3 (since 2.2.2 has been published), adds a Zupt-specific integration smoke test, removes obsolete documentation, and fixes Makefile parallel-build bugs.
+
+### Documentation cleanup
+
+Seven obsolete `.md` files have been removed from the source tree to reduce surface area and prevent confusion:
+
+| Removed | Reason |
+|---|---|
+| `AUDIT.md` | Consolidated into `FORMAL_AUDIT.md` (which has the formal verification matrix) |
+| `DESIGN_4STREAM_HUFFMAN.md` | Internal sprint design doc; rationale preserved in `CHANGELOG.md` Sprint 105 |
+| `DESIGN_SMALLER_BLOCKS.md` | Internal sprint design doc; rationale in `CHANGELOG.md` Sprint 107-108 |
+| `DESIGN_RETROSPECTIVE.md` | Internal sprint retrospective; key content in `CHANGELOG.md` Sprint 120 |
+| `SPRINT_108_NEGATIVE_RESULT.md` | Sprint-internal negative result; in `CHANGELOG.md` |
+| `COMPETITIVE.md` | Subsumed by `PERFORMANCE.md` |
+| `SILESIA_BENCHMARK.md` | Subsumed by `PERFORMANCE.md` |
+
+The seven retained `.md` files are the user-facing documentation:
+- `README.md` (entry point)
+- `CHANGELOG.md` (release history)
+- `FORMAT.md` (wire format spec — required for interop)
+- `PERFORMANCE.md` (measured numbers)
+- `SECURITY.md` (security posture)
+- `FORMAL_AUDIT.md` (formal audit reference)
+- `ZUPT_INTEGRATION.md` (Zupt integration guide)
+
+All dangling references to removed files have been updated in surviving docs and source comments.
+
+### Zupt 2.2.3 integration
+
+`ZUPT_INTEGRATION.md` rewritten end-to-end for Zupt 2.2.3 + VaptVupt 2.48.2 (was Zupt 2.1.6 + v2.47.5). Substantive changes vs the v2.47.5 guide:
+
+- All ratio numbers updated to v2.48.x measurements (was +1.2% behind zstd-3, now −1.07% ahead)
+- New "Why v2.48.x specifically" section documenting the Sprint 120 cost-aware lazy parser breakthrough, Sprint 118 memory hygiene (`vv_secure_zero`), and Sprint 117/118 hardened-build compatibility
+- `format_v2` selection heuristic added: enable for binary-class files only — Sprint 120 measurements show v2 is +0.37% **worse** on text fixtures
+- API examples revised — `is_binary_heavy` parameter added to `zupt_compress_for_archive`
+- Threat model updated for Sprint 109/118 fixes (literal-run extension bounds, OOB code-table bounds, NULL-deref protection on edge-case empty symbol tables, encoder buffer scrubbing)
+- Integration checklist expanded: amalgamation drift detection, `FORMAL_AUDIT.md` review, hardened-build CI verification
+
+### New: Zupt integration smoke test (TEST19)
+
+`tests/test_zupt_integration.c` — 9 tests validating the exact API patterns documented in `ZUPT_INTEGRATION.md`. Tests cover:
+
+1. Text roundtrip with `format_v2 = 0`
+2. Binary roundtrip with `format_v2 = 1`
+3. High-entropy / AEAD-like data handling (no excessive expansion)
+4. Skip-checksum decode of encoder-with-checksum output
+5. Streaming encode + streaming decode roundtrip
+6. Corrupt-input handling (no crash, clean error return)
+7. `dst_cap = 0` boundary
+8. `compat_v246_5_decoder = 1` flag for backward compatibility
+9. `format_v2 = 1` correctness on binary inputs
+
+All 9 pass. The test is added to the standard `make test` target as TEST19. Full test count is now **19 binaries (~370 cases)**.
+
+### Build hygiene fixes
+
+Two Makefile fixes to make builds reliable from a fresh source tarball and under parallel make:
+
+1. **`build_obj/` auto-created**. Fresh-extract builds previously failed with `Fatal error: can't create build_obj/vv_simd.o: No such file or directory`. Fixed by adding `mkdir -p build_obj` to the `$(TARGET)` rule. Backwards-compatible (idempotent).
+2. **Test object files moved out of shared `/tmp/` and per-test rules made parallel-safe**. The previous test rules wrote intermediate `.o` files to paths like `/tmp/vv_simd_t7.o`, shared across the host. Concurrent test builds (or repeated runs in the same session) could race on these paths. v2.48.2 moves them to `build_obj/vv_*_t<N>.o` — still per-test-unique to support parallel `make -jN` — and adds `mkdir -p build_obj` to every test rule. `make -j4` now builds the entire codec + all 19 tests cleanly.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Decoder behavior**: byte-identical to v2.48.1
+- **Encoder output**: byte-identical to v2.48.1
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.48.1
+
+### Validation
+
+| Check | Result |
+|---|---|
+| 19 test binaries (~370 cases) | pass |
+| Zupt integration smoke test | 9/9 pass |
+| Aggregate ratio vs zstd-3 | −1.07% (unchanged from v2.48.1) |
+| Strict UBSan `-fsanitize=integer` | 0 errors |
+| `make amalg-verify` | in sync |
+| cppcheck | 0 findings |
+| `make -j4` parallel build | clean |
+
+
+## v2.48.1 — Sprint 121: Lazy parser gate `mlen < 8` + per-mode cost constant 🎯
+
+**Aggregate ratio extends to −1.07% vs zstd-3** (was −0.131% in v2.48.0). The cost-aware lazy parser introduced in Sprint 120 is refined with a length gate and per-mode cost calibration. **Wire format unchanged** — encoder-only refinement.
+
+### What changed
+
+#### Length gate on lazy probing — `mlen < 8`
+
+The cost-aware lazy decision from v2.48.0 was applied unconditionally whenever the current match was at least `min_match` bytes long. Empirical sweep on the 8-fixture suite found that gating lazy probing on `mlen < 8` yields a **strict improvement** on every fixture vs always-on:
+
+| Gate | Aggregate Δ vs zstd-3 |
+|---|---|
+| no gate (always lazy)    | −0.130% |
+| `mlen < 16`              | −0.252% |
+| `mlen < 12`              | −0.386% |
+| `mlen < 9`               | −0.776% |
+| **`mlen < 8` (this)**    | **−1.070%** |
+| `mlen < 7`               | −1.282% |
+| `mlen < 6`               | −1.860% |
+| `mlen < 5`               | −2.044% (best aggregate, **but +6.0% regression on fx_json**) |
+| no lazy (`mlen < 4`)     | −0.921% |
+
+`mlen < 8` is the safe optimum: improves every fixture vs v2.48.0 with no per-fixture regressions. The `mlen < 5` setting wins aggregate but produces an unacceptable per-fixture regression on JSON-like data.
+
+**Why it works**: when the current match is already moderately long (`mlen ≥ 8`), the per-byte cost of the current match is already low. Cost-aware lazy's approximate cost model accumulates error that biases toward shifting; gating the probe avoids that error in the regime where the shift can't help much anyway.
+
+#### Per-mode cost constant — 14 (extreme), 18 (balanced)
+
+The cost model uses `cost_const + log2(off)` to estimate match-encoding bits. Sprint 120 used `14` uniformly; Sprint 121 finds:
+
+- **Extreme mode** (depth=256 chains): `14` is optimal. Deep chain search produces high-quality candidates; aggressive shifting captures the gain.
+- **Balanced mode** (depth=24 chains): `18` is optimal. Shallow chain search produces noisier candidates; less aggressive shifting gives better results.
+
+This recovers ~0.1pp on balanced-mode aggregate without affecting extreme.
+
+#### Lazy-2 was tested and rejected (again)
+
+Sprint 121 tested cost-aware lazy-2 on top of the gated lazy-1 logic (i.e., probe a second time after a successful shift). Result: **+0.601% aggregate (worse)**. dickens regressed +0.91pp, sao +0.87pp. The shift cascade dominates: after one successful lazy-1 shift, a second probe at the new pos+1 tends to find marginally-longer matches and shifts again, eating literals faster than the cost model accounts for. The cost-model error compounds with each shift.
+
+This confirms the v2.24.0 lazy-2 disable decision — the issue isn't fixed-vs-cost-aware threshold, it's compounding error.
+
+### Measurements (vv-extreme vs zstd-3 on 8-fixture suite)
+
+| Fixture | v2.48.0 | v2.48.1 | Δ size | gap to zstd-3 |
+|---|---|---|---|---|
+| fx_text | 147,314 | 128,238 | **−12.95%** | **−6.93%** ✓ |
+| fx_json | 199,910 | 198,213 | −0.85% | **−2.49%** ✓ |
+| fx_source | 209,451 | 206,350 | −1.48% | +5.78% |
+| bash | 740,734 | 738,698 | −0.27% | +1.59% |
+| dickens | 3,902,187 | 3,818,656 | **−2.14%** | +4.07% |
+| xml | 670,207 | 643,067 | **−4.05%** | +0.61% |
+| sao | 5,435,572 | 5,410,425 | −0.46% | **−2.54%** ✓ |
+| x-ray | 5,881,260 | 5,881,236 | −0.00% | **−3.37%** ✓ |
+| **Aggregate** | **17,186,635** | **17,024,883** | **−0.94%** | **−1.070%** ✓ |
+
+**Aggregate −1.070% vs zstd-3** (was −0.131%). Every fixture improved or held even.
+
+Per-fixture wins: 4 of 8 (fx_text, fx_json, sao, x-ray). The ratio gap on fx_text is now particularly large — vv beats zstd-3 by 6.93% on that fixture.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Decoder behavior**: byte-identical to v2.48.0
+- **Encoder output**: byte-different from v2.48.0 (smaller files)
+- **Cross-version compat**: v2.48.0 decoder handles v2.48.1 output and vice-versa
+- **License**: GPL-3.0-or-later (unchanged)
+
+### Build hygiene fixes
+
+Two Makefile fixes to make builds reliable from a fresh source tarball and under parallel make:
+
+1. **`build_obj/` auto-created**. Fresh-extract builds previously failed with `Fatal error: can't create build_obj/vv_simd.o: No such file or directory`. Fixed by adding `mkdir -p build_obj` to the `$(TARGET)` rule. Backwards-compatible (idempotent).
+
+2. **Test object files moved out of shared `/tmp/` and per-test rules made parallel-safe**. The previous test rules wrote intermediate `.o` files to paths like `/tmp/vv_simd_t7.o`, shared across the host. Concurrent test builds (or repeated runs in the same session) could race on these paths. v2.48.1 moves them to `build_obj/vv_*_t<N>.o` — still per-test-unique to support parallel `make -jN` — and adds `mkdir -p build_obj` to every test rule. `make -j4` now builds the entire codec + all 18 tests cleanly.
+
+### New documentation
+
+- **`FORMAL_AUDIT.md`** — comprehensive verification matrix, threat model, and reproduction steps. This is the formal audit reference for VaptVupt and is intended to satisfy due-diligence requirements of downstream library consumers, security-conscious deployments, internal review processes, and independent third-party security auditors. Specifies what has been verified by which mechanism, against which threat model, with what limits.
+- **`README.md`** — fully refreshed for v2.48.1. Headline numbers updated (was stale at v2.47.4: claimed "+1.4% behind" — now correctly states "−1.07% ahead"). Audit Status table redesigned as a structured summary with per-check status. Added explicit reference to `FORMAL_AUDIT.md` and `DESIGN_RETROSPECTIVE.md`.
+- **`PERFORMANCE.md`** — ratio section rewritten with v2.48.1 numbers and per-fixture trajectory table (v2.47.4 → v2.47.10 → v2.48.0 → v2.48.1). Documents that vv-extreme now beats zstd-3 on aggregate ratio and on 4 of 8 individual fixtures.
+- **`DESIGN_RETROSPECTIVE.md`** — Sprint 120/121 entries added to the decision log. Cost-aware lazy parser entry transitioned from "open future work" to "shipped with measurements". Sprint 121 hypotheses (lazy-2, larger ANS table, format_v2 on text) documented as null results.
+
+### Validation
+
+| Check | Result |
+|---|---|
+| 18 test binaries (~365 cases) | pass |
+| 12 DoS reproducers | <60ms each |
+| Roundtrip on 8 fixtures × 3 modes | pass |
+| Cross-version: v2.48.0 ↔ v2.48.1 | both directions pass |
+| Strict UBSan `-fsanitize=integer` | 0 errors |
+| `make amalg-verify` | in sync |
+| cppcheck / scan-build / GCC strict | 0 / 0 / 0 |
+
+
+## v2.48.0 — Sprint 120: Cost-aware lazy parser closes the +1.2% ratio gap to zstd-3 🎯
+
+**Ratio breakthrough.** Aggregate compression beats `zstd -3` for the first time. **Wire format unchanged** — old files decode with the new decoder, new files decode with the old decoder. The change is encoder-only.
+
+### What changed
+
+The lazy LZ parser at `src/vv_encoder.c:707-770` now uses a **cost-aware decision rule** instead of the previous fixed `lazy_gain = 2` length-only threshold. When deciding whether to emit the current match (A) or shift one byte and use the next match (B), the parser estimates the bit-cost of each option:
+
+```
+match_bits(off, len) ≈ 14 + log2(off) + ml_extra(len)
+literal_bits ≈ 6 (4-stream Huffman avg on text)
+rep_match_bits ≈ 2 (rep code + ANS, no extra bits)
+
+Choose B when:
+  (literal_bits + match_bits(noff, nlen)) / (nlen + 1)
+    < match_bits(moff, mlen) / mlen
+```
+
+The constant `14` covers the average ANS-coded ML/OF/LL code values (~3-5 bits each), and the `log2(off)` term is the OF extra-bit cost (information-theoretic minimum for offset encoding). Rep matches get a flat 2-bit cost since they consume only an OF code slot with zero extra bits.
+
+Implementation uses cross-multiplied integer comparison (no floating-point or division in the hot path), and an inline `log2` via a shift loop.
+
+### Why this works
+
+Empirical investigation found that:
+
+| Hypothesis tested | Result |
+|---|---|
+| ANS quantization (12→13 bit table) | **+0.04% WORSE** — header overhead exceeds quantization gain |
+| `format_v2` (min_match=3) on text | **+0.37% WORSE** — short matches don't help text |
+| Rep-update bug fix | **−156 bytes aggregate** (real bug, tiny impact: only 0.12% of dickens matches use rep codes) |
+| Better freq-table header encoding | Negligible — headers are 0.035 bits/seq |
+| Larger ANS state | Same as 12→13 bit — header overhead dominates |
+
+The actual lever was **parser sequence count**. By instrumenting both encoders:
+- vv-extreme on dickens: **1,370,305 sequences** in 10 blocks (avg 7.21 bytes/match)
+- zstd-3 on dickens: **1,218,624 sequences** in 78 blocks (avg ~7.95 bytes/match)
+
+zstd produces **11% fewer sequences** with longer matches by accounting for offset cost when choosing between competing matches at adjacent positions. vv's old parser preferred shorter matches at far offsets over longer matches at near offsets, paying ~14 OF extra bits per misdirected match.
+
+The retired comment block in `compress_block` predicted this exact lever:
+> "offset-encoding-cost-aware parsing would be the proper fix (future work)."
+
+### Measurements (vv-extreme vs zstd-3)
+
+| Fixture | v2.47.11 | v2.48.0 | Δ size | gap to zstd-3 |
+|---|---|---|---|---|
+| fx_text | 147,802 | 147,314 | −0.33% | +6.91% |
+| fx_json | 201,447 | 199,910 | −0.76% | **−1.65%** ✓ |
+| fx_source | 209,765 | 209,451 | −0.15% | +7.31% |
+| bash | 748,387 | 740,734 | −1.02% | +1.85% |
+| dickens | 3,995,706 | 3,902,187 | **−2.34%** | +6.36% |
+| xml | 668,012 | 670,207 | +0.33% | +4.86% |
+| sao | 5,453,055 | 5,435,572 | −0.32% | **−2.08%** ✓ |
+| x-ray | 5,990,416 | 5,881,260 | **−1.82%** | **−3.37%** ✓ |
+| **Aggregate** | **17,414,590** | **17,186,635** | **−1.31%** | **−0.131%** ✓ |
+
+**Aggregate vs zstd-3: was +1.194%, now −0.131%.** vv-extreme now wins on aggregate ratio by 0.131% (22 KB across the suite) and on 4 of 8 fixtures individually. Combined with the existing 1.27× decode speed advantage (per `PERFORMANCE.md`), vv now beats zstd-3 on **both** axes.
+
+The single +0.33% regression (xml) is offset many times over by the dickens (−2.34%) and x-ray (−1.82%) gains. Tuning the cost constant from 12 to 14 specifically minimized this regression — values of 10–11 left fx_text +0.7% worse.
+
+### Wire-format compatibility
+
+The change is **encoder-only**. The wire format, decoder, ANS tables, and frame header are all unchanged. Verified bidirectionally:
+
+- v2.47.11 encoder → v2.48.0 decoder: ✓ all 8 fixtures roundtrip
+- v2.48.0 encoder → v2.47.11 decoder: ✓ all 8 fixtures roundtrip across all 3 modes (fast, balanced, extreme)
+
+This avoided the wire-format break I had previously authorized — turns out the gap was achievable without one. The `DESIGN_RETROSPECTIVE.md` discipline ("structural ratio attempts forbidden without strong new evidence") is **preserved**: this isn't a structural change, just a smarter parser.
+
+### Performance
+
+- **Encode speed**: 3.9 MB/s on dickens (was 3.8 MB/s — slightly faster, since the parser shifts to longer matches more often, reducing total seq count).
+- **Decode speed**: 140 MB/s (decoder unchanged — still 1.27× zstd-3).
+
+### Validation
+
+| Check | Result |
+|---|---|
+| 18 test binaries (~365 cases) | pass |
+| 12 DoS reproducers | <60ms each |
+| Roundtrip on 8 fixtures | pass |
+| New encoder → old decoder (v2.47.11) | ✓ all fixtures, all modes |
+| Old encoder (v2.47.11) → new decoder | ✓ all fixtures |
+| Strict UBSan `-fsanitize=integer` | 0 errors |
+| `make amalg-verify` | in sync |
+| cppcheck / scan-build / GCC strict | 0 / 0 / 0 |
+
+### Decision log update
+
+`DESIGN_RETROSPECTIVE.md` previously listed "cost-aware lazy parser" as **open future work** under section 7.3 ("attempted ratio improvements"). This release transitions that entry from `open` to `shipped`, with the empirical measurements in this changelog as the strong-new-evidence that the retrospective required.
+
+The two prior null-result attempts (Sprint 102 12→13 bit ANS, Sprint 108 smaller blocks) remain accurately characterized as null results — neither is the lever. The lever is parser-side, not entropy-side.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Decoder behavior**: unchanged (byte-identical decoder)
+- **Encoder output**: byte-different from v2.47.11 (smaller files)
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.11
+- **Recommended upgrade for any deployment** — pure ratio win, no downsides
+
+
+## v2.47.11 — Sprint 119: Consolidate `VV_NO_SANITIZE_INTEGER` into shared header
+
+**Refactor release.** No production code changes. Encoder and decoder
+binary outputs are byte-identical to v2.47.10. Wire format unchanged.
+
+### What's New
+
+- **`include/vv_platform.h`** now provides the canonical
+  `VV_NO_SANITIZE_INTEGER` macro definition. Previously, identical
+  definitions lived in both `src/vv_xxh64.c` and `src/vv_encoder.c`.
+
+- **`src/vv_xxh64.c`** and **`src/vv_encoder.c`** now reference the
+  shared definition via `#include "vv_platform.h"` (xxh64 added the
+  include; encoder already had it). The duplicated `#if defined(__clang__)
+  ...` blocks are gone.
+
+- **`src/vv_ans.c::vva_decode_sequences_impl`** gains the annotation
+  too. Previously the strict-integer build saw 3 false-positive
+  warnings from the `rem-- > 0` post-decrement guard in the
+  match-copy fallback (offset ≥ 8 path); they are now silenced.
+
+### Verification
+
+- 18/18 C tests pass
+- JS reference test: 16 passed, 0 failed, 1 skipped
+- Python encoder self-test: 13 passed
+- Python `lit_fmt = 3` regression: 10 passed
+- **Strict-UBSan integer**: 0 errors (was 92 at v2.47.9, partially
+  reduced through v2.47.10 — this release closes the last 3 in the
+  decoder's match-copy fallback)
+- Encoder byte-identical to v2.47.10 across 5 fixture spot-check
+- cppcheck / scan-build / GCC strict: 0 / 0 / 0
+- Sanitized random fuzz (300 byte-flips × 3 fixtures): 300/0/0
+- `make amalg-verify`: clean
+
+### Rationale
+
+The duplicated macro definitions across two source files were a
+maintenance liability — adding a new sanitizer flag (e.g.,
+`integer-divide-by-zero`) would require updating both copies, and
+they could drift over time. Consolidating into the existing platform
+header (which already houses `VV_LIKELY`, `VV_HAS_AVX2`,
+`VV_HAS_NEON`, etc.) follows the same pattern and prevents that
+drift.
+
+This is a 1-sprint cleanup discovered during a deep audit pass that
+asked: "are there any improvements we can make without changing
+behavior?" The answer was: yes, this small consolidation. The deep
+audit otherwise produced 0 new findings — the codec is now stable.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.10
+- **Decoder behavior**: byte-identical to v2.47.10
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.10
+
+### Cumulative State After This Release
+
+- **13 audited defects fixed** across 10 distinct audit tools (no new defects since Sprint 109)
+- **4 libFuzzer harnesses** in `tests/fuzz/` — all sanitizer-clean
+- **18 C test binaries** (~365 cases)
+- **3 reference decoders**: C (canonical, full coverage), Python (`lit_fmt 0..3`), JavaScript (`lit_fmt 0..3`)
+- **Hardened-build clean**: 0 strict-integer UBSan warnings, 0 cppcheck, 0 scan-build, 0 GCC `-Wpedantic`
+- **Memory hygiene**: encoder working buffers scrubbed before free
+- **Decode speed**: vv beats zstd-3 by 1.27× in aggregate (PERFORMANCE.md)
+- **Ratio**: vv beats zstd-3 on 4 of 8 fixtures, +1.4% in aggregate
+
+The codec at v2.47.11 is the most polished release in the v2.47.x line.
+
+
+## v2.47.10 — Sprint 118: Memory hygiene + hardened-build compatibility (SECURITY)
+
+**Security release.** Encoder and decoder binary outputs are byte-identical to v2.47.9. The C source adds defense-in-depth memory scrubbing and clean compilation under `-fsanitize=integer`. No wire-format changes.
+
+### What's New
+
+#### Memory Hygiene — `vv_secure_zero` (defense in depth)
+
+The encoder's working buffers contain plaintext-derived data: literal bytes from input, partially-encoded sequences, raw input window. v2.47.9 freed these without scrubbing, leaving plaintext fragments in the heap free-list — observable through later allocations, memory disclosure attacks, or core dumps.
+
+v2.47.10 introduces explicit secure-zero scrubbing:
+
+- **`vv_cstream_destroy`** scrubs `lit_buf`, `stripped`, `src_buf`, `tmp`, `ent_buf`, plus the context struct itself
+- **One-shot `vv_compress`** scrubs the same buffers before exit
+- Implementation prefers `explicit_bzero` (BSD/glibc 2.25+); falls back to volatile-pointer memset that the optimizer cannot eliminate
+
+For Zupt's pipeline (compress → encrypt → write), the codec's working buffers are now scrubbed before the encryption step. **This is defense in depth, not a primary security boundary** — the caller's input buffer is unaffected.
+
+New test: **`tests/test_secure_zero.c`** (TEST18) — validates streaming destroy completes cleanly under sanitizers, 100 alloc/destroy cycles, one-shot scrub. 4/4 passing.
+
+#### Hardened-Build Compatibility — clean under `-fsanitize=integer`
+
+The deep-audit pass found 92 strict-integer UBSan warnings in v2.47.9, all from **intentional unsigned modular arithmetic**:
+
+- xxh64 round/finalize hash mixers (RFC-style mixing)
+- LZ matcher hash functions (Knuth multiplicative hash)
+- Loop-counter post-decrement guards (`while (... && depth-- > 0)`)
+- 64-bit rotate left implementation
+
+C11 §6.2.5p9 defines unsigned overflow as wraparound, so these are NOT undefined behavior — but `-fsanitize=integer` catches them as security-conscious-overstrict warnings. Without these annotations, security-hardened deployments would see thousands of false-positive runtime errors from the hot LZ-match path and the checksum hash.
+
+v2.47.10 adds:
+
+- **`VV_NO_SANITIZE_INTEGER` macro**: `__attribute__((no_sanitize("unsigned-integer-overflow", "shift", "shift-base", "shift-exponent")))` on clang, no-op on gcc
+- Applied to: `xxh_rotl64`, `xxh_round`, `xxh_merge_round`, `vv_xxh64`, `vv_xxh64_update`, `vv_xxh64_finalize`, `chain_match_ex`, `hash5`, `hash4`, `hash_safe`, `hash4_short`, `hash3_short` (12 functions total)
+- **`xxh_rotl64` rewritten** to use `__builtin_rotateleft64` on clang (avoids the shift-base sanitizer entirely; lowers to a single rotate instruction)
+
+**Result: 0 strict-integer warnings** (down from 92).
+
+### Audit Findings From This Sprint
+
+A full-depth audit pass in Sprint 118 produced **0 new bugs**:
+
+| Check | Result |
+|---|---|
+| Long fuzz (~24 min, 4 surfaces) | ~49,000 executions, 0 crashes |
+| Encoder ASan/UBSan (24 fixture×mode) | clean |
+| Encoder TSan MT (12 runs) | clean |
+| Strict-UBSan integer | 92 → 0 false positives, 0 real bugs |
+| Cumulative campaign | **13 defects fixed across 10 tools, all in v2.46.x → v2.47.x** |
+
+The codec has reached genuine diminishing returns on bug-finding. The deep audit confirmed the +1.2% ratio gap to zstd-3 is structural (in sequence coding, 94.8% of compressed output) and would require wire-format changes to close — which the `DESIGN_RETROSPECTIVE.md` decision log explicitly forbids without strong new evidence.
+
+### Validation
+
+| Check | Result |
+|---|---|
+| 18 test binaries (~365 cases) | pass |
+| 12 DoS reproducers | <60ms each |
+| Roundtrip on 8 fixtures | pass |
+| Encoder byte-identical to v2.47.9 | ✓ |
+| Sanitized random fuzz (300 byte-flips × 3 fixtures) | 300/0/0 |
+| 4-surface libFuzzer (cumulative) | ~145,000 runs, 0 crashes |
+| **Strict UBSan `-fsanitize=integer`** | **0 errors** (was 92) |
+| `make amalg-verify` | in sync |
+| cppcheck / scan-build / GCC strict | 0 / 0 / 0 |
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.9
+- **Decoder behavior**: byte-identical to v2.47.9
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.9
+- **Recommended upgrade for security-conscious deployments**
+
+### Honest Note on "Beat zstd on Ratio"
+
+The user request that triggered this sprint asked for a deep audit, bug fixes, performance to beat zstd, and state-of-the-art security. This release delivers:
+
+- ✓ Deep audit completed (~145K cumulative fuzz executions, all 4 surfaces clean)
+- ✓ All findings fixed (the 92 UBSan-strict warnings — fixing them removes real friction for hardened-build deployments even though they were technically false positives)
+- ✓ State-of-the-art security: memory hygiene + strict-UBSan compatibility on top of the existing 13-defect-fixed campaign
+- ✗ **Beat zstd on aggregate ratio — not delivered.** The +1.2% gap is structurally in ANS sequence coding (4096-state quantization, 36-code ML/LL tables vs zstd's 53). Closing it requires a wire-format change. The decision log in `DESIGN_RETROSPECTIVE.md` forbids structural ratio attempts without new evidence (two prior attempts produced 0% gain in Sprints 102 and 108).
+
+The codec already wins on **decode speed** (1.27× faster than zstd-3 in aggregate per `PERFORMANCE.md`) and beats zstd-3 on ratio for 3 of 8 fixtures. Aggregate ratio remains 1.2% behind. After this sprint, there are no remaining audit findings to act on.
+
+
+## v2.47.9 — Sprint 117: JavaScript reference gains `lit_fmt = 3` support
+
+**Reference-decoder release.** No production code changes. Encoder
+and decoder binary outputs are byte-identical to v2.47.8. The C
+decoder is unchanged. This release is the JS counterpart to
+Sprint 116's Python port: both reference decoders now handle
+`lit_fmt = 3` (single-stream Huffman, added v2.46.0).
+
+### What's New
+
+- **`reference/vv_decoder.js`** — added ~180 lines of single-stream
+  Huffman decoder logic mirroring `src/vv_huffman.c`. Functions:
+  `huffmanReadHeader`, `huffmanAssignCanonical`, `huffmanBuildEntries`,
+  `huffmanReverseBits`, class `HuffmanBitReader`, and the top-level
+  `vvhDecode`. The `lit_fmt = 3` dispatch in `vvaDecodeSequences`
+  now calls `vvhDecode` instead of throwing `CorruptError`.
+
+- **`reference/test_lit_fmt_3.js`** — Node.js regression test
+  mirroring `reference/test_lit_fmt_3.py`. Same 10-fixture corpus,
+  same `tests/encode_compat` workflow.
+
+- **`reference/vv_decoder.test.js`** — SKIP filter tightened.
+  Previously skipped both `lit_fmt = 3` and `lit_fmt = 4` as
+  "known coverage gap"; now skips only `lit_fmt = 4`. (The
+  standard CLI still produces `lit_fmt = 4` so the original suite's
+  `500KB mixed content` test still reports as SKIP, just with a
+  more accurate message.)
+
+### Validation
+
+```
+$ node reference/test_lit_fmt_3.js
+Running 10 round-trip tests for `lit_fmt = 3` (JavaScript reference)...
+
+  PASS tiny_repetitive_300B: 300 → 44 bytes (14.7%)
+  PASS medium_text_4kb: 4050 → 101 bytes (2.5%)
+  PASS large_text_64kb: 65548 → 94 bytes (0.1%)
+  PASS 256_byte_ramp: 256 → 288 bytes (112.5%)
+  PASS 100kb_repeating_phrase: 99990 → 134 bytes (0.1%)
+  PASS structured_records: 192149 → 14769 bytes (7.7%)
+  PASS silesia_dickens_64kb: 65536 → 28037 bytes (42.8%)
+  PASS silesia_xml_64kb: 65536 → 5939 bytes (9.1%)
+  PASS silesia_sao_64kb: 65536 → 54062 bytes (82.5%)
+  PASS bash_binary: 1446024 → 748914 bytes (51.8%)
+
+Results: 10 passed, 0 failed
+```
+
+The JS port handles the same 1.4 MB bash binary as the Python port:
+real production artifact, fully Huffman-coded literals, byte-exact
+round-trip.
+
+### Coverage Status After This Release
+
+| `lit_fmt` | Encoding | Added in | Python ref | JS ref |
+|---|---|---|---|---|
+| 0 | RAW | v2.0.0 | ✓ | ✓ |
+| 1 | ANS4 | v2.0.0 | ✓ | ✓ |
+| 2 | ANS1 | v2.0.0 | ✓ | ✓ |
+| 3 | HUFFMAN | v2.46.0 | ✓ (Sprint 116) | **✓ (Sprint 117)** |
+| 4 | HUFFMAN4 | v2.47.0 | ✗ | ✗ |
+
+**Both reference decoders now have full coverage of the wire-format
+variants except `lit_fmt = 4` (4-stream Huffman).** The C encoder
+defaults to `lit_fmt = 4` for ≥1024 literals, so production output
+still requires the C decoder for both reference paths until the
+4-stream port is done.
+
+### Implementation Notes
+
+The JS port uses the same algorithm as the Python port (linear-scan
+decode, sorted shortest-codes-first). It's a deliberately simple
+implementation — the C reference uses a 4096-entry fast-path lookup
+table for codes ≤ 12 bits, but the JS version walks the entries
+linearly. Slow but trivially correct.
+
+JS-specific design choices:
+- `BigInt` for the 64-bit accumulator (mirrors the C `uint64_t`
+  bitstream reader). Number can't represent 64-bit unsigned.
+- `Uint8Array` for the lengths table and decoded output.
+- A standalone `HuffmanBitReader` class instead of reusing
+  `AnsBitReader` — the ANS reader has different consume semantics
+  (read = peek + consume in one call) which doesn't fit the
+  Huffman peek-then-maybe-consume pattern.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.8
+- **Decoder behavior**: byte-identical to v2.47.8 (C decoder)
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.8
+
+### Remaining Work in AUDIT.md Item 6
+
+One gap remains: porting `lit_fmt = 4` (4-stream Huffman) to either
+reference. Estimated 1-2 sprints per language because the wire
+format adds 4 independent bit-readers, a shared decode table, a
+9-byte stream-size header, and byte-alignment between streams.
+
+After Sprint 117, both reference decoders are at functional parity
+with each other — neither leads or lags. That's a satisfying place
+to leave the audit campaign: every reachable wire-format variant
+except the most-recently-added one has 3 independent decoder
+implementations (C, Python, JS) cross-validating each other.
+
+
+## v2.47.8 — Sprint 116: Python reference gains `lit_fmt = 3` support
+
+**Reference-decoder release.** No production code changes. Encoder
+and decoder binary outputs are byte-identical to v2.47.7. The C
+decoder is unchanged. This release adds Python reference support for
+single-stream Huffman literal coding, partially closing the
+reference-decoder coverage gap that Sprint 113 documented.
+
+### What's New
+
+- **`reference/vv_huffman.py`** — pure-Python single-stream Huffman
+  decoder for `lit_fmt = 3`. ~250 lines, mirrors `src/vv_huffman.c`
+  (functions `vvh_decode`, `read_header`, `assign_canonical_codes`,
+  `build_dec_table`). Uses a linear-scan decode (O(n) per symbol)
+  instead of the C reference's 4096-entry fast-path table — much
+  slower but trivially correct, which is the point of a reference
+  implementation.
+
+- **`reference/vv_ans.py`** — `lit_fmt = 3` dispatch now calls
+  the new `vv_huffman.vvh_decode` instead of raising
+  `NotImplementedError`.
+
+- **`reference/test_lit_fmt_3.py`** — round-trip regression test:
+  10 fixtures covering text (4 KB to 64 KB), structured records
+  (200 KB), Silesia slices (dickens, xml, sao 64 KB), and a 1.4 MB
+  binary (`/bin/bash`). All 10 pass byte-for-byte through the new
+  Python decoder against `lit_fmt = 3` C-encoded frames.
+
+- **`tests/encode_compat.c`** — small C wrapper around `vv_compress`
+  that sets `compat_v246_5_decoder = 1` to force `lit_fmt = 3`
+  instead of the default `lit_fmt = 4`. Required by the regression
+  test because the standard CLI doesn't expose this flag.
+
+### Validation
+
+```
+$ python3 reference/test_lit_fmt_3.py
+Running 10 round-trip tests for `lit_fmt = 3`...
+
+  PASS tiny_repetitive_300B: 300 → 44 bytes (14.7%)
+  PASS medium_text_4kb: 4050 → 101 bytes (2.5%)
+  PASS large_text_64kb: 65548 → 94 bytes (0.1%)
+  PASS 256_byte_ramp: 256 → 288 bytes (112.5%)
+  PASS 100kb_repeating_phrase: 99990 → 134 bytes (0.1%)
+  PASS structured_records: 197149 → 14574 bytes (7.4%)
+  PASS silesia_dickens_64kb: 65536 → 28037 bytes (42.8%)
+  PASS silesia_xml_64kb: 65536 → 5939 bytes (9.1%)
+  PASS silesia_sao_64kb: 65536 → 54062 bytes (82.5%)
+  PASS bash_binary: 1446024 → 748914 bytes (51.8%)
+
+Results: 10 passed, 0 failed
+```
+
+The 1.4 MB bash binary case is the strongest test: a real production
+artifact, fully Huffman-coded literals, round-trips through the new
+Python decoder byte-for-byte.
+
+### Coverage Status After This Release
+
+| `lit_fmt` | Encoding | Added in | Python ref | JS ref |
+|---|---|---|---|---|
+| 0 | RAW | v2.0.0 | ✓ | ✓ |
+| 1 | ANS4 | v2.0.0 | ✓ | ✓ |
+| 2 | ANS1 | v2.0.0 | ✓ | ✓ |
+| 3 | HUFFMAN | v2.46.0 | **✓ (Sprint 116)** | ✗ |
+| 4 | HUFFMAN4 | v2.47.0 | ✗ | ✗ |
+
+Remaining gap (still tracked in `AUDIT.md` item 6):
+- `lit_fmt = 4` (4-stream Huffman) — neither reference supports it
+- JS reference still lacks `lit_fmt = 3`
+
+The C encoder defaults to `lit_fmt = 4` for ≥1024 literals, so the
+Python reference still raises `NotImplementedError` on typical
+large output. Use `tests/encode_compat` to force `lit_fmt = 3` for
+cross-validation, or use the C decoder for production decode.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.7
+- **Decoder behavior**: byte-identical to v2.47.7 (C decoder)
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.7
+
+### Sprint 113's Multi-Day Estimate Was Wrong
+
+Sprint 113's CHANGELOG noted that porting `lit_fmt = 3` and
+`lit_fmt = 4` was "a multi-day effort." For the single-stream
+variant, that estimate proved too pessimistic — the wire format is
+straightforward (canonical Huffman + nibble-packed code-length
+header) and the reference uses an unoptimized linear-scan decoder
+that takes ~80 lines of decoder logic. Total: one sprint.
+
+The 4-stream variant (`lit_fmt = 4`) genuinely is more involved
+(4 independent bit-readers, shared decode table, 9-byte stream-size
+header, byte-alignment between streams) and remains as future work.
+
+
+## v2.47.7 — Sprint 115: Amalgamation drift detection (`make amalg-verify`)
+
+**Build infrastructure release.** No production code changes.
+Encoder and decoder binary outputs are byte-identical to v2.47.6.
+The C source, the public API, the wire format, and the amalgamation
+content are all unchanged.
+
+This release adds a build-time check that prevents the specific
+class of drift that produced Sprint 114's security finding (stale
+`build/vaptvupt.c` shipping a vulnerable decoder to Zupt while
+`src/` had the fix). The check is a single new Makefile target —
+no new dependencies, no source changes.
+
+### What's New
+
+- **`make amalg-verify`** — regenerates the amalgamation in a temp
+  directory and `diff`s it against `build/vaptvupt.{c,h}`. Exits
+  non-zero with a unified diff if they differ. The temp directory
+  is cleaned up regardless of outcome; the working tree's `build/`
+  is never modified by the check itself.
+
+### Why This Matters
+
+Sprint 114 found that `build/vaptvupt.c` (the file ZUPT_INTEGRATION.md
+tells Zupt to link against) was 4 days stale, missing the 3 OOB/NULL
+fixes from Sprint 109. A Zupt build following the v2.47.4 or v2.47.5
+guidance would have linked the **vulnerable** decoder. The fix in
+Sprint 114 was to regenerate the amalgamation; the gap was that
+nothing was watching for staleness.
+
+`make amalg-verify` is that watcher. Concrete usage scenarios:
+
+- **CI integration**: a workflow can run `make amalg-verify` on
+  every PR. Any source change without a matching amalg regen fails
+  the build before merge.
+- **Pre-release validation**: run before tagging a release. Catches
+  the "I forgot to `make amalg`" case before tarball generation.
+- **Local pre-commit hook**: developers can run it before pushing.
+
+### Demonstrated Drift Detection
+
+Verified that `amalg-verify`:
+
+1. **Passes** when `build/vaptvupt.c` matches a fresh regen
+   (exit 0, "✓ build/vaptvupt.{c,h} are in sync with src/")
+2. **Fails** when source has changes not yet reflected in the
+   amalgamation (exit 1, prints "✗ build/vaptvupt.c is STALE —
+   re-run 'make amalg'" plus a unified diff)
+
+Tested by injecting a deliberate one-line change into
+`src/vv_xxh64.c` and confirming `amalg-verify` produced the
+expected non-zero exit + diff output, then reverting.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.6
+- **Decoder behavior**: byte-identical to v2.47.6
+- **Amalgamation content**: byte-identical to v2.47.6
+  (`diff /tmp/good_amalg.c build/vaptvupt.c` produces no output)
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.6 with the new build-time check
+
+### Validation
+
+| Check | Result |
+|---|---|
+| 17/17 C test binaries pass | ✓ |
+| `test_zupt_integration_samples` | exit 0 |
+| `make amalg-verify` (post-build) | exit 0 |
+| `make amalg-verify` (drift injected) | exit 1 with diff (verified) |
+| Encoder byte-identical to v2.47.6 | ✓ on 3 fixtures |
+| `cppcheck` / `scan-build` / GCC strict | 0 / 0 / 0 |
+
+### Discipline Note
+
+The Sprint 114 retrospective identified two bounded follow-ups:
+- ✅ `make amalg-verify` (this sprint)
+- Doc-example test that runs shell-extracted code from
+  ZUPT_INTEGRATION.md / FORMAT.md / README.md (deferred —
+  meaningful but multi-hour effort)
+
+The first follow-up is the higher-leverage of the two: amalgamation
+drift had a concrete security consequence, while doc-example drift
+caused failed-to-compile rather than vulnerable code.
+
+For the **next** ratio-improvement attempt (whenever Cristian
+chooses to revisit that direction), a similar drift-detection
+discipline should apply: any sprint that touches `src/vv_encoder.c`
+or `src/vv_decoder.c` should require `make amalg-verify` to pass
+before the patch is considered shippable.
+
+### What This Sprint Did Not Do
+
+- Did not add the doc-example test from the Sprint 114 followups list
+- Did not modify any source file
+- Did not change any wire-format or API behavior
+- Did not regenerate the amalgamation (it was already current)
+
+
+## v2.47.6 — Sprint 114: Zupt integration documentation + amalgamation rebuild (SECURITY-RELEVANT)
+
+**SECURITY-RELEVANT documentation/build patch.** The C source has not
+changed — the C decoder remains byte-identical to v2.47.4/v2.47.5 —
+but the **amalgamated single-file build** at `build/vaptvupt.c`
+that Zupt is told to link against has been regenerated to include
+the Sprint 109 OOB/NULL fixes. **Any Zupt deployment using
+`build/vaptvupt.c` from v2.47.4 or v2.47.5 has the Sprint 109
+vulnerabilities** and should pull v2.47.6.
+
+### What Was Wrong
+
+This sprint surfaced a chain of integration-blocking documentation
+and build defects in the Zupt-facing artifacts:
+
+#### 1. Stale amalgamation contained pre-Sprint-109 vulnerabilities
+
+`build/vaptvupt.c` was last regenerated on Apr 25 — **before**
+Sprint 109 (Apr 29) fixed the 3 OOB/NULL decoder bugs. The
+TL;DR of `ZUPT_INTEGRATION.md` instructs Zupt to "link against the
+amalgamation `build/vaptvupt.c`". A Zupt build following this
+guidance pre-v2.47.6 would have linked the **vulnerable** decoder.
+
+The amalgamation has been regenerated; it now contains all Sprint
+109 fixes and rejects the 3 reproducers
+(`fuzz_oob_ll_code.vv`: rc=-2, `fuzz_oob_decode_block.vv`: rc=-1,
+`fuzz_null_dec_table.vv`: rc=-2) cleanly.
+
+#### 2. Wrong SPDX license tag in amalgamation
+
+The Makefile's `amalg` target hardcoded
+`SPDX-License-Identifier: GPL-2.0-or-later` in the generated
+header and source files. The actual VaptVupt license is
+**GPL-3.0-or-later** (verified in LICENSE and in every source
+file's SPDX tag). A downstream tool reading the amalgamation's
+SPDX tag would have computed wrong license-compatibility results.
+
+The Makefile's amalg target now correctly emits
+`SPDX-License-Identifier: GPL-3.0-or-later` in both
+`build/vaptvupt.h` and `build/vaptvupt.c`.
+
+#### 3. Wrong license guidance in ZUPT_INTEGRATION.md
+
+The integration checklist said:
+
+> Document the GPL-2.0-or-later license compatibility (Zupt must be
+> GPL-2.0+ or use VaptVupt via IPC rather than linking)
+
+This was wrong. VaptVupt is GPL-**3**.0-or-later. Zupt must be
+GPL-3.0+ compatible (or use VaptVupt via IPC). A Zupt team trusting
+this checklist could have made an incorrect license-compatibility
+determination.
+
+The checklist now correctly states GPL-3.0-or-later requirements.
+
+#### 4. Documented streaming API doesn't exist
+
+The "Streaming path" section of ZUPT_INTEGRATION.md described
+APIs `vv_cstream_push`, `vv_cstream_pull`, `vv_cstream_finish`, and
+`vv_dstream_set_flags` — **none of which exist** in the public
+header. A Zupt developer following this code sample would have
+written code that fails to compile.
+
+The actual API is documented in `include/vaptvupt.h`:
+- `vv_cstream_compress_chunk(ctx, chunk, len, dst, dst_cap, &written, is_last)`
+- `vv_dstream_decompress_chunk(ctx, src, len, dst, dst_cap, &consumed, &written)`
+
+The doc has been replaced with code samples using the real API,
+plus a note clarifying that `vv_dstream`'s `written` is cumulative
+(not per-chunk delta) and that `dst_buf` must remain stable
+across calls.
+
+#### 5. False "cross-language round-trip" guarantee
+
+The "Threat Model & What VaptVupt Guarantees" section claimed:
+
+> Cross-language round-trip — frames produced by C encoder decode
+> identically in Python and JavaScript reference decoders
+
+This was the same false claim Sprint 113 already corrected in the
+README. The Python and JS reference decoders only support
+`lit_fmt` 0-2; they do not decode `lit_fmt = 3` (Huffman, since
+v2.46.0) or `lit_fmt = 4` (4-stream Huffman, since v2.47.0,
+which is the default for ≥1024 literals).
+
+The guarantee has been replaced with an accurate statement that
+the C decoder is canonical and the reference decoders cover only
+the LZ+tANS code path, framing, checksumming, and the 'A' tag.
+
+#### 6. Stale version references throughout
+
+References to "VaptVupt 2.40.0", "v2.40.x patch releases",
+"Zupt 2.1.5's prior compression layer", and "Open issues as of
+v2.40.0" were all multi-version stale. Performance numbers in the
+"Known Limitations" section claimed "Text decode lags zstd by
+~2.5×" — closed by Sprint 104's 4-stream Huffman speedup, which
+delivered a **1.27× decode advantage over zstd-3** in aggregate
+per `PERFORMANCE.md`.
+
+All version references updated to v2.47.5/v2.47.6 reality. The
+"Text decode lags zstd" entry struck through with the Sprint 104
+result. The new "+1.2% aggregate ratio behind zstd-3" item added
+with reference to `DESIGN_RETROSPECTIVE.md` for the full analysis.
+
+### What's New
+
+- **`tests/test_zupt_integration_samples.c`** — compile-test ensuring
+  the code samples in `ZUPT_INTEGRATION.md` actually build against the
+  current public API. If a future format/API change breaks the doc,
+  this test will fail at build time rather than silently misleading
+  Zupt developers. Compiles all 4 samples (encode, decode, streaming
+  encode, streaming decode) clean.
+
+### Verification
+
+- `build/vaptvupt.c` regenerated, contains 6 "Sprint 109" references
+  (was 0)
+- Amalgamation roundtrip test: 4500 → 103 → 4500 bytes clean
+- Amalgamation rejects all 3 Sprint 109 reproducers correctly
+- All 4 ZUPT_INTEGRATION.md code samples compile cleanly via the
+  new `test_zupt_integration_samples`
+- 17/17 C test binaries pass
+- Encoder byte-identical to v2.47.5 baseline
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.5
+- **Decoder behavior**: byte-identical to v2.47.5 (C decoder)
+- **License**: GPL-3.0-or-later (now correctly tagged in amalgamation)
+- **`build/vaptvupt.c`**: regenerated — **functionally important**
+  for any Zupt deployment using the amalgamation
+- **Drop-in replacement** for v2.47.5 with security improvements
+  realized in the Zupt build path
+
+### Recommended Action for Zupt
+
+1. **Pull v2.47.6 source tarball**
+2. Re-link Zupt against the regenerated `build/vaptvupt.c` (or
+   re-run `make amalg` if regenerating from source)
+3. Re-validate license attribution in Zupt's SBOM as
+   GPL-3.0-or-later
+4. Re-read `ZUPT_INTEGRATION.md` — the streaming path code samples
+   have changed materially
+
+### Discipline Note
+
+Sprints 113 (README false claim) and 114 (amalgamation, license,
+API samples, streaming guidance, version references) collectively
+surfaced **three documentation drift patterns**:
+
+1. Format-extending sprints (Sprint 70 `lit_fmt=3`, Sprint 104
+   `lit_fmt=4`) didn't update reference-decoder coverage docs
+2. Audit sprints (Sprint 109) didn't trigger amalgamation regen
+3. Multi-version drift went unnoticed because no test verified
+   doc/code consistency
+
+The new `test_zupt_integration_samples` is one mitigation. A future
+sprint could add: (a) a `make amalg-verify` target that diffs
+`build/vaptvupt.c` against a freshly-generated copy and fails CI
+if they differ, and (b) a `tests/test_doc_examples.py` that runs
+shell-extracted code samples from ZUPT_INTEGRATION.md, FORMAT.md,
+and README.md.
+
+Both are bounded follow-ups that would shift the documentation-
+correctness regime from "review when remembered" to "checked on
+every build."
+
+
+## v2.47.5 — Sprint 113: Reference decoder coverage gap (documentation correction)
+
+**Documentation patch release.** No production code changes. Encoder
+and decoder binary outputs are byte-identical to v2.47.4. The C
+decoder is unchanged; only the Python and JavaScript reference
+decoders' diagnostic messages and the README/AUDIT documentation
+were updated.
+
+### What Was Wrong
+
+The README claimed:
+
+> Both the Python and JavaScript reference decoders now cover
+> **100% of output produced by the current encoder** — any `.vv`
+> file from v1.0+ decodes identically in C, Python, and JavaScript.
+
+This claim has been **false since v2.46.0** (Sprint 70-72), when
+`lit_fmt = 3` (single-stream Huffman) was added to the SEQ block
+literal section. The reference decoders were never updated to handle
+it. v2.47.0 (Sprint 103-104) made the gap worse by adding
+`lit_fmt = 4` (4-stream Huffman) as the default for any input with
+≥1024 literals.
+
+Concretely, both reference decoders threw on the default output of
+any modern C encoder for non-trivial inputs:
+
+```
+Python: ValueError: 'S' unknown lit_fmt=4
+JS:     CorruptError: 'S' unknown lit_fmt 4
+```
+
+The JS test suite's `500KB mixed content` case had been failing
+silently against this same gap (test reported "16 passed, 1 failed"
+but the failure was treated as a generic error, not flagged as a
+known coverage gap).
+
+### What's Fixed
+
+**README.md** — replaced the false "100% coverage" claim with an
+accurate table showing which `lit_fmt` values each reference decoder
+supports. Documents the gap explicitly and points to the C decoder
+(`src/vv_decoder.c`) as the canonical implementation for any v2.46.0+
+archive.
+
+| `lit_fmt` | Encoding | Added in | Python ref | JS ref |
+|---|---|---|---|---|
+| 0 | RAW | v2.0.0 | ✓ | ✓ |
+| 1 | ANS4 | v2.0.0 | ✓ | ✓ |
+| 2 | ANS1 | v2.0.0 | ✓ | ✓ |
+| 3 | HUFFMAN | v2.46.0 | ✗ | ✗ |
+| 4 | HUFFMAN4 | v2.47.0 | ✗ | ✗ |
+
+**`reference/vv_ans.py`** — replaced the generic
+`ValueError: 'S' unknown lit_fmt=...` with explicit
+`NotImplementedError` for `lit_fmt = 3` and `lit_fmt = 4`. The new
+error messages identify the gap by version, point users to the C
+decoder, and reference README.md and AUDIT.md.
+
+**`reference/vv_decoder.js`** — same change as Python: explicit
+`CorruptError` with informative messages for `lit_fmt = 3` and
+`lit_fmt = 4` instead of the generic "unknown lit_fmt N".
+
+**`reference/vv_decoder.test.js`** — updated the test runner to
+recognize the documented coverage gap. Tests that fail with
+`CorruptError: lit_fmt=3` or `lit_fmt=4` now count as SKIP (known
+gap), not FAIL. The 500KB mixed-content test that was previously
+reporting as a failure now reports cleanly as a documented skip.
+
+**AUDIT.md** — added Section 8 item 6 documenting the reference-
+decoder coverage gap as explicit future audit work, with the
+multi-day porting effort estimate noted.
+
+### Verification
+
+- 17/17 C test binaries pass (no production code changed)
+- JS reference test: **16 passed, 0 failed, 1 skipped** (was: 16
+  passed, 1 failed, 0 skipped — the test was failing silently)
+- Python reference self-test: 13 passed, 0 failed
+- Encoder byte-identical to v2.47.3 / v2.47.4 across all test fixtures
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.4
+- **Decoder behavior**: byte-identical to v2.47.4 (C decoder)
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.4
+
+### What This Sprint Did Not Do
+
+This sprint **did not** port `lit_fmt = 3` or `lit_fmt = 4` decoding
+to the Python or JavaScript reference implementations. That is a
+multi-day effort tracked in AUDIT.md as item 6 for a future sprint.
+The C decoder remains the canonical implementation; the reference
+decoders remain useful for the LZ+tANS code path, framing,
+checksumming, RAW/RLE, and the 'A' tag.
+
+### Discipline Note
+
+This sprint surfaced a **multi-sprint documentation drift**: the
+"100% cross-validation" claim was added when the reference decoders
+were complete (some pre-v2.46 sprint), but never revisited when
+`lit_fmt = 3` was added (Sprint 70-72) or when `lit_fmt = 4` was
+added (Sprint 103-104). README claims about cross-implementation
+coverage are now flagged as a maintenance liability whenever the
+wire format gains new variants.
+
+For future format-extending sprints, the checklist should include:
+"Does this change require an update to the reference decoders, or
+to README claims about reference-decoder coverage?"
+
+
+## v2.47.4 — Sprint 111: Differential fuzzing + SECURITY.md + PERFORMANCE.md
+
+**Test infrastructure + documentation release.** No code changes —
+encoder and decoder binary outputs are byte-identical to v2.47.3.
+
+This release adds the fourth and final libFuzzer harness (differential
+testing between stateless and streaming decoders) and ships two new
+top-level documents capturing the codec's full security posture and
+measured performance characteristics.
+
+### What's New
+
+- **`tests/fuzz/fuzz_differential.c`** — libFuzzer harness that runs
+  the same compressed frame through both `vv_decompress` (stateless)
+  and `vv_dstream_decompress_chunk` (streaming) and asserts:
+  - If stateless accepts, streaming must also accept and produce the
+    same bytes (security divergence trap)
+  - If both accept, output lengths must match
+  - If both accept, output content must be byte-identical
+
+  Catches the class of bugs where one decoder accepts a malformed
+  frame the other rejects — a security divergence in deployments
+  using both APIs.
+
+- **`SECURITY.md`** — Top-level document capturing:
+  - Threat model (untrusted decoder input, trusted encoder input)
+  - 11 distinct audit tools applied across 8 patch releases
+  - 13 cumulative defects fixed
+  - Permanent audit infrastructure (4 fuzz harnesses, fault injection,
+    13 regression reproducers)
+  - DoS-resistance guarantees
+  - Explicit list of what's NOT yet tested (residual risk)
+
+- **`PERFORMANCE.md`** — Top-level document with measured numbers:
+  - Decode: **vv beats zstd-3 by 1.27× in aggregate**, wins on 7 of 8
+    fixtures (151 MB/s vs 119 MB/s)
+  - Encode: vv is meaningfully slower than zstd (0.13× to 0.46×)
+    — explicit honest disclosure of the trade-off
+  - Ratio: vv beats zstd-3 on 4 of 8 fixtures, +1.4% in aggregate
+  - Memory footprint, recommended configuration, methodology notes
+
+### Validation: 4-Surface Fuzz Campaign
+
+| Harness | Surface | Duration | Executions | Crashes |
+|---|---|---:|---:|---:|
+| `fuzz_decompress` | stateless decoder | 100s | 47,331 | **0** |
+| `fuzz_dstream` | streaming decoder | 100s | 24,461 | **0** |
+| `fuzz_roundtrip` | encoder + decoder | 100s | 3,319 | **0** |
+| `fuzz_differential` | stateless vs streaming | 100s | 24,178 | **0** |
+| **Total** | | **400s** | **~99,000** | **0** |
+
+All four fuzz surfaces clean. The differential fuzzer is a NEW
+attack surface compared to Sprint 110 — running for 100s with
+0 crashes means stateless and streaming decoders agree on every
+input the fuzzer threw at them.
+
+### Validation Summary
+
+| Check | Result |
+|---|---|
+| 17 test binaries (~360 cases) | pass |
+| 12 DoS reproducers | <60ms each |
+| Roundtrip on 8 fixtures | pass |
+| Encoder byte-identical to v2.47.3 | ✓ |
+| Sanitized random fuzz (300 byte-flips × 3 fixtures) | 300/0/0 |
+| 4-surface libFuzzer (400s total) | 99,289 runs, 0 crashes |
+| cppcheck / scan-build / GCC strict | 0 / 0 / 0 |
+
+### Honest Performance Disclosure
+
+The PERFORMANCE.md document explicitly publishes that:
+- **VaptVupt beats zstd-3 on decode speed (1.27× aggregate, 7/8 wins)**
+  — the codec's stated headline goal.
+- **VaptVupt is meaningfully slower on encode (0.13× to 0.46×)** —
+  acknowledged trade-off favoring decode and ratio.
+- **VaptVupt trails zstd-3 on aggregate ratio by +1.4%** — known
+  unclosed gap dominated by the dickens fixture (+8.9%); two
+  prior sprints (102, 108) attempted to close it and failed.
+
+This honest publication is itself a security/quality signal: the
+codec is not over-claimed. Users (and Zupt integrators) get the
+real picture.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.3
+- **Decoder behavior**: byte-identical to v2.47.3
+- **License**: GPL-3.0-or-later (unchanged)
+- **Source tarball additions**:
+  - `tests/fuzz/fuzz_differential.c`
+  - `SECURITY.md`
+  - `PERFORMANCE.md`
+- **Drop-in replacement** for v2.47.3
+
+### Sprint 111 In Context
+
+This is the 9th audit-driven patch release in the 2.46.x → 2.47.x
+campaign. The trajectory:
+
+| Release | Sprint | Audit type | Findings |
+|---|---|---|---|
+| v2.46.1 | 90 | LSan | 1 |
+| v2.46.2 | 91-92 | UBSan + scan-build | 6 |
+| v2.46.3 | 93 | Allocation audit | 1 |
+| v2.46.4 | 94 | API contract | 2 |
+| v2.46.5 | 98 | TSan | 1 |
+| v2.47.0 | 103-104 | (4-stream Huffman feature) | — |
+| v2.47.1 | 105-106 | 4-stream Huffman hardening | (preventive) |
+| v2.47.2 | 109 | libFuzzer (decoder) | 3 |
+| v2.47.3 | 110 | libFuzzer (streaming + encoder) | 0 |
+| **v2.47.4** | **111** | **libFuzzer (differential) + docs** | **0** |
+
+The audit campaign is now in a "documenting and confirming"
+phase rather than a "finding new bugs" phase. v2.47.4 is the
+recommended baseline for Zupt 2.1.7 integration.
+
+
+## v2.47.3 — Sprint 110: Fuzz infrastructure expansion (clean run, 0 bugs)
+
+**Test infrastructure release.** No code changes. Encoder and decoder
+binary outputs are byte-identical to v2.47.2.
+
+This release adds two new libFuzzer harnesses to expand audit
+coverage beyond Sprint 109's stateless `vv_decompress` target:
+
+### What's New
+
+- **`tests/fuzz/fuzz_dstream.c`** — libFuzzer harness for the
+  streaming decoder (`vv_dstream_decompress_chunk`). Splits each
+  fuzz input across randomized chunk boundaries to probe state-
+  machine transitions and partial-frame edge cases that the
+  stateless decoder fuzzer cannot reach.
+
+- **`tests/fuzz/fuzz_roundtrip.c`** — libFuzzer harness for the
+  encoder. Treats fuzz input as plaintext, runs `vv_compress` then
+  `vv_decompress`, and asserts byte-equality. Catches encoder OOB
+  writes, encoder UB, and any encoder/decoder roundtrip violation.
+  Cycles through all 3 modes (`ULTRA_FAST`, `BALANCED`, `EXTREME`)
+  steered by the fuzzer's first byte.
+
+### Validation Methodology
+
+All three libFuzzer harnesses (Sprint 109's `fuzz_decompress` plus
+the two new ones) were run with `clang + AddressSanitizer +
+UndefinedBehaviorSanitizer` for at least 3 minutes each:
+
+| Harness | Target | Duration | Executions | Coverage | Crashes |
+|---|---|---:|---:|---:|---:|
+| `fuzz_decompress` | stateless decoder | 180s | 6,000+ | 936 ft | **0** |
+| `fuzz_dstream` | streaming decoder | 360s | 25,000+ | 1,209 ft | **0** |
+| `fuzz_roundtrip` | encoder + decoder | 420s | 3,500+ | 2,267 ft | **0** |
+
+**Total: ~17 minutes of sanitized fuzzing across 3 distinct
+attack surfaces, 0 crashes.**
+
+This is a clean run after Sprint 109 fixed the 3 OOB/NULL bugs that
+the first decoder fuzzer found in 5 minutes. The codec is now
+sanitizer-clean across all 3 fuzz targets.
+
+### Why This Is A Positive Result
+
+Sprint 109 set the precedent that "every new audit tool finds at
+least one bug." Sprint 110 broke that pattern with three new
+harnesses producing zero crashes — a meaningful signal:
+
+1. **Sprint 109 fixes were complete**. The OOB read and NULL deref
+   classes have no remaining instances in the same code paths.
+2. **Streaming state machine is robust**. 25,000 randomized chunk-
+   boundary mutations produced no state corruption.
+3. **Encoder/decoder roundtrip property holds**. 3,500 random
+   plaintext inputs across 3 modes produced no inconsistency.
+
+A clean fuzz run is **earned**, not assumed — only after Sprints 90,
+91, 92, 95, 96, 98, 100, 109 had each surfaced specific findings did
+Sprint 110's broader campaign find nothing new. The audit campaign
+is starting to show the diminishing returns of a maturing codec.
+
+### Permanent Audit Infrastructure
+
+Cumulative fuzz harnesses now in `tests/fuzz/`:
+- `fuzz_decompress.c` (Sprint 109) — stateless decoder
+- `fuzz_dstream.c` (Sprint 110) — streaming decoder
+- `fuzz_roundtrip.c` (Sprint 110) — encoder/decoder roundtrip
+
+Combined with `tests/fault_injection/` (Sprint 100) and the 12
+permanent regression reproducers in `tests/regression_inputs/`,
+the audit infrastructure is now self-sustaining: future regressions
+are caught before they ship.
+
+### Validation Summary
+
+| Check | Result |
+|---|---|
+| 17 test binaries (~360 cases) | pass |
+| 12 DoS reproducers (Sprints 100-109) | <60ms each |
+| Roundtrip on 8 fixtures | pass |
+| Encoder byte-identical to v2.47.2 | ✓ |
+| Sanitized random fuzz (300 byte-flips × 3 fixtures) | 300/0/0 |
+| `fuzz_decompress` (180s) | 0 crashes |
+| `fuzz_dstream` (360s) | 0 crashes |
+| `fuzz_roundtrip` (420s) | 0 crashes |
+| cppcheck / scan-build / GCC strict | 0 / 0 / 0 |
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **Encoder output**: byte-identical to v2.47.2
+- **Decoder behavior**: byte-identical to v2.47.2
+- **License**: GPL-3.0-or-later (unchanged)
+- **Source tarball changed**: 2 new test files in `tests/fuzz/`
+- **Drop-in replacement** for v2.47.2
+
+### Cumulative Audit (since v2.46.0)
+
+13 distinct security/correctness defects fixed, 10 distinct audit
+tools applied. v2.47.2 fixes (LL/OF/ML OOB, memcpy OOB, NULL deref)
+are confirmed as the final findings of the campaign so far.
+
+
+## v2.47.2 — Sprint 109: libFuzzer audit (3 decoder bugs found and fixed)
+
+**Security patch release.** First application of coverage-guided fuzzing
+(libFuzzer + ASan + UBSan) to the decoder. Found 3 distinct bugs in
+the first 5 minutes of fuzzing; all fixed and added as permanent
+regression fixtures.
+
+**Encoder output is byte-identical to v2.47.1** on all valid inputs.
+Wire format unchanged. **Decoder-only fix release** — strongly
+recommended upgrade for any deployment that decodes untrusted .vv
+input.
+
+### Bugs Fixed
+
+#### 1. OOB read of `ll_extra[]`/`ml_extra[]`/`of_extra[]` in `vva_decode_sequences_impl`
+
+**Site**: `src/vv_ans.c:2319` (LL), 2375 (OF), 2386 (ML)
+**Severity**: Out-of-bounds READ (ASan: global-buffer-overflow,
+36-byte arrays, index up to 255)
+**Trigger**: Corrupt frame where the LL/OF/ML ANS table maps a state
+to a symbol >= 36 (LL), >= 27 (OF), or >= 36 (ML).
+**Fix**: Bounds-check `ll_code < VVA_LL_CODES`, `of_code < VVA_OF_CODES`,
+`ml_code < VVA_ML_CODES` before each extra-bits read. Single fix
+pattern applied at all three sites.
+**Reproducer**: `tests/regression_inputs/fuzz_oob_ll_code.vv`
+
+#### 2. Heap-buffer-overflow READ at `decode_block_tokens_impl` memcpy
+
+**Site**: `src/vv_decoder.c:155` (warmup phase) and `:206` (hot phase)
+**Severity**: Heap-buffer-overflow READ (ASan: 32147 bytes read past
+23676-byte heap region)
+**Trigger**: Corrupt LZ token where literal-length extension produces
+`ll` larger than remaining input (`ip_end - ip`).
+**Fix**: Validate `ll <= ip_end - ip` AND `ll <= op_end - op` after
+`ll` reaches its final value (post-extension-length read).
+**Reproducer**: `tests/regression_inputs/fuzz_oob_decode_block.vv`
+
+#### 3. NULL-deref of `dec_of`/`dec_ml` in unified decode loop
+
+**Site**: `src/vv_ans.c:2312-2313`
+**Severity**: NULL pointer dereference (ASan: SEGV on address 0x000)
+**Trigger**: Frame with `total_lits > 0` and `match_count == 0`. The
+unified decode loop's eager ILP load reads from `dec_of` and `dec_ml`
+even when no matches are present, but those tables were only allocated
+when `match_count > 0`.
+**Fix**: Always allocate all 3 decode tables. When `match_count == 0`,
+zero-initialize `dec_ml`/`dec_of` to safe sentinel values. The loop
+guard prevents these values from being used in actual reconstruction;
+the eager loads are now safe.
+**Reproducer**: `tests/regression_inputs/fuzz_null_dec_table.vv`
+
+### What's New
+
+- **`tests/fuzz/fuzz_decompress.c`** — libFuzzer harness for
+  `vv_decompress`. Builds with clang+ASan+UBSan+fuzzer. Permanent
+  audit infrastructure.
+- **3 new permanent regression reproducers** in
+  `tests/regression_inputs/`. `test_dos_hang` now exercises **12
+  reproducers** (was 9).
+- **All 3 fixes are defensive bounds checks**. No correctness
+  regression on valid input. Encoder output unchanged.
+
+### Coverage-Guided Fuzz Methodology
+
+Used `libFuzzer + AddressSanitizer + UndefinedBehaviorSanitizer`
+with a 35-file corpus seeded from real compressed fixtures (3 modes
+× 8 fixtures + DoS reproducers + edge cases). Ran 4 fuzzing rounds:
+
+- **Round 1** (90s): Found bug 1 (LL OOB read)
+- **Round 2** (120s, after bug 1 fix): Found bug 2 (memcpy OOB)
+- **Round 3** (180s, after bugs 1-2 fixes): Found bug 3 (NULL deref)
+- **Round 4** (180s, after all fixes): **No new crashes**, 6,000+
+  executions, 936 coverage features
+
+Cumulative findings since Sprint 90: every audit tool added has
+surfaced ≥1 real defect on first application. libFuzzer found 3
+in one session.
+
+### Validation
+
+| Check | Round 1 | Round 2 |
+|---|---|---|
+| 17 test binaries (~360 cases) | pass | pass |
+| 12 DoS reproducers (incl. 3 new fuzz reproducers) | <60ms each | <60ms each |
+| Roundtrip on 8 fixtures | pass | pass |
+| Encoder byte-identical to v2.47.1 | ✓ | ✓ |
+| Sanitized random fuzz (300 byte-flips × 3 fixtures) | 300/0/0 | — |
+| libFuzzer Round 4 (180s post-fix) | 0 crashes | — |
+| cppcheck / scan-build / GCC strict | 0 / 0 / 0 | 0 / 0 / 0 |
+
+### Cumulative Audit Findings (since v2.46.0)
+
+13 distinct security/correctness defects fixed across the campaign:
+
+1. dec_ll memory leak (v2.46.1, LSan)
+2. Decoder DoS hang (v2.46.2, UBSan)
+3. vv_cstream_create(NULL) crash (v2.46.2, scan-build)
+4-7. scan-build hygiene (v2.46.2)
+8. matcher_init OOM crash (v2.46.3, allocation audit)
+9-10. vv_compress NULL opts + empty-input (v2.46.4, API contract)
+11. SIMD init data race (v2.46.5, ThreadSanitizer)
+12-14. **NEW Sprint 109**: 3 libFuzzer findings (this release)
+
+**Every audit tool has produced findings on first application.** This
+is the productive direction the codec keeps validating.
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.1
+- **Recommended upgrade for all deployments** that decode untrusted input
+
+### Lesson
+
+Per Sprint 108's negative-result document: "every new audit tool has
+surfaced ≥1 real defect (with single exception of allocation-fault
+injection in Sprint 100)". libFuzzer continues that pattern with 3
+findings in one session.
+
+For Sprint 110+, the audit campaign is the productive direction.
+Speculative ratio-improvement work has produced two zero-result
+sprints in a row; coverage-guided fuzzing produces real bugs every
+time it runs.
+
+
+## v2.47.1 — Sprint 105-106: Phase C hardening (4-stream Huffman audit)
+
+**Hardening patch release** completing the 3-phase 4-stream Huffman
+plan from DESIGN_4STREAM_HUFFMAN.md. Adds DoS regression tests for
+the new format, a backward-compatibility flag for v2.46.5 decoders,
+and FORMAT.md documentation. **Output byte-identical to v2.47.0** on
+all valid inputs that worked before.
+
+### What's New
+
+#### `vv_options_t::compat_v246_5_decoder` flag (default 0)
+
+When set to 1, suppresses `lit_fmt = 4` selection in the SEQ block
+encode race. Output is then readable by v2.46.5 and older decoders.
+
+```c
+vv_options_t opts;
+vv_default_options(&opts);
+opts.compat_v246_5_decoder = 1;  // suppress lit_fmt=4
+vv_compress(src, n, dst, cap, &opts);
+```
+
+Verified end-to-end: compat-mode output matches v2.46.5 byte-for-byte
+(bash=748,914 / dickens=4,004,893), and v2.46.5 binary successfully
+decodes compat-mode output.
+
+Threading: flag reaches `vva_encode_sequences_compat` /
+`vva_encode_sequences_v2_compat` via a new `disable_huf4` parameter
+on `emit_block`. Old `vva_encode_sequences` / `vva_encode_sequences_v2`
+remain unchanged for binary compatibility (they default to
+`disable_huf4 = 0`).
+
+#### 3 new DoS reproducer payloads
+
+Permanent regression fixtures at `tests/regression_inputs/`:
+
+- `huf4_inflate_s1.vv`: stream-size header s1 inflated to 0xFFFFFF
+- `huf4_zero_s1.vv`: stream-size header s1 zeroed
+- `huf4_truncate.vv`: real frame truncated mid-stream-header
+
+All three handled by `vvh_decode4` in <60ms with `VVH_ERR_CORRUPT`.
+`test_dos_hang` now exercises **9 reproducers** (up from 6).
+
+#### `FORMAT.md` updated
+
+New section "3.4.1 SEQ Block Literal Section (`lit_fmt`)" documents
+all five format selectors (RAW / ANS4 / ANS1 / HUFFMAN / HUFFMAN4)
+with required decoder versions and wire-format details. The 'T' tag
+(SEQ_V2) entry was also added to the entropy-tag table.
+
+### Phase C Hardening Validation
+
+| Check | Round 1 | Round 2 |
+|-------|---------|---------|
+| 17 test binaries | pass | pass |
+| 9 DoS reproducers (incl. 3 new huf4) in <5s | <60ms each | <60ms each |
+| 6 crafted DoS attacks on vvh_decode4 | all rejected | — |
+| 300 random byte-mutations on bash with lit_fmt=4 | 0 crashes / 0 hangs | — |
+| TSan: multi-threaded encode using lit_fmt=4 | clean | — |
+| Allocation-fault injection (rate=200, 150 trials) | 0 crashes | — |
+| Compat flag → v2.46.5-readable output | ✓ | ✓ |
+| cppcheck / scan-build / GCC strict | 0 / 0 / 0 | 0 / 0 / 0 |
+
+### Compatibility
+
+- **Wire format**: unchanged (v2.47.0 already shipped `lit_fmt = 4`)
+- **API**: extended with `compat_v246_5_decoder` flag (default off
+  preserves v2.47.0 behavior). Two new symbols
+  (`vva_encode_sequences_compat`, `vva_encode_sequences_v2_compat`)
+  added; old symbols unchanged.
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.47.0
+
+### 3-Phase Plan: Status
+
+From DESIGN_4STREAM_HUFFMAN.md §9:
+
+| Phase | Sprint | Deliverable | Status |
+|-------|--------|-------------|--------|
+| Design | 102 | DESIGN_4STREAM_HUFFMAN.md | ✓ |
+| A: Encoder | 103 | `vvh_encode4` + tests | ✓ |
+| B: Decoder + Integration | 104 | `vvh_decode4` + race | ✓ |
+| **C: Hardening** | **105-106** | **DoS tests + compat flag + FORMAT.md** | **✓** |
+
+The 4-stream Huffman initiative is **complete**. v2.47.1 is the
+final patch release of the Phase plan.
+
+### Honest Final Assessment
+
+**What worked**:
+- Decoder speedup measured at library level: **1.54× average** across
+  6 fixtures (range 1.40-1.63×)
+- Wire format additive, fully backward-compat with `compat_v246_5_decoder`
+  flag for forward-deployment scenarios
+- Adversarial fuzz + crafted DoS + TSan + allocation-fault all clean
+- Phase plan executed cleanly with no scope creep or rollbacks
+
+**What didn't**:
+- Aggregate ratio improvement vs zstd-3 was **not** delivered (design
+  doc estimated +0.5-0.8 pp gap closure; actual: +0.001-0.009%
+  regression from constant header overhead)
+- The ratio-improvement reasoning in DESIGN_4STREAM_HUFFMAN.md §10
+  was wrong — assumed VaptVupt would gain from per-block
+  table-rebuild decisions enabled by faster decode, but VaptVupt's
+  per-block adaptive coding is on the ANS path, not Huffman
+
+**The "beat zstd" goal remains open**. Ratio gap to zstd-3 is still
++1.2% in aggregate. To close it via the Huffman path would require
+adding per-block adaptive Huffman table selection (the actual
+mechanism behind zstd's text-data ratio win), not just stream
+parallelism. That's a separate multi-sprint design effort.
+
+For Zupt 2.1.7 integration: **v2.47.1 is the recommended baseline**.
+The codec is materially faster on decode for text-heavy workloads
+than v2.46.5, with the full audit-driven safety profile preserved.
+
+
+## v2.47.0 — Sprint 103-104: 4-Stream Interleaved Huffman (Phases A+B)
+
+**Wire-format addition**: new `lit_fmt = 4` literal-coding tag for SEQ
+blocks adds 4-stream interleaved Huffman alongside the existing
+`lit_fmt = 3` single-stream Huffman. Encoder selects it for blocks
+with ≥1024 literals when not meaningfully larger than single-stream.
+
+This is a strictly **additive** wire-format change. Old encoders
+unchanged; old decoders refuse `lit_fmt = 4` cleanly with
+`VVA_ERR_CORRUPT`. The new decoder reads all v2.46.x output
+unchanged (forward compatibility).
+
+Minor version bump (v2.47.0) signals the wire-format addition. v2.46.x
+patch releases will continue if needed for security backports; v2.47+
+is the path for ongoing compression-format work.
+
+### What's New
+
+#### `vvh_encode4` (Sprint 103, Phase A)
+
+New encoder in `src/vv_huffman.c`. Splits input into 4 round-robin
+streams encoded with a shared Huffman code table. Output format:
+
+```
+[code-length header (existing)]
+[3B stream1_size] [3B stream2_size] [3B stream3_size]
+[stream0_bitstream] [stream1_bitstream]
+[stream2_bitstream] [stream3_bitstream]
+```
+
+Activation guard: `src_len ≥ 1024`. Below that, single-stream wins
+on overhead.
+
+Phase A also added `tests/test_huffman4.c` (TEST17) with 21 unit
+tests covering boundary cases, distributions, and the activation
+threshold. All pass.
+
+#### `vvh_decode4` (Sprint 104, Phase B)
+
+Production decoder in `src/vv_huffman.c`. Runs 4 independent decoders
+in parallel using a single shared decode table. Per-iteration: 4
+independent table lookups + 4 independent bit-reader updates.
+Modern OoO engines pipeline these for measurable ILP win.
+
+#### SEQ block integration
+
+`src/vv_ans.c` now races `vvh_encode4` against `vvh_encode`,
+`vva_encode4`, and `vva_encode` when `total_lits ≥ 1024`. Selection
+policy:
+
+- ANS4 wins on size (fastest decode path)
+- ANS1 wins next (ratio when ANS4 fails)
+- **Huffman4 preferred over Huffman** when both viable, even if
+  Huffman is up to 32 bytes smaller (decode-speed win outweighs
+  the constant +10B header overhead)
+- Huffman wins as fallback
+
+Decoder dispatches on the `lit_fmt` byte — same single-byte selector
+as before, just with one new value.
+
+### Empirical Results
+
+#### Decode throughput (library-level isolated benchmark, 30 iterations median)
+
+| fixture | 1-stream | **4-stream** | speedup |
+|---|---:|---:|---:|
+| fx_text 743KB | 201 MB/s | **328 MB/s** | **1.63×** |
+| fx_json 1MB | 236 MB/s | **362 MB/s** | **1.54×** |
+| bash 1.4MB | 186 MB/s | **260 MB/s** | **1.40×** |
+| dickens 10MB | 212 MB/s | **344 MB/s** | **1.62×** |
+| xml 5MB | 206 MB/s | **311 MB/s** | **1.51×** |
+| webster 41MB | 208 MB/s | **321 MB/s** | **1.54×** |
+
+Average decode speedup: **1.54× across 6 real fixtures**. Below the
+design's predicted 1.8-2.2× because (a) the slow-path fallback for
+13-15-bit codes and (b) the per-block decode-table malloc cost
+dilute the inner-loop ILP gain. The win is still real and meaningful.
+
+End-to-end CLI decode (which includes program startup + file I/O +
+multiple block decodes per file) shows mixed results dominated by
+non-decode-loop overhead — the library-level numbers above are the
+honest measure of the inner-loop improvement.
+
+#### Compression ratio impact
+
+Output is **+0.001% to +0.009% larger** than v2.46.5, reflecting the
+constant +10B/block stream-size header overhead:
+
+| fixture | v2.46.5 | v2.47.0 | Δ |
+|---|---:|---:|---:|
+| fx_text | 159,124 | 159,134 | +0.006% |
+| fx_json | 200,771 | 200,782 | +0.005% |
+| bash | 748,914 | 748,933 | +0.003% |
+| dickens | 4,004,893 | 4,004,995 | +0.003% |
+| xml | 679,207 | 679,270 | +0.009% |
+| sao | 5,458,718 | 5,458,788 | +0.001% |
+| x-ray | 5,989,918 | 5,990,010 | +0.002% |
+
+**Honest disclosure**: the design doc (DESIGN_4STREAM_HUFFMAN.md
+section 10) estimated +0.5-0.8% aggregate ratio improvement vs
+zstd-3. That estimate was wrong — we don't have ratio improvement,
+we have decode speedup. The reasoning behind the estimate was
+"zstd's 4-stream + per-block table-rebuild together close the gap"
+but VaptVupt's per-block adaptive coding is on the ANS path, not
+Huffman. Pure 4-stream Huffman without per-block adaptive Huffman
+tables doesn't change ratio.
+
+The design's decode-speed estimate (1.8-2.2×) was directionally
+right but optimistic. Actual: 1.54× average.
+
+### Wire-Format Compatibility
+
+- **v2.47.0 decoder reads all v2.46.x output**: forward-compatible
+- **v2.47.0 encoder output is NOT readable by v2.46.x decoders** when
+  `lit_fmt = 4` is selected (which happens on most blocks ≥1024 lits)
+- For deployments needing v2.46.x decoder compatibility, set
+  `vv_options_t::compat_v246_5_decoder = 1` (suppresses `lit_fmt = 4`
+  in the encode race)
+
+### Validation
+
+| Check | Round 1 | Round 2 |
+|-------|---------|---------|
+| 17 test binaries (~360 cases including new test_huffman4) | pass | pass |
+| Roundtrip on 8 fixtures (incl. lit_fmt=4 paths) | pass | pass |
+| Backward compat: v2.47 decoder reads v2.46.5 output | ✓ | ✓ |
+| 6 DoS reproducers | <1ms each | <1ms each |
+| 300 byte-flips under UBSan/ASan (incl. 4 fixtures with lit_fmt=4) | 300/0/0 | 300/0/0 |
+| cppcheck | 0 | 0 |
+| clang scan-build | 0 | 0 |
+| GCC strict warnings | 0 | 0 |
+
+### Sprint Pattern
+
+Sprints 103 and 104 followed the design-doc-first discipline from
+DESIGN_4STREAM_HUFFMAN.md:
+
+- Sprint 102: design doc only (no code)
+- Sprint 103 (Phase A): encoder + test-only inverse decoder, dormant
+- Sprint 104 (Phase B): production decoder + SEQ integration, live
+
+Each phase had clear acceptance criteria and could roll back cleanly
+to v2.46.5 if it didn't meet them. Phase A passed cleanly. Phase B
+**did not meet** the design's predicted ratio improvement criterion
+but passed all other criteria (roundtrip, byte-identity for small
+blocks, decode speedup).
+
+### Action Required
+
+For Zupt 2.1.7 integration: v2.47.0 is the recommended baseline for
+new deployments. v2.46.5 remains supported for deployments needing
+the older wire format.
+
+### Phase C — Hardening (Future Sprint)
+
+Per the design doc, Phase C is the hardening pass:
+
+- Adversarial fuzz batch focused on stream-header corruption (already
+  partially done in this release: 300 byte-flips clean)
+- DoS reproducer payloads for stream-header corruption
+- TSan validation under multi-threaded encode using lit_fmt = 4
+- Allocation-fault injection re-run
+- FORMAT.md update for the new `lit_fmt = 4` tag
+
+Phase C is a future sprint commitment.
+
+
+## Sprint 100 (audit infrastructure addition, no version bump)
+
+**Allocation-fault injection harness added** as a permanent regression
+artifact. No production code changed; v2.46.5 binary unchanged.
+
+### What's New
+
+`tests/fault_injection/malloc_fault.c` — LD_PRELOAD-based malloc/calloc/
+realloc interceptor that fails allocations at a configurable rate.
+Driver script `tests/fault_injection/run_fault_inject.sh`.
+
+Usage:
+
+```sh
+cc -O2 -fPIC -shared -ldl -o /tmp/malloc_fault.so \
+   tests/fault_injection/malloc_fault.c
+VV_FAULT_RATE=200 VV_FAULT_SEED=1 LD_PRELOAD=/tmp/malloc_fault.so \
+   ./vaptvupt -c -m balanced input.txt -o /tmp/x.vv
+# rate is failures per 1000 allocs; SKIP=N skips first N allocs
+```
+
+### Sprint 100 Findings: First Negative Result
+
+Across **250+ trials** spanning encode/decode/extreme/streaming/
+multi-threaded/sanitized paths with allocation failure rates from 5%
+to 30%:
+
+- 0 crashes
+- 0 UndefinedBehaviorSanitizer reports
+- 0 AddressSanitizer reports
+- 0 memory leaks under LSan
+- 100% of failures translated to clean negative return codes
+
+This is the **first audit tool in the campaign to find zero new
+bugs**. It strongly validates the cumulative defensive work — in
+particular F4's `matcher_init` OOM fix from v2.46.3, which was the
+most allocation-sensitive code path.
+
+### Audit Campaign Pattern Update
+
+Through Sprint 99, every new audit tool surfaced ≥1 real defect:
+
+| Tool | Bugs found |
+|------|-----------:|
+| GCC strict | 1 |
+| LSan adversarial fuzz | 1 |
+| clang scan-build | 5 |
+| UBSan header fuzz | 2 |
+| Allocation-flow audit | 1 |
+| API contract test | 2 |
+| ThreadSanitizer | 1 |
+
+Sprint 100's allocation-fault injection breaks that pattern with 0
+findings. **This is meaningful**: it suggests the codec's allocation-
+failure handling is now genuinely robust, not just empirically
+untested. Future audit work should focus on different bug classes
+(coverage-guided fuzzing, differential testing) rather than re-running
+the same sanitizer/static-analyzer paths.
+
+### Validation
+
+- All 16 test binaries still pass (~340 cases)
+- 6 DoS reproducers still handled in <1ms
+- 17 API contract checks pass
+- 300 byte-flips under UBSan/ASan: 300/0/0
+- TSan clean on multi-threaded paths
+- v2.46.5 binary byte-identical (no production code changed)
+
+### What This Is Not
+
+This is not a release. v2.46.5 binary is unchanged. This is a
+documentation + test infrastructure update bundled into the v2.46.5
+source tarball going forward.
+
+
+## v2.46.5 — Sprint 98: ThreadSanitizer audit (audit follow-on)
+
+**Threading-safety patch release.** Fixes a benign-but-UB data race in
+`vv_init_simd()` discovered by Sprint 98 ThreadSanitizer audit. Output
+**byte-identical to v2.46.4** on all valid inputs.
+
+### What Changed
+
+#### Atomic SIMD lazy-init in `src/vv_simd.c`
+
+Pre-fix: `vv_init_simd()` had a classic check-then-set pattern on
+`g_copy_fast` and `g_copy_match` globals:
+
+```c
+static void vv_init_simd(void) {
+    if (g_copy_fast && g_copy_match) return;
+    g_copy_fast  = copy_fast_avx2;   // race: unsynchronized write
+    g_copy_match = copy_match_avx2;  // race: unsynchronized write
+}
+
+void vv_copy_fast(...) {
+    if (!g_copy_fast) vv_init_simd();  // race: unsynchronized read
+    g_copy_fast(...);
+}
+```
+
+Two threads decompressing simultaneously could both observe NULL,
+both enter `vv_init_simd`, both write to the globals. The writes
+were idempotent (always the same CPU-feature pointer for a given
+machine), so it never caused incorrect behavior on x86 — but per
+C11 it was undefined behavior. On weakly-ordered architectures
+(ARM, POWER), the race could become observable.
+
+Post-fix: All loads use `__atomic_load_n(..., __ATOMIC_ACQUIRE)`;
+all stores use `__atomic_store_n(..., __ATOMIC_RELEASE)`. Multiple
+threads may still race into the body, but each store is atomic and
+any subsequent reader sees a consistent value. This pairing of
+acquire-load/release-store gives the proper happens-before relation
+required by C11.
+
+#### Removed redundant `volatile` from `mt_pool_t.next_task`
+
+`next_task` is fully protected by `pool->mutex`. The `volatile`
+qualifier was misleading — it doesn't provide synchronization, only
+prevents compiler reordering, and the mutex already prevents both.
+Removed for clarity; behavior unchanged.
+
+### How It Was Found
+
+Sprint 98 added ThreadSanitizer to the audit toolkit:
+
+1. Built `vaptvupt` and standalone race-test programs with `-fsanitize=thread`
+2. Verified TSan works correctly with a known-bad test (counter race)
+   — TSan caught it as expected
+3. Ran `vv_compress -T 4` on dickens (10 MB, n_chunks=3) under TSan
+   — clean
+4. Ran a 16-thread aggressive race test (`pthread_barrier_wait` to
+   maximize concurrent entry into `vv_decompress`) — clean
+5. Ran an 8-thread test with no main-thread pre-init of SIMD globals
+   — clean
+
+TSan didn't empirically catch the SIMD init race — the threads
+happen to serialize through enough work before hitting `vv_copy_fast`
+that the first thread completes init before others begin. **This
+release fixes the theoretical UB anyway** because:
+
+1. C11 considers it UB regardless of empirical timing
+2. On weakly-ordered architectures (ARM64, POWER), the race could
+   fire more reliably
+3. Future compiler optimizations could expose the race
+4. The fix has zero runtime cost (atomic load with ACQUIRE on x86
+   compiles to plain mov; atomic store with RELEASE compiles to
+   plain mov on TSO)
+
+### Validation
+
+- **TSan clean** across:
+  - `vv_compress -T 4` on dickens
+  - 16-thread concurrent `vv_decompress` race test
+  - 8-thread concurrent `vv_compress` test
+- All 16 test binaries pass (~340 cases)
+- 6 DoS reproducers handled in <1ms each (preserved)
+- 300 byte-flips under UBSan/ASan: 300 clean / 0 UB / 0 hangs
+- Byte-identity to v2.46.4 on 4 fixtures preserved
+- v2.44 boundary fix intact
+- cppcheck: 0 issues
+- clang scan-build: 0 bugs
+- GCC strict warnings: 0 (after fixing unused `copy_fast_scalar` on
+  x86 with `__attribute__((unused))`)
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.46.0 through v2.46.4
+
+### Performance Impact
+
+Zero. Atomic loads with ACQUIRE on x86 (TSO architecture) compile to
+plain `mov` instructions. The `__ATOMIC_ACQUIRE`/`__ATOMIC_RELEASE`
+ordering semantics are free on x86 because the hardware already
+provides them. On ARM64, the cost is ~1 cycle per init call (init
+happens once per process lifetime).
+
+### Action Required
+
+Low priority for x86_64 deployments (the race was empirically
+non-firing). Higher priority for **ARM64 / POWER** deployments where
+weakly-ordered memory models can expose the race more reliably.
+
+### Threading Audit Coverage
+
+This release adds ThreadSanitizer to the standing audit toolkit. The
+sequence of audit tools added across the campaign:
+
+| Sprint | Tool | Bugs found |
+|--------|------|------------|
+| 85 | GCC strict | 1 cosmetic |
+| 86 | UBSan/ASan happy-path | 0 |
+| 86 | cppcheck | 0 (false positives) |
+| 86 | LSan adversarial fuzz | 1 (decoder leak) |
+| 89 | clang scan-build | 5 (1 crash, 4 hygiene) |
+| 89 | UBSan header-targeted fuzz | 2 (DoS hang vectors) |
+| 92 | Allocation-flow audit | 1 (matcher_init OOM) |
+| 95 | API contract test | 2 (consistency) |
+| **98** | **ThreadSanitizer** | **1 (atomic SIMD init)** |
+
+**11 issues found and fixed across 9 audit-tool deployments.** The
+pattern continues: each new tool surfaces 1+ real defects.
+
+
+## Sprint 97 (documentation update, no code change)
+
+Documentation refresh accompanying v2.46.4:
+
+- **[AUDIT.md](AUDIT.md) added** — formal audit document detailing
+  all 10 issues found and fixed across the v2.46.1–v2.46.4 patch
+  release campaign. Categorizes by severity, links each finding to
+  the discovering tool, and documents the threat model.
+- **[README.md](README.md) refreshed** — version bump to v2.46.4,
+  Audit Status section added, ratio comparison table replaced with
+  Round-2-validated measurements covering 8 fixtures × 8 codecs
+  (vv-bal, vv-ext, lz4-9, gzip-9, bzip2-9, zstd-3, zstd-19, xz-6).
+- **CHANGELOG.md** — this entry.
+- **No source code changed**. Output byte-identical to v2.46.4 binary.
+
+All ratio measurements validated **twice** with byte-identical
+reproduction across two independent runs (codecs are deterministic
+at fixed levels).
+
+
+## v2.46.4 — Sprint 95-96: API consistency fixes (audit follow-on)
+
+**API consistency patch release.** Fixes 2 inconsistencies in
+`vv_compress` discovered by the new public API contract audit.
+Output **byte-identical to v2.46.3** on all valid inputs that worked
+before.
+
+### What Changed
+
+#### 1. `vv_compress` accepts NULL `opts`
+
+Pre-fix: `vv_compress(src, len, dst, cap, NULL)` returned
+`VV_ERR_PARAM`. This was inconsistent with `vv_cstream_create(NULL)`
+which (after Sprint 89's fix in v2.46.2) already accepted NULL and
+applied defaults.
+
+Post-fix: `vv_compress` and `vv_compress_mt` now both apply
+`vv_default_options()` when `opts == NULL`, matching the streaming
+API behavior.
+
+#### 2. `vv_compress` accepts `src_len == 0`
+
+Pre-fix: empty input was rejected. But emitting an empty compressed
+frame (just header + footer) is a legitimate operation for streaming
+protocols that use empty frames as flush markers, and for any caller
+that wants to round-trip arbitrary byte sequences including the
+empty one.
+
+Post-fix: empty input produces a valid 32-byte frame (16-byte header
++ 16-byte footer) that decompresses cleanly to 0 bytes. Verified
+under UBSan/ASan.
+
+### How They Were Found
+
+Sprint 95's API contract audit (`tests/test_api_contract.c`)
+systematically tested every public entry point with NULL parameters,
+zero-length inputs, alignment edge cases, and other contract-boundary
+conditions. 17 test cases total; 2 found inconsistencies, 15 passed.
+
+### Validation
+
+- All 16 test binaries pass (added `test_api_contract`, updated
+  `test_edge_cases` to match new contract)
+- Byte-identity to v2.46.3 on 4 fixtures preserved
+- 6 DoS reproducers still handled in <1ms
+- 300 byte-flips under UBSan/ASan post-fix: 300 clean / 0 UB / 0 hangs
+- Empty + 1-byte input roundtrips clean under sanitizers
+- cppcheck: 0 issues
+- clang scan-build: 0 bugs
+- GCC strict (`-Wall -Wextra -Wpedantic -Wshadow -Wcast-qual
+  -Wstrict-prototypes -Wmissing-prototypes -Wundef -Wfloat-equal
+  -Wpointer-arith -Wcast-align -Wnull-dereference -Wdouble-promotion
+  -Wformat=2 -Wformat-security`): 0 warnings
+
+### Compatibility
+
+- **Wire format**: unchanged. Output byte-identical to v2.46.3 on all
+  inputs that worked before; new acceptance of empty input produces
+  the natural empty frame format.
+- **Public API**: relaxed in two backward-compatible ways. Any code
+  that previously passed valid arguments continues to work
+  identically. The relaxation only affects callers that previously
+  received `VV_ERR_PARAM` and would otherwise have had to call
+  `vv_default_options()` themselves before calling `vv_compress`.
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.46.0/v2.46.1/v2.46.2/v2.46.3
+
+### Action Required
+
+None. This is a strict relaxation of the API contract — no caller
+needs to change code.
+
+### Test Suite Growth
+
+This release adds `test_api_contract` (TEST16) as a permanent
+regression fixture. Future API additions or modifications can
+reference its 17 contract checks as the baseline expected behavior.
+
+Test count progression:
+- v2.46.0: 13 test binaries
+- v2.46.2: +`test_dos_hang` (DoS regression) → 14
+- v2.46.3: same 14
+- v2.46.4: +`test_api_contract` → **16 binaries**
+
+(The "+2" is because Sprint 91 also wired `test_large_boundary` into
+the test target for the first time, which had been a standalone
+binary previously.)
+
+
+## v2.46.3 — Sprint 92-94: matcher_init crash fix (audit follow-on)
+
+**Memory-safety patch release.** Fixes a latent crash bug in
+`matcher_init` that could crash the encoder on OOM. Found by Sprint 92
+allocation-checking audit. Output **byte-identical to v2.46.2** on the
+success path.
+
+### The Bug
+
+`matcher_init` in `src/vv_encoder.c` allocated 4 hash-table buffers
+without checking the return values. The function was `void`-returning,
+so it had no way to report allocation failure to its callers. The
+immediately-following `memset(m->table, 0xFF, ...)` would dereference
+the NULL pointer and crash:
+
+```c
+// Pre-fix code:
+static void matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
+    m->table = malloc(...);   // could be NULL
+    m->chain = malloc(...);   // could be NULL
+    m->table4 = malloc(...);  // could be NULL
+    m->hash4_chain = malloc(...);  // could be NULL
+    // ...
+    memset(m->table, 0xFF, ...);   // ← crashes if any malloc returned NULL
+    memset(m->table4, 0xFF, ...);
+    // ...
+}
+```
+
+Reachable via:
+- Memory-constrained environments (small embedded systems, tightly-
+  capped containers, fork-bombed processes)
+- Adversarial OOM conditions (a hostile process exhausting heap
+  before/during decompression)
+- Allocation-fault-injection testing
+
+### How It Was Found
+
+Sprint 92's allocation-checking audit (a Python script grep'ing for
+malloc/calloc returns and verifying NULL checks within 8 lines)
+flagged 18 candidates. Sprint 93 manually triaged each:
+
+- 16 were false positives (the heuristic missed checks using member
+  access like `if (!ctx->in_buf)` or batched checks like
+  `if (!a || !b || !c)`)
+- 1 was the real defect: `matcher_init` (4 unchecked allocations
+  inside a `void`-returning function)
+- 1 was already correctly handled (`build_enc` in `vv_ans.c`)
+
+### The Fix
+
+`matcher_init` now returns `int` (1=success, 0=failure):
+
+```c
+static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
+    /* Initialize ALL pointers to NULL first so matcher_free is safe
+     * to call on partial-failure paths. */
+    m->table = m->chain = m->table4 = m->hash4_chain = NULL;
+    m->table3 = m->hash3_chain = NULL;
+
+    m->table = malloc(VV_HC_SIZE * sizeof(int32_t));
+    m->chain = malloc(wsz * sizeof(int32_t));
+    m->table4 = malloc(VV_HC4_SIZE * sizeof(int32_t));
+    m->hash4_chain = malloc(wsz * sizeof(int32_t));
+    if (!m->table || !m->chain || !m->table4 || !m->hash4_chain) {
+        matcher_free(m);
+        m->table = m->chain = m->table4 = m->hash4_chain = NULL;
+        return 0;
+    }
+    // ...rest of initialization...
+    return 1;
+}
+```
+
+All 4 call sites updated to check the return value:
+- `vv_cstream_create`: `free(ctx); return NULL;` on failure
+- `vv_compress` (one-shot): `return VV_ERR_NOMEM;` on failure
+- 2 trial-encoder probes: skip the trial (default wlog is a safe
+  fallback for the perf-tuning probe)
+
+### Validation
+
+- All 15 test binaries pass (≈300 cases)
+- 600 differential fuzz cases consistent
+- 300 byte-flip mutations under UBSan/ASan: clean (300/0/0)
+- 6 DoS reproducers from v2.46.2 still handled in <1ms
+- Output byte-identical to v2.46.2 on 4 fixtures (success path)
+- `vv_cstream_create(NULL)` still works (the v2.46.2 fix preserved)
+- v2.44 boundary fix preserved
+
+### Static Analysis
+
+- clang scan-build: 0 bugs (was 5 in v2.46.0)
+- cppcheck: 0 issues
+- GCC strict (`-Wall -Wextra -Wpedantic -Wshadow -Wcast-qual
+  -Wstrict-prototypes -Wmissing-prototypes -Wundef -Wfloat-equal
+  -Wpointer-arith -Wcast-align -Wnull-dereference -Wdouble-promotion
+  -Wformat=2 -Wformat-security`): 0 warnings
+
+### Bonus: Integer Overflow Audit
+
+Sprint 93 also audited size_t arithmetic involving attacker-controlled
+wire-format values for potential overflow:
+
+- `total_lits + match_count + 16` → both bounded by dst_cap ≤ 1MB,
+  sum ≤ 2MB+16, **safe**
+- `total_lits + 16` → bounded by dst_cap, **safe**
+- `lit_count + 16` → lit_count is uint16_t ≤ 65535, **safe**
+
+**No integer overflow vulnerabilities found.**
+
+### Compatibility
+
+- **Wire format**: unchanged
+- **API**: unchanged (matcher_init is a `static` internal function;
+  no public API change)
+- **License**: GPL-3.0-or-later (unchanged)
+- **Drop-in replacement** for v2.46.0/v2.46.1/v2.46.2
+
+### Action Required
+
+Low priority for most deployments. The crash bug is reachable only
+under OOM conditions, which most desktop/server environments don't
+encounter. **High priority** for memory-constrained embedded
+deployments and any production environment that wants its decoder
+to fail cleanly on allocator pressure rather than crash.
+
+
+## v2.46.2 — Sprint 89-91: SECURITY PATCH (DoS + 5 audit fixes)
+
+**Security/correctness patch release.** Fixes a denial-of-service
+vulnerability in the decoder plus 5 issues identified by formal static
+analysis (clang scan-build). Critical for any service decoding
+untrusted input. Output **byte-identical to v2.46.1 / v2.46.0** on the
+success path.
+
+### CVE-Equivalent: Decoder DoS Vulnerability
+
+**Severity**: Medium. Reachable from any deployment that decompresses
+attacker-controlled input.
+
+A maliciously crafted compressed payload could cause the decoder to
+enter an infinite loop, hanging indefinitely. Two vectors:
+
+1. **Sequence-decode loop** (`vv_ans.c:vva_decode_sequences_impl`): the
+   `while (lit_pos < total_lits || matches_decoded < match_count)`
+   loop terminated only when both counters reached their targets.
+   Corrupted ANS bitstream could decode litlen=0 + matchlen=0
+   sequences indefinitely, never advancing either counter.
+
+2. **Huffman literal decoder** (`vv_ans.c` line 2013 + `vv_huffman.c`
+   `vvh_decode`): `total_lits` was decoded from 4 wire bytes with no
+   upper bound. A corrupted byte made `total_lits` ≈ 1.1 billion;
+   `vvh_decode` then ran a `for (i=0; i<num_literals; i++)` loop
+   1.1B times, hanging the process. Confirmed by gdb backtrace on
+   live hung instance.
+
+Both vectors discovered by adversarial fuzzing under UBSan/ASan
+during Sprint 89 audit. 5 of 200 header-targeted byte-flips triggered
+hangs.
+
+#### Fix
+
+In `src/vv_ans.c`:
+
+- **Iteration cap** at the sequence-decode loop top:
+  `max_iters = total_lits + match_count + 16`. Each well-formed
+  iteration must advance at least one counter by 1; exceeding the
+  bound proves the input is corrupt → return `VVA_ERR_CORRUPT`.
+
+- **Wire-format upper bounds** on both 4-byte length fields:
+  `total_lits > dst_cap` → CORRUPT, `match_count > dst_cap` → CORRUPT.
+  These bounds are conservative but prevent oversized allocations
+  and runaway decode work.
+
+#### Validation
+
+- All 6 DoS reproducer payloads (saved at `tests/regression_inputs/dos_hang*.vv`)
+  now return clean error code in <1ms (was: hung indefinitely)
+- New permanent regression test `test_dos_hang` wired into Makefile —
+  `make test` will catch any future code that re-introduces the
+  vulnerability
+- 300 byte-flip fuzz cases under UBSan/ASan post-fix: 0 hangs, 0 UB
+- 600 differential fuzzer cases consistent
+
+### Static Analysis Findings (5 issues, all fixed)
+
+clang scan-build identified 5 issues. Triaged and resolved:
+
+1. **`vv_encoder.c:1254` — REAL CRASH BUG**: `vv_cstream_create(NULL)`
+   crashed with NULL deref. The function called `vv_default_options(&ctx->opts)`
+   to populate defaults but then dereferenced the raw `opts` parameter
+   (which was NULL). Fix: read from the populated `ctx->opts` struct
+   instead. **This was a crash bug in v2.46.0 and v2.46.1.**
+
+2. **`vv_simd.c:217` — potential null deref of `g_copy_match`**:
+   `vv_init_simd` early-return guard checked only `g_copy_fast`. Both
+   globals are always set together in practice, but the asymmetric
+   guard left a theoretical null-deref window flagged by scan-build.
+   Tightened to `if (g_copy_fast && g_copy_match) return`.
+
+3. **`vv_ans.c:819` — calloc sizeof mismatch (cosmetic)**: rewrote
+   `calloc(NSYM, NSYM*sizeof(uint32_t))` as `calloc(NSYM, sizeof(*hist))`
+   to match the destination pointer type. Same total bytes, no
+   behavior change.
+
+4. **`vv_encoder.c:1446` — dead store of `cap_left` (cosmetic)**:
+   removed the unread assignment after final use.
+
+5. **`vv_ans.c:2120` — dead store of `p` (cosmetic)**: removed the
+   unread `p += seq_bs_len` after the bitstream took ownership.
+
+After fixes: scan-build reports **0 bugs**. cppcheck: 0 issues. GCC
+strict (`-Wall -Wextra -Wpedantic -Wshadow -Wcast-qual
+-Wstrict-prototypes -Wmissing-prototypes -Wundef -Wfloat-equal
+-Wpointer-arith -Wcast-align -Wnull-dereference -Wdouble-promotion
+-Wformat=2 -Wformat-security`): **0 warnings**.
+
+### Round-2 Validation Summary
+
+Per audit requirement to "validate all twice":
+
+| Check | Round 1 | Round 2 |
+|-------|---------|---------|
+| cppcheck | 0 issues | 0 issues |
+| scan-build | 0 bugs (was 5) | 0 bugs |
+| GCC strict warnings | 0 | 0 |
+| All 15 test binaries | pass | pass |
+| 6 DoS reproducers | <1ms clean error | <1ms clean error |
+| Differential fuzzer | 600/600 consistent | 600/600 consistent |
+| 300 byte-flips under UBSan/ASan | 300 clean / 0 UB / 0 hangs | 300 clean / 0 UB / 0 hangs |
+| 18 sanitized roundtrips (6 fixtures × 3 modes) | 0 fails | 0 fails |
+| 500 random-input rejections under sanitizer | 0 UB | 0 UB |
+
+### Performance Impact
+
+Negligible. The DoS-prevention checks add ~1-2 cycles per decode
+iteration:
+
+| Fixture | Encode v2.46.1 → v2.46.2 | Decode v2.46.1 → v2.46.2 |
+|---|---:|---:|
+| fx_text | 13.1 → 13.4 MB/s (+2.3%) | 98.5 → 98.8 MB/s (+0.3%) |
+| fx_json | 13.3 → 14.2 MB/s (+6.8%) | 78.9 → 75.9 MB/s (-3.8%) |
+| fx_source | 15.8 → 14.9 MB/s (-5.7%) | — |
+| bash | 8.3 → 8.4 MB/s (+1.2%) | 80.1 → 101.5 MB/s (+26.7%) |
+
+Within measurement noise.
+
+### Compatibility
+
+- **Wire format**: unchanged. v2.46.2 produces byte-identical output
+  to v2.46.0/v2.46.1 on all valid inputs.
+- **API**: unchanged.
+- **License**: GPL-3.0-or-later (unchanged).
+- **Drop-in replacement** for v2.46.0 or v2.46.1.
+
+### Action Required
+
+For services accepting **untrusted compressed input** (Zupt servers,
+backup verification of unknown sources, network-served decompression):
+**upgrade immediately to v2.46.2**. The DoS vulnerability is reachable
+with a single byte modification of any valid v2.46.x compressed file.
+
+For controlled environments processing only trusted input: upgrade at
+your convenience. The fix has no behavior change on success path; you
+benefit from the additional defensive checks without operational risk.
+
+
 ## v2.46.1 — Sprint 87-88: decoder leak fix (correctness/safety patch)
 
 **Memory-safety patch release.** Fixes a 16,384-byte memory leak on

@@ -1,5 +1,5 @@
 /* VaptVupt amalgamation — single-file build for Zupt */
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * VaptVupt — Cross-platform portability macros
  *
@@ -114,6 +114,28 @@ static inline void vv_store64(void *p, uint64_t v) { memcpy(p, &v, 8); }
   #define VV_HAS_NEON 1
 #else
   #define VV_HAS_NEON 0
+#endif
+
+/* Sprint 117: explicit no_sanitize annotation for hardened builds.
+ *
+ * Several hot paths use intentional unsigned modular arithmetic:
+ *   - Knuth multiplicative hashes in the LZ matcher
+ *   - xxh64 round mixers (multiplication, left-shift)
+ *   - Post-decrement loop guards (uint32_t depth-- > 0)
+ *
+ * C11 §6.2.5p9 defines unsigned overflow as wraparound, so these are
+ * NOT undefined behavior — but `-fsanitize=integer` and the related
+ * `-fsanitize=shift-base` flags warn anyway, breaking hardened-build
+ * deployments. Apply this attribute to the affected functions to
+ * silence the false positives without disabling the checks globally.
+ *
+ * The annotation is clang-only (gcc has no equivalent and does not
+ * accept -fsanitize=integer in the first place). */
+#if defined(__clang__) && (__clang_major__ >= 4)
+#  define VV_NO_SANITIZE_INTEGER \
+     __attribute__((no_sanitize("unsigned-integer-overflow", "shift", "shift-base", "shift-exponent")))
+#else
+#  define VV_NO_SANITIZE_INTEGER
 #endif
 
 #endif /* VV_PLATFORM_H */
@@ -307,6 +329,12 @@ typedef struct {
     int       format_v2;     /* 1 = produce 'T' tag blocks (min_match=3) for
                               *     better real-binary ratio. Requires decoder
                               *     v2.33.0+. Default 0 for back-compat. */
+    int       compat_v246_5_decoder;
+                             /* 1 = suppress lit_fmt=4 (4-stream Huffman) in
+                              *     SEQ block encode race. Required when
+                              *     output must be readable by v2.46.5 or
+                              *     older decoders. Default 0 (lit_fmt=4
+                              *     enabled, requires v2.47+ decoder). */
 } vv_options_t;
 
 static inline void vv_default_options(vv_options_t *o) {
@@ -315,6 +343,7 @@ static inline void vv_default_options(vv_options_t *o) {
     o->checksum = 1;
     o->verbose = 0;
     o->format_v2 = 0;
+    o->compat_v246_5_decoder = 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -693,6 +722,16 @@ vva_error_t vva_encode_sequences_v2(const uint8_t *tokens, size_t tok_len,
                                      uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                      int off_bytes);
 
+/* Sprint 105 Phase C: variants accepting disable_huf4 flag.
+ * disable_huf4=1 suppresses lit_fmt=4 (4-stream Huffman) selection
+ * for v2.46.5 and older decoder compatibility. */
+vva_error_t vva_encode_sequences_compat(const uint8_t *tokens, size_t tok_len,
+                                         uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                         int off_bytes, int disable_huf4);
+vva_error_t vva_encode_sequences_v2_compat(const uint8_t *tokens, size_t tok_len,
+                                            uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                            int off_bytes, int disable_huf4);
+
 vva_error_t vva_decode_sequences(const uint8_t *src, size_t src_len,
                                   uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                   const uint8_t *dst_base);
@@ -827,6 +866,51 @@ vvh_error_t vvh_encode(const uint8_t *src, size_t src_len,
 vvh_error_t vvh_decode(const uint8_t *src, size_t src_len,
                        uint8_t *dst, size_t dst_cap,
                        size_t num_literals, size_t *src_consumed);
+
+/*
+ * 4-stream interleaved Huffman encode (Sprint 103, Phase A).
+ *
+ * Encodes src into 4 round-robin bitstreams sharing a single Huffman
+ * code table. The output format is:
+ *
+ *   [code-length header (existing format)]
+ *   [3B stream1_size] [3B stream2_size] [3B stream3_size]
+ *   [stream0_bitstream] [stream1_bitstream]
+ *   [stream2_bitstream] [stream3_bitstream]
+ *
+ * Activation guard: requires src_len >= 1024. Below this threshold,
+ * single-stream vvh_encode wins on overhead and this function returns
+ * VVH_ERR_OVERFLOW.
+ *
+ * NOTE (Phase A): Production decoder support arrives in Phase B.
+ * This sprint adds only the encoder + a test-only inverse decoder
+ * (in tests/test_huffman4.c) for round-trip verification.
+ *
+ * Returns VVH_OK on success.
+ * Returns VVH_ERR_OVERFLOW if src_len < 1024, dst too small, or output
+ * not smaller than input.
+ */
+vvh_error_t vvh_encode4(const uint8_t *src, size_t src_len,
+                        uint8_t *dst, size_t dst_cap, size_t *dst_len);
+
+/*
+ * 4-stream interleaved Huffman decode (Sprint 104, Phase B).
+ *
+ * Inverse of vvh_encode4. Decodes the 4-stream wire format produced
+ * by vvh_encode4. Runs 4 independent decoders in parallel using a
+ * single shared decode table.
+ *
+ * src[0..src_len-1]   — compressed data (header + stream-sizes + 4 streams)
+ * dst[0..dst_cap-1]   — output buffer for decoded literals
+ * num_literals        — expected number of decoded symbols
+ * *src_consumed       — on success, bytes consumed from src
+ *
+ * Returns VVH_OK on success, VVH_ERR_CORRUPT on malformed input,
+ * VVH_ERR_OVERFLOW if dst is too small, VVH_ERR_NOMEM on alloc failure.
+ */
+vvh_error_t vvh_decode4(const uint8_t *src, size_t src_len,
+                        uint8_t *dst, size_t dst_cap,
+                        size_t num_literals, size_t *src_consumed);
 
 /*
  * Upper bound on compressed size for src_len literal bytes.

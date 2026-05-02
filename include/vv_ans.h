@@ -111,6 +111,16 @@ vva_error_t vva_encode_sequences_v2(const uint8_t *tokens, size_t tok_len,
                                      uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                      int off_bytes);
 
+/* Sprint 105 Phase C: variants accepting disable_huf4 flag.
+ * disable_huf4=1 suppresses lit_fmt=4 (4-stream Huffman) selection
+ * for v2.46.5 and older decoder compatibility. */
+vva_error_t vva_encode_sequences_compat(const uint8_t *tokens, size_t tok_len,
+                                         uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                         int off_bytes, int disable_huf4);
+vva_error_t vva_encode_sequences_v2_compat(const uint8_t *tokens, size_t tok_len,
+                                            uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                            int off_bytes, int disable_huf4);
+
 vva_error_t vva_decode_sequences(const uint8_t *src, size_t src_len,
                                   uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                   const uint8_t *dst_base);

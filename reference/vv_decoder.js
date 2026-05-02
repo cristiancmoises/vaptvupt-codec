@@ -547,6 +547,192 @@
         return buildDec(norm, sp);
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // Single-stream Huffman decoder (`lit_fmt = 3`).
+    //
+    // Sprint 117 (v2.47.9): ported from `src/vv_huffman.c` to close
+    // the JS half of `AUDIT.md` Section 8 item 6. Wire format:
+    //
+    //   [1B max_sym]
+    //   [⌈(max_sym + 2) / 2⌉ bytes of nibble-packed code lengths]
+    //   [bitstream of canonical Huffman codes, LSB-first]
+    //
+    // Codes are canonical (sorted by length then symbol value) but
+    // stored bit-reversed for LSB-first extraction.
+    //
+    // Constants must mirror `include/vv_huffman.h`:
+    //   VVH_SYMBOLS      = 256
+    //   VVH_MAX_CODE_LEN = 15
+    //
+    // The C reference uses a 4096-entry fast-path lookup table; this
+    // JS reference uses a linear scan (O(n) per symbol). Slow but
+    // trivially correct — production decode is the C reference.
+    // ─────────────────────────────────────────────────────────────────
+
+    const VVH_SYMBOLS = 256;
+    const VVH_MAX_CODE_LEN = 15;
+
+    function huffmanReadHeader(src) {
+        if (src.length < 1) throw new CorruptError('Huffman header: empty buffer');
+        const maxSym = src[0];
+        const hdrSize = 1 + ((maxSym + 2) >>> 1);
+        if (hdrSize > src.length) {
+            throw new CorruptError(
+                `Huffman header: max_sym=${maxSym} requires ${hdrSize} ` +
+                `header bytes, only ${src.length} available`);
+        }
+        const lengths = new Uint8Array(VVH_SYMBOLS);
+        for (let i = 0; i <= maxSym; i += 2) {
+            const packed = src[1 + (i >>> 1)];
+            lengths[i] = packed >>> 4;
+            if (i + 1 <= maxSym) lengths[i + 1] = packed & 0x0F;
+        }
+        return [lengths, hdrSize];
+    }
+
+    function huffmanReverseBits(value, n) {
+        let result = 0;
+        for (let i = 0; i < n; i++) {
+            result = (result << 1) | (value & 1);
+            value >>>= 1;
+        }
+        return result >>> 0;
+    }
+
+    function huffmanAssignCanonical(lengths) {
+        // Count symbols at each length
+        const blCount = new Uint32Array(VVH_MAX_CODE_LEN + 1);
+        for (let i = 0; i < VVH_SYMBOLS; i++) {
+            const ln = lengths[i];
+            if (ln > 0 && ln <= VVH_MAX_CODE_LEN) blCount[ln]++;
+        }
+        // First code at each length (MSB-first canonical)
+        const nextCode = new Uint32Array(VVH_MAX_CODE_LEN + 1);
+        let code = 0;
+        for (let bits = 1; bits <= VVH_MAX_CODE_LEN; bits++) {
+            code = (code + blCount[bits - 1]) << 1;
+            nextCode[bits] = code >>> 0;
+        }
+        // Assign codes in symbol order
+        const codes = new Uint32Array(VVH_SYMBOLS);
+        for (let i = 0; i < VVH_SYMBOLS; i++) {
+            const ln = lengths[i];
+            if (ln > 0) {
+                codes[i] = nextCode[ln];
+                nextCode[ln] = (nextCode[ln] + 1) >>> 0;
+            }
+        }
+        return codes;
+    }
+
+    function huffmanBuildEntries(lengths) {
+        const canonical = huffmanAssignCanonical(lengths);
+        const entries = [];
+        for (let sym = 0; sym < VVH_SYMBOLS; sym++) {
+            const ln = lengths[sym];
+            if (ln === 0) continue;
+            if (ln > VVH_MAX_CODE_LEN) {
+                throw new CorruptError(
+                    `Huffman code length ${ln} exceeds max ${VVH_MAX_CODE_LEN}`);
+            }
+            const rev = huffmanReverseBits(canonical[sym], ln);
+            entries.push({ rev: rev, len: ln, sym: sym });
+        }
+        if (entries.length === 0) {
+            throw new CorruptError('Huffman: no symbols with nonzero length');
+        }
+        // Sort shortest codes first so linear scan finds them quickly.
+        entries.sort((a, b) => a.len - b.len || a.rev - b.rev);
+        return entries;
+    }
+
+    /**
+     * LSB-first bit reader for Huffman bitstream. Independent of the
+     * MSB-first `AnsBitReader`. Mirrors `br_t` in `src/vv_huffman.c`.
+     */
+    class HuffmanBitReader {
+        constructor(src) {
+            this.s = src;
+            this.p = 0;
+            this.a = 0n;  // BigInt accumulator (matches C 64-bit u64)
+            this.n = 0;   // bits in accumulator
+        }
+        refill() {
+            while (this.n <= 56 && this.p < this.s.length) {
+                this.a |= BigInt(this.s[this.p]) << BigInt(this.n);
+                this.n += 8;
+                this.p += 1;
+            }
+        }
+        peek(n) {
+            if (n === 0) return 0;
+            const mask = (1n << BigInt(n)) - 1n;
+            return Number(this.a & mask);
+        }
+        consume(n) {
+            this.a >>= BigInt(n);
+            this.n -= n;
+        }
+    }
+
+    /**
+     * Decode `numLiterals` Huffman-coded bytes from the input.
+     * Returns [Uint8Array, srcConsumed]. Mirrors `vvh_decode` in
+     * `src/vv_huffman.c`.
+     */
+    function vvhDecode(src, numLiterals) {
+        if (numLiterals === 0) return [new Uint8Array(0), 0];
+
+        const [lengths, hdrSize] = huffmanReadHeader(src);
+
+        let hasSym = false;
+        for (let i = 0; i < VVH_SYMBOLS; i++) {
+            if (lengths[i] > 0) { hasSym = true; break; }
+        }
+        if (!hasSym) throw new CorruptError('Huffman: empty code-length table');
+
+        const entries = huffmanBuildEntries(lengths);
+
+        const reader = new HuffmanBitReader(src.subarray(hdrSize));
+        reader.refill();
+
+        const out = new Uint8Array(numLiterals);
+        for (let i = 0; i < numLiterals; i++) {
+            if (reader.n < VVH_MAX_CODE_LEN) reader.refill();
+
+            let matched = false;
+            for (const e of entries) {
+                if (reader.n < e.len) {
+                    if (reader.p >= reader.s.length) {
+                        throw new CorruptError(
+                            `Huffman: bitstream exhausted at literal ` +
+                            `${i}/${numLiterals}`);
+                    }
+                    reader.refill();
+                }
+                const mask = (1 << e.len) - 1;
+                if ((reader.peek(e.len) & mask) === e.rev) {
+                    reader.consume(e.len);
+                    out[i] = e.sym;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                throw new CorruptError(
+                    `Huffman: no canonical code matched at literal ` +
+                    `${i}/${numLiterals}`);
+            }
+        }
+
+        // src_consumed: hdr + bytes the reader has fetched, minus
+        // any over-read bytes still buffered in the accumulator.
+        let srcConsumed = hdrSize + reader.p;
+        const over = reader.n >>> 3;
+        if (srcConsumed >= over) srcConsumed -= over;
+        return [out, srcConsumed];
+    }
+
     /**
      * Decode a full 'S' tag (VV_ENTROPY_SEQ) block payload.
      *
@@ -594,6 +780,20 @@
         } else if (litFmt === 2) {
             const [buf] = vvaDecode(src.subarray(p, p + litEncLen), totalLits);
             litBuf = buf;
+        } else if (litFmt === 3) {
+            // HUFFMAN (added v2.46.0). Single-stream Huffman literal coding.
+            // Sprint 117 (v2.47.9): ported from src/vv_huffman.c.
+            const [buf] = vvhDecode(src.subarray(p, p + litEncLen), totalLits);
+            litBuf = buf;
+        } else if (litFmt === 4) {
+            // HUFFMAN4 (added v2.47.0). 4-stream interleaved Huffman.
+            // Not implemented in this reference decoder.
+            throw new CorruptError(
+                "'S' lit_fmt=4 (HUFFMAN4) — 4-stream interleaved Huffman " +
+                "was added in v2.47.0 and has not yet been ported to this " +
+                "JavaScript reference. Use the C decoder (src/vv_decoder.c) " +
+                "for any v2.47.0+ archive. See README.md 'Reference decoder " +
+                "coverage gap' and AUDIT.md item 6.");
         } else {
             throw new CorruptError(`'S' unknown lit_fmt ${litFmt}`);
         }

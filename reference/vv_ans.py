@@ -472,6 +472,21 @@ def vva_decode_sequences(src, dst_base, ml_base_tab=None):
     elif lit_fmt == 2:
         lit_buf, _ = vva_decode(
             bytes(src[p : p + lit_enc_len]), total_lits)
+    elif lit_fmt == 3:
+        # HUFFMAN (added v2.46.0). Single-stream Huffman literal coding.
+        # Sprint 114 (v2.47.6): ported from src/vv_huffman.c.
+        import vv_huffman  # type: ignore[import-not-found]
+        lit_buf, _ = vv_huffman.vvh_decode(
+            bytes(src[p : p + lit_enc_len]), lit_enc_len, total_lits)
+    elif lit_fmt == 4:
+        # HUFFMAN4 (added v2.47.0). 4-stream interleaved Huffman.
+        # Not implemented in this reference decoder.
+        raise NotImplementedError(
+            "'S' lit_fmt=4 (HUFFMAN4) — 4-stream interleaved Huffman "
+            "was added in v2.47.0 and has not yet been ported to this "
+            "Python reference. Use the C decoder (src/vv_decoder.c) "
+            "for any v2.47.0+ archive. See README.md 'Reference decoder "
+            "coverage gap' and AUDIT.md item 6.")
     else:
         raise ValueError(f"'S' unknown lit_fmt={lit_fmt}")
     p += lit_enc_len

@@ -71,6 +71,23 @@ TEST13_BIN = test_safezone_adversarial
 TEST14_SRC = tests/test_large_boundary.c $(CORE_SRC)
 TEST14_BIN = test_large_boundary
 
+TEST15_SRC = tests/test_dos_hang.c $(CORE_SRC)
+TEST15_BIN = test_dos_hang
+
+TEST16_SRC = tests/test_api_contract.c $(CORE_SRC)
+TEST16_BIN = test_api_contract
+
+TEST17_SRC = tests/test_huffman4.c src/vv_huffman.c
+TEST17_BIN = test_huffman4
+
+# Sprint 117: secure-zero behavioral test
+TEST18_SRC = tests/test_secure_zero.c $(CORE_SRC)
+TEST18_BIN = test_secure_zero
+
+# Sprint 122: Zupt 2.2.2 integration smoke test
+TEST19_SRC = tests/test_zupt_integration.c $(CORE_SRC)
+TEST19_BIN = test_zupt_integration
+
 .PHONY: all clean test python-test fuzz bench-update speed-update run_roundtrip run_huffman bench check-debug
 
 all: $(TARGET)
@@ -86,98 +103,144 @@ check-debug:
 	@echo "check-debug: no debug calls in core sources ✓"
 
 $(TARGET): $(SOURCES)
+	@# Sprint 121: ensure build_obj/ exists (fresh-extract from tarball
+	@# may not have it). Idempotent.
+	@mkdir -p build_obj
 	@# Compile AVX2-using files (vv_simd.c, vv_decoder.c) with SIMD_FLAGS
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(SOURCES)) /tmp/vv_simd.o /tmp/vv_decoder.o $(LDFLAGS) -o $(TARGET)
-	@rm -f /tmp/vv_simd.o /tmp/vv_decoder.o
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(SOURCES)) build_obj/vv_simd.o build_obj/vv_decoder.o $(LDFLAGS) -o $(TARGET)
+	@rm -f build_obj/vv_simd.o build_obj/vv_decoder.o
 	@echo "Build complete: ./$(TARGET)"
 
 $(TEST1_BIN): $(TEST1_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t1.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t1.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST1_SRC)) /tmp/vv_simd_t1.o /tmp/vv_decoder_t1.o $(LDFLAGS) -o $(TEST1_BIN)
-	@rm -f /tmp/vv_simd_t1.o /tmp/vv_decoder_t1.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t1.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t1.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST1_SRC)) build_obj/vv_simd_t1.o build_obj/vv_decoder_t1.o $(LDFLAGS) -o $(TEST1_BIN)
+	@rm -f build_obj/vv_simd_t1.o build_obj/vv_decoder_t1.o
 
 $(TEST2_BIN): $(TEST2_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t2.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t2.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST2_SRC)) /tmp/vv_simd_t2.o /tmp/vv_decoder_t2.o $(LDFLAGS) -o $(TEST2_BIN)
-	@rm -f /tmp/vv_simd_t2.o /tmp/vv_decoder_t2.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t2.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t2.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST2_SRC)) build_obj/vv_simd_t2.o build_obj/vv_decoder_t2.o $(LDFLAGS) -o $(TEST2_BIN)
+	@rm -f build_obj/vv_simd_t2.o build_obj/vv_decoder_t2.o
 
 $(TEST3_BIN): $(TEST3_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t3.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t3.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST3_SRC)) /tmp/vv_simd_t3.o /tmp/vv_decoder_t3.o $(LDFLAGS) -o $(TEST3_BIN)
-	@rm -f /tmp/vv_simd_t3.o /tmp/vv_decoder_t3.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t3.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t3.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST3_SRC)) build_obj/vv_simd_t3.o build_obj/vv_decoder_t3.o $(LDFLAGS) -o $(TEST3_BIN)
+	@rm -f build_obj/vv_simd_t3.o build_obj/vv_decoder_t3.o
 
 $(TEST4_BIN): $(TEST4_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t4.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t4.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST4_SRC)) /tmp/vv_simd_t4.o /tmp/vv_decoder_t4.o $(LDFLAGS) -o $(TEST4_BIN)
-	@rm -f /tmp/vv_simd_t4.o /tmp/vv_decoder_t4.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t4.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t4.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST4_SRC)) build_obj/vv_simd_t4.o build_obj/vv_decoder_t4.o $(LDFLAGS) -o $(TEST4_BIN)
+	@rm -f build_obj/vv_simd_t4.o build_obj/vv_decoder_t4.o
 
 $(TEST5_BIN): $(TEST5_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t5.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t5.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST5_SRC)) /tmp/vv_simd_t5.o /tmp/vv_decoder_t5.o $(LDFLAGS) -o $(TEST5_BIN)
-	@rm -f /tmp/vv_simd_t5.o /tmp/vv_decoder_t5.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t5.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t5.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST5_SRC)) build_obj/vv_simd_t5.o build_obj/vv_decoder_t5.o $(LDFLAGS) -o $(TEST5_BIN)
+	@rm -f build_obj/vv_simd_t5.o build_obj/vv_decoder_t5.o
 
 $(TEST6_BIN): $(TEST6_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t6.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t6.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST6_SRC)) /tmp/vv_simd_t6.o /tmp/vv_decoder_t6.o $(LDFLAGS) -o $(TEST6_BIN)
-	@rm -f /tmp/vv_simd_t6.o /tmp/vv_decoder_t6.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t6.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t6.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST6_SRC)) build_obj/vv_simd_t6.o build_obj/vv_decoder_t6.o $(LDFLAGS) -o $(TEST6_BIN)
+	@rm -f build_obj/vv_simd_t6.o build_obj/vv_decoder_t6.o
 
 $(TEST7_BIN): $(TEST7_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t7.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t7.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST7_SRC)) /tmp/vv_simd_t7.o /tmp/vv_decoder_t7.o $(LDFLAGS) -o $(TEST7_BIN)
-	@rm -f /tmp/vv_simd_t7.o /tmp/vv_decoder_t7.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t7.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t7.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST7_SRC)) build_obj/vv_simd_t7.o build_obj/vv_decoder_t7.o $(LDFLAGS) -o $(TEST7_BIN)
+	@rm -f build_obj/vv_simd_t7.o build_obj/vv_decoder_t7.o
 
 $(TEST8_BIN): $(TEST8_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t8.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t8.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST8_SRC)) /tmp/vv_simd_t8.o /tmp/vv_decoder_t8.o $(LDFLAGS) -o $(TEST8_BIN)
-	@rm -f /tmp/vv_simd_t8.o /tmp/vv_decoder_t8.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t8.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t8.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST8_SRC)) build_obj/vv_simd_t8.o build_obj/vv_decoder_t8.o $(LDFLAGS) -o $(TEST8_BIN)
+	@rm -f build_obj/vv_simd_t8.o build_obj/vv_decoder_t8.o
 
 $(TEST9_BIN): $(TEST9_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t9.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t9.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST9_SRC)) /tmp/vv_simd_t9.o /tmp/vv_decoder_t9.o $(LDFLAGS) -o $(TEST9_BIN)
-	@rm -f /tmp/vv_simd_t9.o /tmp/vv_decoder_t9.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t9.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t9.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST9_SRC)) build_obj/vv_simd_t9.o build_obj/vv_decoder_t9.o $(LDFLAGS) -o $(TEST9_BIN)
+	@rm -f build_obj/vv_simd_t9.o build_obj/vv_decoder_t9.o
 
 $(TEST10_BIN): $(TEST10_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t10.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t10.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST10_SRC)) /tmp/vv_simd_t10.o /tmp/vv_decoder_t10.o $(LDFLAGS) -o $(TEST10_BIN)
-	@rm -f /tmp/vv_simd_t10.o /tmp/vv_decoder_t10.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t10.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t10.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST10_SRC)) build_obj/vv_simd_t10.o build_obj/vv_decoder_t10.o $(LDFLAGS) -o $(TEST10_BIN)
+	@rm -f build_obj/vv_simd_t10.o build_obj/vv_decoder_t10.o
 
 $(TEST11_BIN): $(TEST11_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t11.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t11.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST11_SRC)) /tmp/vv_simd_t11.o /tmp/vv_decoder_t11.o $(LDFLAGS) -o $(TEST11_BIN)
-	@rm -f /tmp/vv_simd_t11.o /tmp/vv_decoder_t11.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t11.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t11.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST11_SRC)) build_obj/vv_simd_t11.o build_obj/vv_decoder_t11.o $(LDFLAGS) -o $(TEST11_BIN)
+	@rm -f build_obj/vv_simd_t11.o build_obj/vv_decoder_t11.o
 
 $(TEST12_BIN): $(TEST12_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t12.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t12.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST12_SRC)) /tmp/vv_simd_t12.o /tmp/vv_decoder_t12.o $(LDFLAGS) -o $(TEST12_BIN)
-	@rm -f /tmp/vv_simd_t12.o /tmp/vv_decoder_t12.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t12.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t12.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST12_SRC)) build_obj/vv_simd_t12.o build_obj/vv_decoder_t12.o $(LDFLAGS) -o $(TEST12_BIN)
+	@rm -f build_obj/vv_simd_t12.o build_obj/vv_decoder_t12.o
 
 $(TEST13_BIN): $(TEST13_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t13.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t13.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST13_SRC)) /tmp/vv_simd_t13.o /tmp/vv_decoder_t13.o $(LDFLAGS) -o $(TEST13_BIN)
-	@rm -f /tmp/vv_simd_t13.o /tmp/vv_decoder_t13.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t13.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t13.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST13_SRC)) build_obj/vv_simd_t13.o build_obj/vv_decoder_t13.o $(LDFLAGS) -o $(TEST13_BIN)
+	@rm -f build_obj/vv_simd_t13.o build_obj/vv_decoder_t13.o
 
 $(TEST14_BIN): $(TEST14_SRC)
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o /tmp/vv_simd_t14.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o /tmp/vv_decoder_t14.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST14_SRC)) /tmp/vv_simd_t14.o /tmp/vv_decoder_t14.o $(LDFLAGS) -o $(TEST14_BIN)
-	@rm -f /tmp/vv_simd_t14.o /tmp/vv_decoder_t14.o
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t14.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t14.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST14_SRC)) build_obj/vv_simd_t14.o build_obj/vv_decoder_t14.o $(LDFLAGS) -o $(TEST14_BIN)
+	@rm -f build_obj/vv_simd_t14.o build_obj/vv_decoder_t14.o
 
-test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TARGET)
+$(TEST15_BIN): $(TEST15_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t15.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t15.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST15_SRC)) build_obj/vv_simd_t15.o build_obj/vv_decoder_t15.o $(LDFLAGS) -o $(TEST15_BIN)
+	@rm -f build_obj/vv_simd_t15.o build_obj/vv_decoder_t15.o
+
+$(TEST16_BIN): $(TEST16_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t16.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t16.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST16_SRC)) build_obj/vv_simd_t16.o build_obj/vv_decoder_t16.o $(LDFLAGS) -o $(TEST16_BIN)
+	@rm -f build_obj/vv_simd_t16.o build_obj/vv_decoder_t16.o
+
+$(TEST17_BIN): $(TEST17_SRC)
+	$(CC) $(CFLAGS) $(TEST17_SRC) $(LDFLAGS) -o $(TEST17_BIN)
+
+$(TEST18_BIN): $(TEST18_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t18.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t18.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST18_SRC)) build_obj/vv_simd_t18.o build_obj/vv_decoder_t18.o $(LDFLAGS) -o $(TEST18_BIN)
+
+$(TEST19_BIN): $(TEST19_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t19.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t19.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST19_SRC)) build_obj/vv_simd_t19.o build_obj/vv_decoder_t19.o $(LDFLAGS) -o $(TEST19_BIN)
+
+test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TARGET)
 	./$(TEST1_BIN)
 	./$(TEST2_BIN)
 	./$(TEST3_BIN)
@@ -192,6 +255,11 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST12_BIN)
 	./$(TEST13_BIN)
 	./$(TEST14_BIN)
+	./$(TEST15_BIN)
+	./$(TEST16_BIN)
+	./$(TEST17_BIN)
+	./$(TEST18_BIN)
+	./$(TEST19_BIN)
 	@if command -v python3 >/dev/null 2>&1 ; then \
 		echo "" ; \
 		echo "Python reference decoder self-test (validates FORMAT.md decode side):" ; \
@@ -276,11 +344,12 @@ clean:
 amalg:
 	@mkdir -p build
 	@echo "/* VaptVupt amalgamation — single-file build for Zupt */" > build/vaptvupt.h
-	@echo "/* SPDX-License-Identifier: GPL-2.0-or-later */" >> build/vaptvupt.h
+	@echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> build/vaptvupt.h
 	@for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h; do \
 		grep -v '#include "' $$f >> build/vaptvupt.h; \
 	done
 	@echo "/* VaptVupt amalgamation — single-file build */" > build/vaptvupt.c
+	@echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> build/vaptvupt.c
 	@echo '#include "vaptvupt.h"' >> build/vaptvupt.c
 	@for f in src/vv_xxh64.c src/vv_simd.c src/vv_huffman.c src/vv_ans.c src/vv_encoder.c src/vv_decoder.c src/vaptvupt_api.c; do \
 		echo "" >> build/vaptvupt.c; \
@@ -288,3 +357,46 @@ amalg:
 		grep -v '#include "' $$f >> build/vaptvupt.c; \
 	done
 	@echo "Amalgamation: build/vaptvupt.c + build/vaptvupt.h"
+
+# ─────────────────────────────────────────────────────────────────
+# amalg-verify: fail if build/vaptvupt.{c,h} differ from a fresh
+# regeneration. Catches the Sprint 114 drift class where security
+# fixes land in src/ but the Zupt-facing amalgamation goes stale.
+#
+# Usage: `make amalg-verify` — exits 0 if amalgamation is current,
+# non-zero (with diff output) otherwise.
+#
+# Generates the fresh copy in a tmp directory so the working tree's
+# build/ is never modified by the check itself.
+# ─────────────────────────────────────────────────────────────────
+amalg-verify:
+	@tmpdir=$$(mktemp -d) && \
+	mkdir -p $$tmpdir/build && \
+	echo "/* VaptVupt amalgamation — single-file build for Zupt */" > $$tmpdir/build/vaptvupt.h && \
+	echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> $$tmpdir/build/vaptvupt.h && \
+	for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h; do \
+		grep -v '#include "' $$f >> $$tmpdir/build/vaptvupt.h; \
+	done && \
+	echo "/* VaptVupt amalgamation — single-file build */" > $$tmpdir/build/vaptvupt.c && \
+	echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> $$tmpdir/build/vaptvupt.c && \
+	echo '#include "vaptvupt.h"' >> $$tmpdir/build/vaptvupt.c && \
+	for f in src/vv_xxh64.c src/vv_simd.c src/vv_huffman.c src/vv_ans.c src/vv_encoder.c src/vv_decoder.c src/vaptvupt_api.c; do \
+		echo "" >> $$tmpdir/build/vaptvupt.c; \
+		echo "/* ── $$f ── */" >> $$tmpdir/build/vaptvupt.c; \
+		grep -v '#include "' $$f >> $$tmpdir/build/vaptvupt.c; \
+	done && \
+	if ! diff -q $$tmpdir/build/vaptvupt.h build/vaptvupt.h >/dev/null 2>&1; then \
+		echo "✗ build/vaptvupt.h is STALE — re-run 'make amalg'"; \
+		diff -u build/vaptvupt.h $$tmpdir/build/vaptvupt.h | head -30; \
+		rm -rf $$tmpdir; exit 1; \
+	fi && \
+	if ! diff -q $$tmpdir/build/vaptvupt.c build/vaptvupt.c >/dev/null 2>&1; then \
+		echo "✗ build/vaptvupt.c is STALE — re-run 'make amalg'"; \
+		echo "  (this is the Zupt-facing amalgamation; staleness can"; \
+		echo "   ship security fixes from src/ but not to Zupt builds)"; \
+		diff -u build/vaptvupt.c $$tmpdir/build/vaptvupt.c | head -30; \
+		rm -rf $$tmpdir; exit 1; \
+	fi && \
+	rm -rf $$tmpdir && \
+	echo "✓ build/vaptvupt.{c,h} are in sync with src/"
+

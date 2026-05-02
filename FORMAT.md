@@ -170,14 +170,15 @@ selecting the entropy sub-format:
 | 'I'  | 0x49 | ANS4      | tANS 4-way interleaved over literals          |
 | 'C'  | 0x43 | CTX       | tANS order-1 context model over literals      |
 | 'S'  | 0x53 | SEQ       | Full sequence coding (lits + ML + OF + LL)    |
+| 'T'  | 0x54 | SEQ_V2    | Like S, with min_match=3 (v2.33.0+)           |
 
 **Note on encoder selection in current C reference (v2.x)**: The
-modern encoder produces only `'S'` (SEQ) ENTROPY blocks for inputs
-that warrant entropy coding. Tags `'H'`, `'A'`, `'I'`, `'C'` are
-**legacy from earlier format versions** (v0.3 through v0.7) and
-remain only for decoder backward-compat with files produced by
-those versions. A new decoder MAY choose to support only `'S'` and
-the non-entropy block types for full compatibility with current
+modern encoder produces only `'S'`/`'T'` (SEQ/SEQ_V2) ENTROPY blocks
+for inputs that warrant entropy coding. Tags `'H'`, `'A'`, `'I'`,
+`'C'` are **legacy from earlier format versions** (v0.3 through v0.7)
+and remain only for decoder backward-compat with files produced by
+those versions. A new decoder MAY choose to support only `'S'`/`'T'`
+and the non-entropy block types for full compatibility with current
 encoder output, leaving the legacy tags as a "decode-old-files"
 extension.
 
@@ -205,6 +206,62 @@ streams. See `src/vv_ans.c::vva_decode_sequences` for the exact
 parsing; details are out of scope for this document because the
 SEQ format has its own internal structure (ANS table headers,
 state init, four interleaved bitstreams).
+
+#### 3.4.1 SEQ Block Literal Section (`lit_fmt`)
+
+Within a SEQ block, the literal data section is preceded by a
+**single-byte format selector** `lit_fmt` that determines how the
+literals are encoded:
+
+| `lit_fmt` | Name     | Encoding              | Min count | Decoder version |
+|-----------|----------|-----------------------|-----------|-----------------|
+| 0         | RAW      | Uncompressed bytes    | any       | v2.0.0          |
+| 1         | ANS4     | tANS 4-way interleaved | any       | v2.0.0          |
+| 2         | ANS1     | tANS single-stream    | any       | v2.0.0          |
+| 3         | HUFFMAN  | Single-stream Huffman | any       | v2.46.0         |
+| 4         | HUFFMAN4 | 4-stream interleaved Huffman | ≥1024 | **v2.47.0**     |
+
+The encoder selects the format that produces the smallest output,
+with one exception: `lit_fmt = 4` is preferred over `lit_fmt = 3`
+when both are viable and within 32 bytes of each other, because
+`lit_fmt = 4` decodes 1.5× faster via instruction-level parallelism
+across the 4 independent streams.
+
+Wire format for `lit_fmt = 4`:
+
+```
++----------------------+-------------+-------------+-------------+
+| Huffman code-length  | s1 (3 LE)   | s2 (3 LE)   | s3 (3 LE)   |
+| header (existing)    | stream1 sz  | stream2 sz  | stream3 sz  |
++----------------------+-------------+-------------+-------------+
+| stream0 bitstream | stream1 bitstream | stream2 | stream3      |
++----------------------+--------------------+---------+----------+
+```
+
+- The Huffman code-length header is the same format as `lit_fmt = 3`.
+  It encodes a single shared Huffman code table used by all 4 streams.
+- The 9-byte stream-size header gives the byte length of streams 1, 2,
+  and 3. Stream 0's size is implicit: `total_lit_payload - 9 - hdr_sz
+  - s1 - s2 - s3`.
+- Each stream is byte-aligned at its start. Stream contents are
+  LSB-first bit-reversed canonical Huffman codes (same encoding as
+  `lit_fmt = 3`).
+- Symbols are distributed round-robin: stream `s` encodes symbols at
+  source indices `s, s+4, s+8, ...`. The decoder interleaves them
+  back into the output by reading one symbol from each stream in
+  turn (`stream0[i], stream1[i], stream2[i], stream3[i], ...`).
+
+Decoder implementation: `src/vv_huffman.c::vvh_decode4`. The
+decoder runs 4 independent bit-readers using a single shared decode
+table. The hot loop performs 4 lookups per iteration with no
+inter-stream data dependencies, allowing modern OoO CPUs to pipeline
+them for ~1.5× decode speedup over single-stream Huffman.
+
+**Backward compatibility**: encoders may suppress `lit_fmt = 4` via
+the `vv_options_t::compat_v246_5_decoder` flag, producing output
+readable by v2.46.5 and older decoders. With the flag set, the
+encode race excludes `lit_fmt = 4` and the output uses only
+`lit_fmt ∈ {0, 1, 2, 3}`.
 
 ---
 

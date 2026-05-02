@@ -5,27 +5,76 @@ C11, zero runtime dependencies, single-file amalgamation. Produces an
 open wire format ([FORMAT.md](FORMAT.md)) stable since v1.0.0, with
 byte-exact reference decoders in Python and JavaScript.
 
-**Current version: v2.46.0.** 6,032+ tests + 5,200-case differential
-fuzzer. Production-ready for Zupt 2.1.6 integration — see
-[ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md). Three Silesia fixtures
-(fx_json, x-ray, sao) now beat zstd-3 on ratio.
+**Current version: v2.48.2.** 19 test binaries (~370 cases) + 4
+permanent libFuzzer harnesses (~145,000 cumulative sanitized
+executions across 4 attack surfaces, 0 crashes) + 13 cumulative
+defects fixed across the audit campaign. Production-ready for Zupt 2.1.7
+integration — see [ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md).
 
-## Headline Numbers
+**Documentation:**
+- [README.md](README.md) — this file (start here)
+- [FORMAT.md](FORMAT.md) — wire-format specification (stable since v1.0.0)
+- [PERFORMANCE.md](PERFORMANCE.md) — measured decode/encode/ratio numbers vs zstd-3, lz4, gzip-9
+- [SECURITY.md](SECURITY.md) — security posture and threat model
+- [FORMAL_AUDIT.md](FORMAL_AUDIT.md) — formal audit reference: verification matrix, defects fixed, reproduction steps
+- [ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md) — integration guide for Zupt 2.2.2
+- [CHANGELOG.md](CHANGELOG.md) — per-release change log
+
+## Headline numbers — v2.48.1 vs zstd-3 (Silesia + fixture suite)
+
+| Axis | Result |
+|---|---|
+| **Aggregate ratio** | **−1.07% vs zstd-3** (vv wins; was +1.2% behind in v2.47.x) |
+| **Per-fixture ratio** | **4 of 8 fixtures beat zstd-3** (fx_text by 6.9%, fx_json by 2.5%, sao by 2.5%, x-ray by 3.4%) |
+| **Decode throughput** | **1.27× faster than zstd-3** in aggregate; wins on 7 of 8 fixtures |
+| **Random-data decode** | **26,773 MB/s** with `--fast` — 3.7× zstd-19, 1.5× lz4-9 |
+| **Embeddability** | 2-file amalgamation (`build/vaptvupt.c` + `build/vaptvupt.h`); zero deps |
+
+The remaining per-fixture gaps (fx_source +5.78%, dickens +4.07%,
+bash +1.59%, xml +0.61%) are all narrower than v2.47.x and the
+trajectory is open. See [CHANGELOG.md](CHANGELOG.md) for the full
+ratio trajectory and Sprint 120/121 measurements.
+
+## Audit Status (v2.48.1)
+
+| Check | Status |
+|---|---|
+| cppcheck | ✓ 0 issues |
+| clang scan-build | ✓ 0 bugs |
+| GCC strict warnings (`-Wpedantic -Wshadow -Wcast-qual` + 9 more) | ✓ 0 hits |
+| **clang `-fsanitize=integer`** (strict UBSan superset) | ✓ **0 errors** (was 92 false positives, fixed in v2.47.10) |
+| UBSan / ASan / LSan across 1,000+ adversarial fuzz cases | ✓ clean |
+| Cumulative libFuzzer (4 surfaces) | ✓ ~145,000 runs, 0 crashes |
+| 12 saved DoS reproducer payloads | ✓ <60ms each |
+| Allocation-fault injection (250+ trials) | ✓ 0 crashes / UB / leaks |
+| ThreadSanitizer (multi-thread encode + decode) | ✓ clean |
+| **Memory hygiene** (`vv_secure_zero` on all encoder destroy paths) | ✓ shipped v2.47.10 |
+| Encoder ASan/UBSan production trials | ✓ 24 fixture×mode runs, 0 errors |
+| API contract checks | ✓ 17/17 passing |
+| 4-stream Huffman unit tests | ✓ 21/21 passing |
+| `make amalg-verify` (drift detection) | ✓ in sync |
+| Wire-format compatibility | ✓ encoder-byte-different but decoder-compatible across v2.47.x → v2.48.x |
+
+See [FORMAL_AUDIT.md](FORMAL_AUDIT.md) for the verification matrix and
+[SECURITY.md](SECURITY.md) for the threat model.
+
+## Headline Capabilities
 
 - **Random-data decode: 26,773 MB/s** with `--fast` —
   **3.7× zstd-19, 1.5× lz4-9**. The signature path for AEAD-wrapped
-  archives.
+  archives where the codec must decode noise-shaped ciphertext at
+  network-class throughput.
 - **Synthetic binary ratio: 1,149×** — 7× better than gzip-9, 6×
   better than lz4-9 on pattern-rich payloads.
 - **Synthetic repeat ratio: 7,367×** — 18× better than gzip-9.
-- **JSON ratio: 5.10×** — beats both gzip-9 and zstd-3.
+- **JSON ratio: 5.10×** — beats gzip-9, zstd-3, and lz4 across the board.
 - **Real binary ratio** (libc.so.6, bash, python3): within
-  **2-3% of zstd-3** as of v2.46.0's Huffman-in-SEQ literal coding.
+  **1.6% of zstd-3** as of v2.48.1's cost-aware lazy parser.
 - **Embeddability**: 2 files (`build/vaptvupt.c` + `build/vaptvupt.h`).
   Drop in and ship.
 
-See [COMPETITIVE.md](COMPETITIVE.md) for the full measurement matrix
-against zstd, lz4, and gzip across ten fixture classes.
+See [PERFORMANCE.md](PERFORMANCE.md) for the full measurement matrix
+against zstd, lz4, and gzip across the fixture suite.
 
 ## At a Glance
 
@@ -39,46 +88,60 @@ against zstd, lz4, and gzip across ten fixture classes.
 | Streaming API | Encode + decode |
 | Multi-frame archives | Native support |
 | Security invariants | 14 numbered, all tested and guarded |
+| Memory hygiene | Encoder buffers scrubbed on destroy (since v2.47.10) |
+| Hardened-build compat | `-fsanitize=integer` clean (since v2.47.10) |
 | Tests | **6,032+** standard; **8,732+** with full fuzzer run |
 | Reference impls | C (production) + Python + JavaScript |
 | License | GPL-3.0-or-later |
 
-## Performance — v2.46.0 baseline
+## Performance — v2.48.1
 
-Measured on a 2.1 GHz x86_64 container, library-level (not CLI),
-best-of-30 warmed runs. Bold marks where VaptVupt leads its class.
+All numbers below validated **twice** with byte-identical reproduction
+on a 2.1 GHz x86_64 container, library-level (not CLI), best-of-5
+warmed runs.
 
-### Decode throughput (MB/s, higher is better)
+### Compression ratio vs zstd-3 (vv-extreme, 8-fixture suite)
+
+| Fixture | raw | vv-extreme | zstd-3 | Δ |
+|---|---:|---:|---:|:---:|
+| fx_text | 761,125 | **128,238** | 137,790 | **−6.93%** ✓ |
+| fx_json | 1,024,000 | **198,213** | 203,276 | **−2.49%** ✓ |
+| fx_source | 1,048,576 | 206,350 | 195,078 | +5.78% |
+| bash | 1,446,024 | 738,698 | 727,132 | +1.59% |
+| dickens | 10,192,446 | 3,818,656 | 3,669,252 | +4.07% |
+| xml | 5,345,280 | 643,067 | 639,138 | +0.61% |
+| sao | 7,251,944 | **5,410,425** | 5,551,158 | **−2.54%** ✓ |
+| x-ray | 8,474,240 | **5,881,236** | 6,086,279 | **−3.37%** ✓ |
+| **Aggregate** | 35,543,635 | **17,024,883** | 17,209,103 | **−1.07%** ✓ |
+
+**vv-extreme beats zstd-3 on aggregate ratio by 1.07%** and beats it
+per-fixture on 4 of 8 fixtures. The remaining gaps (fx_source, bash,
+dickens, xml) have all narrowed substantially since v2.47.x.
+
+### Decode throughput
+
+5×-warmed runs, matched fixtures, single-threaded:
+
+| Codec | Decode throughput (aggregate, 8 fixtures) |
+|---|---|
+| **VaptVupt v2.48.1** | **151 MB/s** |
+| zstd-3 | 119 MB/s |
+| **Speedup** | **1.27×** |
+
+Decode-speed goal is met on **7 of 8 fixtures**.
+
+### Random-data decode (signature workload for AEAD-wrapped archives)
 
 | Content | **VaptVupt `--fast`** | zstd-19 | lz4-9 | gzip-9 |
-|---|---|---|---|---|
-| Random (AEAD ciphertext) | **26,773** | 7,172 | 17,594 | 412 |
-| Binary (pattern-rich) | **14,414** | 8,098 | 19,933 | 598 |
-| Synthetic repeat | **2,029** | 1,786 | 2,278 | 1,140 |
-| JSON / structured | 569 | 1,298 | 2,891 | 471 |
-| Prose text | 569 | 1,290 | 3,144 | 488 |
+|---|---:|---:|---:|---:|
+| Random (AEAD ciphertext) | **26,773 MB/s** | 7,172 | 17,594 | 412 |
+| Binary (pattern-rich) | **14,414 MB/s** | 8,098 | 19,933 | 598 |
+| Synthetic repeat | **2,029 MB/s** | 1,786 | 2,278 | 1,140 |
 
-Random and pattern-rich binary decode are the dominant paths for
-secure backup workloads. VaptVupt leads both decisively.
+For full per-fixture decode/encode tables and the v2.47.x → v2.48.x
+ratio trajectory, see [PERFORMANCE.md](PERFORMANCE.md).
 
-### Compression ratio (input / compressed, extreme mode)
 
-Bold marks where VaptVupt meets or beats gzip-9.
-
-| Fixture | **VaptVupt v2** | gzip-9 | zstd-19 | lz4-9 |
-|---|---|---|---|---|
-| synth-json | **4.80×** | 4.65× | 6.68× | 3.46× |
-| synth-binary | **1,149×** | 157× | 2,398× | 194× |
-| synth-repeat | **7,367×** | 403× | 8,463× | 252× |
-| real-bash | 1.92× | 2.09× | 2.32× | 1.83× |
-| real-ls | 2.11× | 2.30× | 2.55× | 2.00× |
-| real-libc.so.6 | 2.09× | 2.23× | 2.56× | 1.94× |
-| real-python3 | 2.64× | 2.84× | 3.46× | 2.34× |
-
-**Format v2 binary gains** (opt in via `--format-v2` or
-`opts.format_v2 = 1`): v1-to-v2 ratio improvements of 2-6% across
-all four real ELF binaries, closing the gap with gzip-9 from
-10-14% down to **4-7%**.
 
 ## The `--fast` Flag — Signature Feature
 
@@ -246,41 +309,65 @@ cross-validation suite:
 
 **Python** (`reference/`):
 - `vv_decoder.py` — decodes RAW/RLE/COMPRESSED blocks, ENTROPY 'A'
-  (single-stream tANS) blocks, ENTROPY 'S' (SEQ — the tag produced
-  by the current encoder) blocks, multi-frame streams, and XXH64
-  footer verification. Legacy ENTROPY tags 'H'/'I'/'C' (from
-  format versions v0.3-v0.7, never emitted by modern encoders)
-  raise `NotImplementedError`.
+  (single-stream tANS) blocks, ENTROPY 'S' (SEQ) blocks **with
+  `lit_fmt` in {0, 1, 2, 3}**, multi-frame streams, and XXH64 footer
+  verification. Legacy ENTROPY tags 'H'/'I'/'C' (from format
+  versions v0.3-v0.7) raise `NotImplementedError`.
 - `vv_encoder.py` — produces RAW+RLE frames. Output is wire-
   compatible with the C decoder.
 - `vv_ans.py` — tANS primitives plus `vva_decode_sequences` for
   the 'S' tag (~280 lines).
-
-Both the Python and JavaScript reference decoders now cover
-**100% of output produced by the current encoder** — any `.vv`
-file from v1.0+ decodes identically in C, Python, and JavaScript.
+- `vv_huffman.py` — single-stream Huffman decoder (`lit_fmt = 3`),
+  added Sprint 116. ~250 lines, mirrors `src/vv_huffman.c`.
+- `test_lit_fmt_3.py` — regression test: round-trips 10 fixtures
+  through C-encoded `lit_fmt = 3` frames and the new Python decoder.
 
 **JavaScript** (`reference/`):
 - `vv_decoder.js` — pure-JS decoder targeting Node.js v14+ and
   modern browsers (requires `BigInt` + `Uint8Array`). Covers
-  RAW/RLE/COMPRESSED, multi-frame, XXH64 footer, **and the 'S'
-  (VV_ENTROPY_SEQ) tag** — which means it decodes 100% of output
-  produced by the current encoder. Legacy ENTROPY tags H/A/I/C
-  (only emitted by format v0.3-v0.7) throw
+  RAW/RLE/COMPRESSED, multi-frame, XXH64 footer, and the 'S' tag
+  with **`lit_fmt` in {0, 1, 2, 3}**. Single-stream Huffman support
+  added Sprint 117. Legacy ENTROPY tags H/A/I/C throw
   `NotImplementedError`.
 
-  Primary use case: **browser-side reading of Zupt archives
-  without shipping a WebAssembly C build**. Any real-world
-  v1.0+ archive decodes natively in ~500 lines of JS.
+  Self-test (Node): `node reference/vv_decoder.test.js` — 16
+  pass, 0 fail, 1 skip. The skip is the 500KB mixed-content case
+  which produces `lit_fmt = 4` (still gap; see below).
 
-  Self-test (Node): `node reference/vv_decoder.test.js` — 14/14
-  pass, 0 skip. Includes a 100KB and 500KB case exercising
-  cross-block dict carry and the full 'S' tag state machine.
+- `test_lit_fmt_3.js` — regression test mirroring the Python one:
+  round-trips the same 10 fixtures through C-encoded `lit_fmt = 3`
+  frames and the new JS decoder.
 
-`make test` round-trips Python-encoded → C-decoded, C-encoded →
-Python-decoded, AND C-encoded → JS-decoded. The 27-case negative
-corpus proves both Python and C decoders reject malformed input
-identically.
+> **⚠️ Reference decoder coverage status (as of v2.47.9):**
+> Both the Python and JavaScript references now support
+> `lit_fmt = 3` (single-stream Huffman, added Sprint 116/117).
+> Neither yet supports `lit_fmt = 4` (4-stream Huffman):
+>
+> | `lit_fmt` | Encoding | Added in | Python ref | JS ref |
+> |---|---|---|---|---|
+> | 0 | RAW | v2.0.0 | ✓ | ✓ |
+> | 1 | ANS4 | v2.0.0 | ✓ | ✓ |
+> | 2 | ANS1 | v2.0.0 | ✓ | ✓ |
+> | 3 | HUFFMAN | v2.46.0 | ✓ (Sprint 116) | ✓ (Sprint 117) |
+> | 4 | HUFFMAN4 | v2.47.0 | ✗ | ✗ |
+>
+> The C encoder defaults to `lit_fmt = 4` for ≥1024 literals, so
+> both reference decoders still raise on typical large output. To
+> force `lit_fmt = 3` for cross-validation, use `tests/encode_compat`
+> (sets `compat_v246_5_decoder = 1`).
+>
+> Porting `lit_fmt = 4` to either reference would be a future
+> improvement. The 4-stream variant is meaningfully more involved
+> than single-stream (4 independent bit-readers, shared decode table,
+> 9-byte stream-size header, byte-alignment between streams).
+>
+> The C decoder at `src/vv_decoder.c` remains the canonical
+> implementation for any v2.47.0+ archive.
+
+`make test` round-trips Python-encoded → C-decoded and C-encoded
+RAW/RLE+'A' → Python-decoded. The 27-case negative corpus proves
+both Python and C decoders reject malformed input identically
+(within the lit_fmt range Python supports).
 
 Format is **stable since v1.0.0**. Future format changes will bump
 the frame header version byte so older decoders reject newer files
@@ -343,6 +430,6 @@ Closing the remaining gap on small-file high-compression workloads
 requires structural parser improvements (optimal parse) — future
 sprint work.
 
-See [COMPETITIVE.md](COMPETITIVE.md) for the complete measurement
+See [PERFORMANCE.md](PERFORMANCE.md) for the complete measurement
 matrix and [ZUPT_INTEGRATION.md](ZUPT_INTEGRATION.md) for the
 production integration guide.
