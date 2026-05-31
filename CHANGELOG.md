@@ -2,6 +2,29 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.53.4-docs — Documentation consolidation (codec unchanged)
+
+Documentation-only pass. The codec, wire format, and binary are
+byte-identical to v2.53.4 (build md5 unchanged); `git diff v2.53.4 -- src
+include` is empty except for two comments that referenced removed files.
+
+- Removed 17 internal and transient documents: the per-sprint notes
+  (`docs/SPRINT_*`), the ratio/speed program plans and prompts
+  (`docs/RATIO_PROGRAM*`, `docs/SPEED_PROGRAM*`, `docs/PROGRAM_PROMPT.md`),
+  the duplicate `docs/PERFORMANCE.md` and root `PERFORMANCE.md`, the program
+  charter, and `docs/speed_program_bench.py`. The `docs/` directory is gone.
+- The tracked Markdown set is now eight files: `README.md`, `CHANGELOG.md`,
+  `FORMAT.md`, `SECURITY.md`, `FORMAL_AUDIT.md`, `ZUPT_INTEGRATION.md`,
+  `DEPLOY.md`, `bench/COMPARISON.md`.
+- Rewrote `README.md` against the current release: consolidated ratio and
+  throughput tables (vs gzip, zstd, lz4, xz), the `--bcj` and `-w` results,
+  build/use/format/testing sections, and the test inventory. Removed the
+  retracted-claims sections and stale version banners.
+- Regenerated `DEPLOY.md` for v2.53.4. Bumped the `FORMAL_AUDIT.md` header
+  to the audited version and removed an out-of-date third-party reference.
+- Fixed every dangling link and source comment that pointed to a removed
+  file so the tree is self-consistent.
+
 ## v2.53.4 — Lever L-BIN: opt-in x86 BCJ filter (binary ratio now beats gzip-9)
 
 A new opt-in, reversible **x86 BCJ branch filter** that closes the

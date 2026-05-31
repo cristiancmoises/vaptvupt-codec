@@ -396,7 +396,7 @@ fuzz-clean:
 # ─────────────────────────────────────────────────────────────────────
 # SPEED PROGRAM targets (Sprint 25, v2.49.0)
 # ─────────────────────────────────────────────────────────────────────
-# See docs/SPEED_PROGRAM.md for the multi-sprint plan.
+# Multi-sprint speed/ratio work is recorded in CHANGELOG.md.
 #
 # speed-baseline — produce the reproducible speed+ratio table
 #                  comparing vv -fast/-balanced/-extreme to

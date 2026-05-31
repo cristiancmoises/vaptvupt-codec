@@ -16,7 +16,7 @@ Requires:
     - zstd installed and in PATH
     - Silesia corpus extracted to /tmp/silesia/ (configurable via env)
 
-Output: prints the same per-fixture table as docs/SPRINT_25_PROFILE.md.
+Output: a per-fixture ratio/throughput table.
 """
 
 import argparse

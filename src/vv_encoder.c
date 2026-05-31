@@ -685,7 +685,7 @@ static int32_t chain_match(const matcher_t *m, const uint8_t *data,
  *   - the per-iteration unconditional prefetches,
  *   - the (always-false in fast mode) hash4 and hash3 fallback branches.
  * Measured fast-mode encode: +9-12% on dickens/xml/samba, with decode
- * and ratio unchanged (output is identical). See SPRINT_58_RESULT.md.
+ * and ratio unchanged (output is identical). The change is measured byte-identical (ratio gate +/- 0).
  *
  * A depth-1 (true lz4-style single-probe) and a depth-2/3 sweep were
  * measured and REJECTED: lowering the depth raises encode further but

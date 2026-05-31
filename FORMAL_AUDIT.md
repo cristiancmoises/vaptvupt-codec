@@ -1,15 +1,15 @@
 # VaptVupt Formal Audit Document
 
-**Document version**: 1.0 (Sprint 121)
-**Codebase audited**: v2.48.2
+**Document version**: 1.1
+**Codebase audited**: v2.53.4
 **License**: GPL-3.0-or-later
-**Intended deployment**: Embedded codec library inside Zupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
+**Intended deployment**: Embedded codec library inside the Zupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
 
 This document is the formal audit reference for VaptVupt. It specifies what has been verified, by which mechanism, against what threat model, with what limits. It is intended to satisfy the due-diligence requirements of:
 
 - Downstream library consumers integrating VaptVupt as a compression dependency
-- Security-conscious deployments wanting to verify the codec under hardened-build sanitizer regimes
-- Internal review processes at Anthropic and other downstream teams
+- Security-conscious deployments verifying the codec under hardened-build sanitizer regimes
+- Internal review processes at downstream teams
 - Independent third-party security auditors performing pre-integration review
 
 It is intentionally specific about what is **not** verified, to support honest risk assessment.

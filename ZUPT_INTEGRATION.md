@@ -11,7 +11,7 @@
 >
 > The performance numbers in this document remain accurate for the
 > specific subset they were measured on, but they should not be read
-> as full-corpus aggregates. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md)
+> as full-corpus aggregates. See [bench/COMPARISON.md](bench/COMPARISON.md)
 > for the honest full-Silesia measurement that supersedes the headline
 > claims below.
 >
