@@ -2,6 +2,53 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.53.1 — Decode-speed: drop redundant per-symbol fill-check in the ANS literal hot loop
+
+A byte-identical decode-speed optimization in the tANS literal decoder (the
+hot path for balanced and extreme modes). **Decode output is unchanged on
+every input** — only the decode loop got faster; the encoder and the
+on-wire bytes are untouched.
+
+### What changed
+
+The scalar 'S' and 4-way 'I' ANS literal decode loops each pre-fill the bit
+reader (`if (r.n < ANS_LOG) ans_br_fill(&r)`) before reading `e.nbits` bits.
+Since every symbol's `e.nbits ≤ ANS_LOG`, that pre-fill already guarantees
+`r.n ≥ e.nbits`, so the fill-check *inside* `ans_br_read()` was redundant on
+this path. The read is now inlined (mask / shift / decrement) without the
+redundant branch — one fewer conditional per decoded symbol. The inline is
+bit-for-bit identical to `ans_br_read()` (including the `nbits == 0` case:
+`a & ((1<<0)-1) == 0`, shifts/decrements by 0 are no-ops). The corrupt-input
+state-validity check (`state >= ANS_L`) on the 'S' path is preserved.
+
+### Measured speedup (in-process decode, best of 7, no IO/process overhead)
+
+```
+file       mode       before    after     gain
+dickens    balanced   308 MB/s  337 MB/s   +9.4%
+dickens    extreme    357 MB/s  371 MB/s   +3.9%
+xml        balanced   757 MB/s  776 MB/s   +2.5%
+xml        extreme    924 MB/s  930 MB/s   +0.6%
+```
+
+The win is largest in balanced mode (the literal-heavy common case), where
+the per-symbol branch is the largest share of the loop. The `fast` mode
+(raw LZ tokens, no ANS) is unaffected, as expected. This is the first step
+of a decode-speed program targeting the gap to zstd/lz4 measured in
+`bench/COMPARISON.md`.
+
+### Validation
+
+- Decode byte-identical to pristine on Silesia balanced + extreme (the ANS
+  path) across all tested fixtures.
+- Differential fuzzer (C↔Python) 5200/5200 consistent — strongest proof the
+  decode output is unchanged across all entropy paths.
+- 7,000–10,000 corrupt-input decode cases clean under ASan + UBSan (the
+  inline read preserves corrupt-input rejection; no OOB/UB).
+- Full `make test` green: 19/19 C suites, ratio gate passes (baseline
+  unchanged), safezone 55/55, DoS 12/12, harness + cli_window PASS.
+- `-Wall -Wextra -Werror` clean.
+
 ## v2.53.0 — `-w` / `--window`: user-selectable window log (long-range ratio win, opt-in)
 
 New CLI capability. Exposes the window log (already a public API field and

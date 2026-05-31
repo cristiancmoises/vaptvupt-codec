@@ -549,7 +549,14 @@ vva_error_t vva_decode(const uint8_t *src, size_t src_len,
         if (r.n < ANS_LOG) ans_br_fill(&r);
         vva_dec_entry_t e = dec[state];
         dst[i] = e.symbol;
-        uint32_t bits = ans_br_read(&r, e.nbits);
+        /* PERF: the fill above guarantees r.n >= ANS_LOG >= e.nbits, so the
+         * fill-check inside ans_br_read() is redundant here — read inline
+         * and skip it (one fewer branch per symbol). Byte-identical to
+         * ans_br_read(): same mask/shift/decrement. */
+        int nb = e.nbits;
+        uint32_t bits = (uint32_t)(r.a & (((uint64_t)1 << nb) - 1));
+        r.a >>= nb;
+        r.n -= nb;
         state = (uint32_t)e.baseline + bits;
         if (state >= (uint32_t)ANS_L) { free(dec); return VVA_ERR_CORRUPT; }
     }
@@ -775,18 +782,21 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
         dst[out_pos + 3] = e3.symbol;
         out_pos += 4;
 
-        /* 4 state updates — use results from lookups above */
+        /* 4 state updates — use results from lookups above.
+         * PERF: each fill above guarantees r[i].n >= ANS_LOG >= e.nbits,
+         * so ans_br_read's internal fill-check is redundant; inline the
+         * read (mask/shift/decrement) and skip it. Byte-identical. */
         if (r[0].n < ANS_LOG) ans_br_fill(&r[0]);
-        s[0] = (uint32_t)e0.baseline + ans_br_read(&r[0], e0.nbits);
+        { int nb=e0.nbits; uint32_t b=(uint32_t)(r[0].a & (((uint64_t)1<<nb)-1)); r[0].a>>=nb; r[0].n-=nb; s[0]=(uint32_t)e0.baseline+b; }
 
         if (r[1].n < ANS_LOG) ans_br_fill(&r[1]);
-        s[1] = (uint32_t)e1.baseline + ans_br_read(&r[1], e1.nbits);
+        { int nb=e1.nbits; uint32_t b=(uint32_t)(r[1].a & (((uint64_t)1<<nb)-1)); r[1].a>>=nb; r[1].n-=nb; s[1]=(uint32_t)e1.baseline+b; }
 
         if (r[2].n < ANS_LOG) ans_br_fill(&r[2]);
-        s[2] = (uint32_t)e2.baseline + ans_br_read(&r[2], e2.nbits);
+        { int nb=e2.nbits; uint32_t b=(uint32_t)(r[2].a & (((uint64_t)1<<nb)-1)); r[2].a>>=nb; r[2].n-=nb; s[2]=(uint32_t)e2.baseline+b; }
 
         if (r[3].n < ANS_LOG) ans_br_fill(&r[3]);
-        s[3] = (uint32_t)e3.baseline + ans_br_read(&r[3], e3.nbits);
+        { int nb=e3.nbits; uint32_t b=(uint32_t)(r[3].a & (((uint64_t)1<<nb)-1)); r[3].a>>=nb; r[3].n-=nb; s[3]=(uint32_t)e3.baseline+b; }
     }
 
     /* Scalar tail for remaining 0-3 symbols */
