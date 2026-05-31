@@ -2,6 +2,103 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.52.3 — Sprint 0 (NEXT PROGRAM housekeeping): baseline regen, gate green, known-violation docs
+
+Test-infrastructure, baseline, and documentation only. **Codec output is
+byte-identical to v2.52.2** in all three modes (the `make` binary md5
+remains `84108c8c79579b18e4244bcd8b8d2f4c`). No source change to the codec;
+this release makes `make test`'s ratio gate trustworthy again before the
+next feature program (dictionary support) begins.
+
+### 1. Regenerated `tests/bench_baseline.json` against the shipped codec
+
+The committed baseline was stale: the pristine v2.52.1 binary already
+failed it (12 deltas), so the gate gave no usable regression signal. The
+baseline now reflects the actual v2.52.2 codec. Deltas vs the old (stale)
+baseline — real codec drift accumulated across the RATIO/SPEED sprints
+since the baseline was last regenerated:
+
+```
+  improved (smaller):                 regressed (larger):
+    text-simple   ult/bal -697          csv          ult/bal +2265
+    text-simple   extreme -848          csv          extreme +1608
+    text-varied   ult/bal -716          json-mixed   ult/bal +1235
+    text-varied   extreme -722          json-mixed   extreme  +518
+    text-large    ult/bal -733          json-small   ult/bal  +398
+    text-large    extreme -1601         source-like  ult/bal   +22
+    json-small    extreme -174          source-like  extreme   +66
+                                        binary-pattern extreme +655
+```
+
+These are synthetic micro-fixtures; the real-corpus position is unchanged
+(balanced beats zstd-1 and extreme beats zstd-3 on Silesia, per the RATIO
+PROGRAM). The regression on csv/json synthetics is noted for the future
+balanced/extreme work; it is not a v2.52.3 change (it predates this
+release).
+
+### 2. Two KNOWN contract violations documented (extreme > balanced, synthetic-only)
+
+Against the fresh baseline, two synthetic fixtures violate the
+`extreme ≤ balanced` contract:
+
+```
+  binary-pattern: extreme 1507 > balanced  852  (+77%)
+  source-like:    extreme  883 > balanced  839  (+5%)
+```
+
+**Root cause (measured).** Both are highly self-similar synthetic inputs
+(`binary-pattern` is exactly periodic with period 2048; `source-like`
+repeats a C-function template 100×). On such inputs the extreme optimal
+parser (`compress_block_optimal`) underperforms the balanced lazy parser.
+Instrumented counts on `binary-pattern`:
+
+```
+  balanced (lazy):    253 matches,  618 literal bytes
+  extreme  (optimal): 440 matches, 1174 literal bytes  → ~2× both
+```
+
+The `LONG_MATCH = 512` short-circuit takes a maximal single match and
+jumps the DP cursor (`i = j-1`), inserting only boundary positions into
+the hash chains. The jumped-over interior leaves the chains sparse, so
+subsequent match searches find shorter, more fragmented matches; the flat
+cost model (`opt_lit_price`/`opt_match_price` constants) then emits ~2×
+the matches and literals of the lazy parser, which entropy-code worse than
+lazy's rep-chained long runs.
+
+**Scope — synthetic-only.** Verified `extreme ≤ balanced` holds on every
+tested real Silesia fixture (xml, ooffice, reymont, sao, x-ray, mr, osdb,
+dickens, samba — extreme is 3–18% smaller than balanced on each). The
+pathology does not affect real-world data; on the RATIO PROGRAM corpus
+extreme genuinely wins.
+
+**Deferred, not fixed here.** `compress_block_optimal` is the FROZEN
+output of the RATIO PROGRAM (extreme beats zstd-3 by +8.51% geomean on
+Silesia). Any fix changes the optimal parse and must be re-validated
+byte-for-byte across all 12 Silesia fixtures to protect that result —
+that is a dedicated extreme-parser-quality sprint, not Sprint 0
+housekeeping. The violations are therefore recorded as KNOWN in the
+baseline (the gate's documented mechanism); the gate now passes and will
+still catch any NEW violation or size regression. Candidate fixes for the
+future sprint: raise/condition `LONG_MATCH`, insert all interior positions
+in the jumped region, or improve rep-offset tracking through the
+short-circuit — each measured against the full Silesia extreme baseline.
+
+### 3. Fixed `make clean`
+
+`clean` removed only the first 10 test binaries (`TEST1..10`); binaries
+11–19 survived `make clean`. Now removes all 19. Verified: 19 binaries →
+0 after `make clean`.
+
+### Validation
+
+- Codec binary byte-identical to v2.52.2 (`84108c8c…`); no source change
+  to `src/`.
+- `make test`: all 19 C suites green; ratio gate **now passes** (2 KNOWN
+  violations documented, 0 NEW, 0 regressions); `test_dos_hang` 12/12 <
+  5 s; `test_safezone_adversarial` 55/55; differential fuzzer 5200/5200
+  consistent; negative-corpus 27/27.
+- `-Wall -Wextra -Werror` clean.
+
 ## v2.52.2 — Fast-mode encode +7-12% at byte-identical output (Sprint 58, SPEED PROGRAM)
 
 Second shipped sprint of the SPEED PROGRAM (Lever S3, fast-mode encode).
