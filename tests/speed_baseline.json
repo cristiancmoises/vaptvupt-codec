@@ -1,0 +1,56 @@
+{
+  "binary-1MB": {
+    "compressed_size": 891,
+    "input_size": 1024000,
+    "max_mbps": 1687.7,
+    "median_mbps": 1368.0,
+    "min_mbps": 1167.1,
+    "samples": 15,
+    "stdev_mbps": 120.80678315865735
+  },
+  "json-1MB": {
+    "compressed_size": 271430,
+    "input_size": 1501369,
+    "max_mbps": 484.2,
+    "median_mbps": 438.1,
+    "min_mbps": 21.4,
+    "samples": 15,
+    "stdev_mbps": 111.65629148673813
+  },
+  "random-1MB": {
+    "compressed_size": 1024032,
+    "input_size": 1024000,
+    "max_mbps": 1494.0,
+    "median_mbps": 1319.0,
+    "min_mbps": 1178.6,
+    "samples": 15,
+    "stdev_mbps": 87.6834637176464
+  },
+  "repeating-1MB": {
+    "compressed_size": 165,
+    "input_size": 1024000,
+    "max_mbps": 1187.1,
+    "median_mbps": 1106.0,
+    "min_mbps": 981.8,
+    "samples": 15,
+    "stdev_mbps": 69.47323088444793
+  },
+  "source-1MB": {
+    "compressed_size": 11092,
+    "input_size": 1024000,
+    "max_mbps": 1396.2,
+    "median_mbps": 1223.2,
+    "min_mbps": 1001.2,
+    "samples": 15,
+    "stdev_mbps": 94.58266074860505
+  },
+  "text-1MB": {
+    "compressed_size": 181725,
+    "input_size": 874337,
+    "max_mbps": 412.5,
+    "median_mbps": 363.0,
+    "min_mbps": 13.0,
+    "samples": 15,
+    "stdev_mbps": 97.4785339006931
+  }
+}

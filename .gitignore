@@ -1,0 +1,19 @@
+# Build artifacts
+/vaptvupt
+/build_obj/
+/build/
+*.o
+*.orig
+*.gcda
+*.gcno
+__pycache__/
+*.pyc
+
+# Top-level test binaries (note: Makefile `clean` only removes TEST1..10)
+/test_*
+
+# Top-level scratch compressed files — NOT tests/regression_inputs/*.vv
+/*.vv
+
+# PGO scratch
+/vv_pgo/

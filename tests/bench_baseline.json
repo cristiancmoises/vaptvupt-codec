@@ -1,0 +1,72 @@
+{
+  "binary-pattern": {
+    "balanced": 852,
+    "extreme": 852,
+    "gzip9": 1606,
+    "input_size": 100000,
+    "ultra_fast": 852
+  },
+  "csv": {
+    "balanced": 18191,
+    "extreme": 18208,
+    "gzip9": 19359,
+    "input_size": 67812,
+    "ultra_fast": 18191
+  },
+  "json-mixed": {
+    "balanced": 27433,
+    "extreme": 27447,
+    "gzip9": 27990,
+    "input_size": 118545,
+    "ultra_fast": 27433
+  },
+  "json-small": {
+    "balanced": 3755,
+    "extreme": 3916,
+    "gzip9": 5426,
+    "input_size": 49780,
+    "ultra_fast": 3755
+  },
+  "random": {
+    "balanced": 50032,
+    "extreme": 50032,
+    "gzip9": 50040,
+    "input_size": 50000,
+    "ultra_fast": 50032
+  },
+  "repeating": {
+    "balanced": 100,
+    "extreme": 100,
+    "gzip9": 94,
+    "input_size": 10000,
+    "ultra_fast": 100
+  },
+  "source-like": {
+    "balanced": 817,
+    "extreme": 817,
+    "gzip9": 976,
+    "input_size": 38490,
+    "ultra_fast": 817
+  },
+  "text-large": {
+    "balanced": 18998,
+    "extreme": 18680,
+    "gzip9": 14529,
+    "input_size": 74307,
+    "ultra_fast": 18998
+  },
+  "text-simple": {
+    "balanced": 12571,
+    "extreme": 12034,
+    "gzip9": 9116,
+    "input_size": 58558,
+    "ultra_fast": 12571
+  },
+  "text-varied": {
+    "balanced": 11117,
+    "extreme": 10315,
+    "gzip9": 7591,
+    "input_size": 55798,
+    "ultra_fast": 11117
+  }
+}

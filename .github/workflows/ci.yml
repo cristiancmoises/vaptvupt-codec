@@ -1,0 +1,185 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  # ─── Linux: GCC + Clang × Ubuntu / Arch / Fedora ─────────────────────
+  linux:
+    name: linux ${{ matrix.distro }} ${{ matrix.cc }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: ubuntu
+            container: ubuntu:24.04
+            cc: gcc
+            install: apt-get update && apt-get install -y --no-install-recommends gcc make python3 ca-certificates
+          - distro: ubuntu
+            container: ubuntu:24.04
+            cc: clang
+            install: apt-get update && apt-get install -y --no-install-recommends clang make python3 ca-certificates
+          - distro: arch
+            container: archlinux:latest
+            cc: gcc
+            install: pacman -Sy --noconfirm gcc make python
+          - distro: fedora
+            container: fedora:latest
+            cc: gcc
+            install: dnf install -y gcc make python3
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - name: Install toolchain
+        run: ${{ matrix.install }}
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build (CC=${{ matrix.cc }}, -Werror default)
+        env:
+          CC: ${{ matrix.cc }}
+        run: make
+      - name: Run tests
+        run: make test
+      - name: Build perf target (march=native)
+        env:
+          CC: ${{ matrix.cc }}
+        run: make clean && make perf
+      - name: Run tests against perf binary
+        run: make test
+
+  # ─── Sanitizers: ASan + UBSan ───────────────────────────────────────
+  sanitizers:
+    name: sanitizers (ASan + UBSan)
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Install toolchain
+        run: apt-get update && apt-get install -y --no-install-recommends clang make python3 ca-certificates
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build with ASan + UBSan
+        env:
+          CC: clang
+          CFLAGS: "-Wall -Wextra -Werror -Wno-unused-parameter -O1 -g -std=c11 -Iinclude -D_POSIX_C_SOURCE=199309L -fsanitize=address,undefined -fno-omit-frame-pointer"
+          LDFLAGS: "-fsanitize=address,undefined"
+        run: make
+      - name: Run tests under sanitizers
+        env:
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+          ASAN_OPTIONS: "halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
+        run: make test
+
+  # ─── Wire-format regression gate ────────────────────────────────────
+  # The compressed output for the Silesia fixtures is checked against
+  # known-good sizes. Any drift means an encoder change that affects
+  # the wire format — the program rejects this without an explicit
+  # version bump + format note in CHANGELOG.
+  wire-format:
+    name: wire format frozen
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Install toolchain
+        run: apt-get update && apt-get install -y --no-install-recommends gcc make python3 curl ca-certificates xz-utils
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Download Silesia fixtures
+        run: |
+          mkdir -p /tmp/silesia
+          for f in dickens xml sao x-ray; do
+            curl -sL "http://mattmahoney.net/dc/silesia/${f}" -o "/tmp/silesia/${f}" || true
+          done
+          ls -la /tmp/silesia/
+      - name: Verify byte-identical compressed sizes (smoke)
+        # If the fixtures couldn't be downloaded, skip with a pass — the
+        # check is best-effort against the network. The wire-format
+        # invariant is also covered by tests/test_main.c's roundtrip suite.
+        run: |
+          if [ ! -f /tmp/silesia/dickens ]; then
+            echo "Silesia fixtures unavailable; skipping wire-format check (covered by test suite)."
+            exit 0
+          fi
+          # fast/balanced sizes are pinned and FROZEN — these modes have
+          # not changed since v2.50.6 and must stay byte-identical (any
+          # drift is an unintended wire-format regression).
+          #
+          # extreme sizes track the RATIO PROGRAM (Sprints 42-46): the
+          # optimal parser (v2.51.0), literal-price calibration (v2.51.1),
+          # and large-window scaling (v2.52.0) deliberately change extreme
+          # output. These pins are updated per ratio-program sprint and
+          # are byte-exact regression anchors for the CURRENT release
+          # (v2.52.0). A change here without a corresponding CHANGELOG
+          # entry + version bump is a regression.
+          declare -A EXPECTED=(
+            [dickens-fast]=5117581
+            [dickens-balanced]=3850261
+            [dickens-extreme]=3406822
+            [xml-fast]=1017409
+            [xml-balanced]=668354
+            [xml-extreme]=554077
+            [sao-fast]=6067446
+            [sao-balanced]=5437167
+            [sao-extreme]=5353489
+            [x-ray-fast]=7304768
+            [x-ray-balanced]=5880026
+            [x-ray-extreme]=5512717
+          )
+          fail=0
+          for f in dickens xml sao x-ray; do
+            [ -f /tmp/silesia/$f ] || continue
+            for m in fast balanced extreme; do
+              ./vaptvupt -c -m $m -o /tmp/out.vv /tmp/silesia/$f >/dev/null
+              sz=$(stat -c %s /tmp/out.vv)
+              key="${f}-${m}"
+              expected=${EXPECTED[$key]}
+              if [ "$sz" != "$expected" ]; then
+                echo "WIRE FORMAT DRIFT: $key got $sz expected $expected"
+                fail=1
+              else
+                echo "OK: $key = $sz"
+              fi
+            done
+          done
+          exit $fail
+
+  # ─── Fuzz smoke (30s × 3 harnesses) ─────────────────────────────────
+  # Quick smoke run on every commit. Longer fuzz runs go to a separate
+  # nightly workflow (not in this file).
+  fuzz-smoke:
+    name: fuzz smoke (30s × 3 harnesses)
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Install toolchain
+        run: apt-get update && apt-get install -y --no-install-recommends clang make python3 ca-certificates
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build with libFuzzer
+        run: make fuzz-libfuzzer
+      - name: Smoke fuzz_decompress (30s)
+        run: |
+          mkdir -p build_obj/corpus_decompress
+          ./build_obj/fuzz_decompress -max_total_time=30 -print_final_stats=0 build_obj/corpus_decompress
+      - name: Smoke fuzz_dstream (30s)
+        run: |
+          mkdir -p build_obj/corpus_dstream
+          ./build_obj/fuzz_dstream -max_total_time=30 -print_final_stats=0 build_obj/corpus_dstream
+      - name: Smoke fuzz_roundtrip (30s)
+        run: |
+          mkdir -p build_obj/corpus_roundtrip
+          ./build_obj/fuzz_roundtrip -max_total_time=30 -print_final_stats=0 build_obj/corpus_roundtrip
+      - name: Verify no crashes recorded
+        run: |
+          if ls crash-* leak-* timeout-* oom-* >/dev/null 2>&1; then
+            echo "FUZZ CRASH: artifacts found"
+            ls -la crash-* leak-* timeout-* oom-* 2>/dev/null
+            exit 1
+          fi
+          echo "No fuzzer artifacts. Clean."

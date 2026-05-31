@@ -1,0 +1,135 @@
+name: nightly-fuzz
+
+# Long-run fuzz campaign. Runs nightly + on manual dispatch.
+# This is the long-run complement to ci.yml's 30-second fuzz-smoke job.
+# Closes SECURITY.md Section 9 item 4 ("Long-running fuzz campaigns").
+
+on:
+  schedule:
+    # 03:17 UTC daily — off-peak, avoids the top-of-hour scheduling surge.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "Per-harness fuzz duration in minutes"
+        required: false
+        default: "120"
+
+jobs:
+  fuzz:
+    name: ${{ matrix.harness }} (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [fuzz_decompress, fuzz_dstream, fuzz_roundtrip]
+        sanitizer: [address, undefined]
+    steps:
+      - name: Install toolchain
+        run: apt-get update && apt-get install -y --no-install-recommends clang make python3 ca-certificates llvm
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore fuzz corpus cache
+        id: corpus-cache
+        uses: actions/cache@v4
+        with:
+          path: corpus/${{ matrix.harness }}
+          # Corpus grows across runs; key by harness so each accumulates.
+          # restore-keys lets a new run pick up the most recent corpus.
+          key: fuzz-corpus-${{ matrix.harness }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.harness }}-
+
+      - name: Build harness with ${{ matrix.sanitizer }} sanitizer
+        run: |
+          make fuzz-clean || true
+          make build_obj/${{ matrix.harness }} FUZZ_SAN=${{ matrix.sanitizer }}
+
+      - name: Determine duration
+        id: dur
+        run: |
+          mins="${{ github.event.inputs.duration_minutes }}"
+          if [ -z "$mins" ]; then mins=120; fi
+          echo "seconds=$((mins * 60))" >> "$GITHUB_OUTPUT"
+          echo "Per-harness duration: ${mins} minutes ($((mins * 60))s)"
+
+      - name: Run ${{ matrix.harness }} long campaign
+        env:
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+          ASAN_OPTIONS: "halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1:detect_leaks=1"
+        run: |
+          mkdir -p corpus/${{ matrix.harness }} artifacts
+          # -max_len bounds memory; -rss_limit_mb catches OOM as a finding;
+          # -timeout flags any single input >25s as a hang.
+          build_obj/${{ matrix.harness }} \
+            -max_total_time=${{ steps.dur.outputs.seconds }} \
+            -max_len=1048576 \
+            -rss_limit_mb=2048 \
+            -timeout=25 \
+            -print_final_stats=1 \
+            -artifact_prefix=artifacts/ \
+            corpus/${{ matrix.harness }}
+
+      - name: Check for findings
+        run: |
+          if ls artifacts/crash-* artifacts/leak-* artifacts/timeout-* artifacts/oom-* >/dev/null 2>&1; then
+            echo "::error::Fuzz finding detected in ${{ matrix.harness }} (${{ matrix.sanitizer }})"
+            ls -la artifacts/
+            exit 1
+          fi
+          echo "No findings. ${{ matrix.harness }} (${{ matrix.sanitizer }}) clean for this run."
+
+      - name: Upload findings (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings-${{ matrix.harness }}-${{ matrix.sanitizer }}
+          path: artifacts/
+          retention-days: 30
+
+      - name: Minimize + save corpus
+        if: always()
+        run: |
+          # Merge to keep the corpus small but coverage-complete.
+          mkdir -p corpus_min/${{ matrix.harness }}
+          build_obj/${{ matrix.harness }} -merge=1 \
+            corpus_min/${{ matrix.harness }} corpus/${{ matrix.harness }} || true
+          rm -rf corpus/${{ matrix.harness }}
+          mv corpus_min/${{ matrix.harness }} corpus/${{ matrix.harness }} || true
+          echo "Corpus size after minimize:"
+          ls corpus/${{ matrix.harness }} | wc -l
+
+  # Differential fuzzer runs separately — it's a Python harness, not libFuzzer.
+  differential:
+    name: differential (stateless vs streaming)
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Install toolchain
+        run: apt-get update && apt-get install -y --no-install-recommends gcc make python3 ca-certificates
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Run differential fuzzer (100K iterations)
+        run: |
+          # Much longer than the CI smoke's 1000 iterations.
+          python3 tests/fuzz_differential.py --iters 100000 --seed ${{ github.run_id }}
+
+  # Re-run the permanent DoS reproducers to ensure none regress.
+  dos-reproducers:
+    name: DoS reproducer regression
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - name: Install toolchain
+        run: apt-get update && apt-get install -y --no-install-recommends gcc make python3 ca-certificates
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Run all DoS reproducers (each must complete <60ms)
+        run: make test
