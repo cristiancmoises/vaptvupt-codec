@@ -266,6 +266,19 @@ decode_block_tokens_impl(
         if (VV_UNLIKELY(offset == 0))
             return VV_ERR_CORRUPT;
 
+        /* Phase-2 previously had NO output-length bound before the match
+         * copy — it relied solely on the op < op_safe loop guard
+         * (op_safe = op_end - 72). A corrupt token whose match-length
+         * extension makes mlen large can therefore drive match_copy_32_hot
+         * to write past op_end (found under ASan on corrupt input). The
+         * general/tail path already has this exact check (op + mlen >
+         * op_end → OVERFLOW); add it to the hot path too. On a VALID
+         * stream op + mlen never exceeds op_end, so this branch is never
+         * taken and decode output/perf is unchanged; it only stops corrupt
+         * input from over-writing. */
+        if (VV_UNLIKELY((size_t)(op_end - op) < mlen))
+            return VV_ERR_OVERFLOW;
+
         if (VV_LIKELY(offset >= 32)) {
             match_copy_32_hot(op, op - offset, mlen);
         } else if (offset >= 16) {

@@ -192,13 +192,27 @@ static void build_dec(const uint16_t norm[NSYM], const uint8_t sp[ANS_L],
         int flg = ilog2(f);
         int nb_max = ANS_LOG - flg;
         int low_count = (1 << (flg + 1)) - (int)f;
+        /* On a VALID normalized table, f ∈ [1, ANS_L) here (f==0 and
+         * f==ANS_L are handled above), so flg ≤ ANS_LOG-1 and nb_max ≥ 1,
+         * and the shifts below are well-defined. A CORRUPT stream can
+         * carry f > ANS_L (read_hdr_v2 does not range-check the wire
+         * values), giving flg ≥ ANS_LOG and nb_max ≤ 0 — i.e. a negative
+         * shift, which is C undefined behaviour (found under UBSan on
+         * bit-flipped input: "shift exponent is negative"). Clamp nb_max
+         * to ≥ 0 and both shift amounts to ≥ 0. For valid tables
+         * (nb_max ≥ 1) this is a no-op, so valid-stream decode output is
+         * byte-for-byte unchanged; for corrupt tables it merely produces
+         * a defined (still-wrong) baseline that the downstream
+         * sequence/offset bounds checks reject. */
+        if (nb_max < 0) nb_max = 0;
         if (k < low_count) {
             dec[x].nbits = (uint8_t)nb_max;
             dec[x].baseline = (uint16_t)((uint32_t)k << nb_max);
         } else {
-            dec[x].nbits = (uint8_t)(nb_max - 1);
+            int sh = (nb_max > 0) ? (nb_max - 1) : 0;
+            dec[x].nbits = (uint8_t)sh;
             dec[x].baseline = (uint16_t)(((uint32_t)low_count << nb_max)
-                             + ((uint32_t)(k - low_count) << (nb_max - 1)));
+                             + ((uint32_t)(k - low_count) << sh));
         }
         dec[x].symbol = s;
     }
@@ -1121,9 +1135,18 @@ vva_error_t vva_decode_ctx(const uint8_t *src, size_t src_len,
                 cdec[x].baseline = 0;
             }
         }
+        /* Corrupt input controls ctx_id and may repeat it. If this slot
+         * already holds a non-global table, free it before overwriting so
+         * a duplicated ctx_id leaks nothing (found via ASan leak-check on
+         * corrupt input). */
+        if (ctx_dec[ctx_id] != global_dec) free(ctx_dec[ctx_id]);
         ctx_dec[ctx_id] = cdec;
     }
-    free(sp);
+    free(sp); sp = NULL;  /* NULL so the ctx_dec_fail path (reachable from
+                           * the checks below) does not free sp twice — a
+                           * double-free found under ASan on corrupt input
+                           * that passes the per-context loop but fails a
+                           * later bounds check. */
 
     /* Read 256 initial states */
     if (p + 512 > end) goto ctx_dec_fail;

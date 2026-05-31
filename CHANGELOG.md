@@ -2,6 +2,84 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.52.4 — Decoder hardening: 3 corrupt-input memory-safety fixes (valid-stream-neutral)
+
+Three memory-safety fixes in the decode path, all triggered only by
+**corrupt / adversarial input** and all proven **byte-for-byte neutral on
+valid streams**. Surfaced while fuzzing a dictionary-decode prototype (see
+"Lever L1 deferred" below) under ASan/UBSan; they harden the **shipped**
+decoder regardless of dictionaries, which is why they ship on their own.
+
+Valid-stream output is unchanged in all three modes: decode of streams
+produced by the pristine v2.52.3 encoder is byte-identical on all 12
+Silesia fixtures (balanced and fast), and no-dict encode output is
+unchanged (the binary differs only because the decoder/ANS object code
+changed; the *output* is identical).
+
+### Fix 1 — negative-shift UB in the ANS table builder (`vv_ans.c`, `build_dec`)
+
+On a valid normalized table the per-symbol frequency f satisfies
+f ∈ [1, ANS_L) at the shift site, so `nb_max = ANS_LOG - ilog2(f) ≥ 1` and
+the baseline shifts are well-defined. `read_hdr_v2` does **not** range-check
+the wire frequencies, so a corrupt stream can carry f ≥ ANS_L, making
+`nb_max ≤ 0` and turning `<< (nb_max-1)` into a negative shift — C
+undefined behaviour (UBSan: "shift exponent is negative"). Fix: clamp
+`nb_max` and both shift amounts to ≥ 0. For valid tables (nb_max ≥ 1) this
+is a no-op; for corrupt tables it yields a defined (still-wrong) baseline
+that the downstream sequence/offset bounds checks already reject.
+
+### Fix 2 — double-free + leak in the CTX entropy decoder (`vv_ans.c`, `vva_decode_ctx`)
+
+Two defects on corrupt-input error paths:
+- The scratch `sp` buffer was freed after the per-context loop and then
+  freed **again** on the `ctx_dec_fail` path reachable from later bounds
+  checks (double-free, ASan-confirmed). Fix: NULL `sp` after the first
+  free (`free(NULL)` is a no-op).
+- A corrupt stream controls `ctx_id` and may repeat it, overwriting a
+  previously-allocated per-context table pointer and leaking it. Fix: free
+  any existing non-global table in that slot before overwriting.
+
+### Fix 3 — missing output-length bound in the token decoder hot loop (`vv_decoder.c`, phase 2)
+
+The AVX2 phase-2 hot loop issued the match copy with no `op + mlen >
+op_end` check, relying solely on the `op < op_safe` loop guard
+(op_safe = op_end − 72). A corrupt token whose match-length extension makes
+`mlen` large could drive `match_copy_32_hot` to write past op_end. The
+scalar/tail path already had this exact check; it is now also in the hot
+path. On a valid stream `op + mlen` never exceeds op_end, so the branch is
+never taken and decode output and throughput are unchanged; it only stops
+corrupt input from over-writing.
+
+### Validation
+
+- Build `-Wall -Wextra -Werror` clean.
+- Valid decode byte-identical to pristine v2.52.3 on all 12 Silesia
+  fixtures (balanced + fast); no-dict encode byte-identical.
+- All 19 C suites green; ratio gate passes (2 KNOWN synthetic violations,
+  0 new, 0 regressions); `test_dos_hang` 12/12 < 5 s;
+  `test_safezone_adversarial` 55/55; differential fuzzer (C↔Python)
+  5200/5200 consistent.
+- 12,000 corrupt-input decode cases (random + structured payloads, 1-5
+  bit-flips each, both modes) clean under ASan + UBSan — no OOB, no UB, no
+  double-free.
+
+### Lever L1 (dictionary support) — DEFERRED, not shipped
+
+A full dictionary-support prototype was implemented and is **correct on
+valid data** (100,000 honest dict round-trips clean; +21.8% ratio vs
+no-dict on a 2859-file C-header corpus; loses to `zstd -D` at +33%, stated
+honestly). It is **not shipped** because the dictionary *combined-buffer
+decode path* has a native-only segmentation fault on corrupt input that
+could not be localized with the tooling available in this environment
+(ASan/UBSan report clean even with maximal redzones; the crash is
+cumulative and not reproducible in isolation; no gdb/valgrind available).
+Per the project rule that decode correctness against adversarial input is
+absolute, the feature is held until that crash is root-caused with a
+proper debugger. The WIP, the fuzzers, and a saved crash-reproducer
+(cl=255, dn=19117) are preserved for a future tooling-equipped session.
+The three fixes above are the salvageable, independently-valuable result
+of that work.
+
 ## v2.52.3 — Sprint 0 (NEXT PROGRAM housekeeping): baseline regen, gate green, known-violation docs
 
 Test-infrastructure, baseline, and documentation only. **Codec output is
