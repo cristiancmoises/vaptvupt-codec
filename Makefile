@@ -295,6 +295,9 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 		echo "" ; \
 		echo "Competitive harness self-test (bench/competitive.py):" ; \
 		python3 bench/competitive.py --vv ./$(TARGET) --self-test ; \
+		echo "" ; \
+		echo "CLI window flag test (-w roundtrip + validation):" ; \
+		VV_BIN=./$(TARGET) python3 tests/cli_window.py ; \
 		if command -v node >/dev/null 2>&1 ; then \
 			echo "" ; \
 			echo "JavaScript reference decoder self-test:" ; \

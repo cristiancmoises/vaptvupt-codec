@@ -45,10 +45,17 @@ static void usage(void) {
         "            (up to 3× total throughput). On encode: modest ~5-7%%\n"
         "            speedup. The resulting frame has no XXH64 footer and\n"
         "            decodes identically with or without --fast.\n"
-        "  --format-v2  Emit 'T' tag blocks (min_match=3, v2 format).\n"
-        "            Only decodable by vaptvupt v2.33.0+ decoders.\n"
-        "            Ratio-neutral in this release; a future sprint\n"
-        "            will add hash3 matcher to realize the improvement.\n"
+        "  --format-v2  Emit 'T' tag blocks (min_match=3, hash3 path).\n"
+        "            Only decodable by vaptvupt v2.33.0+ decoders. Helps\n"
+        "            binary/executable inputs (measured ~2-3.5%% smaller);\n"
+        "            slightly worse on text-structured data. Opt-in.\n"
+        "  -w, --window N  Window log (10..24 = 1 KiB..16 MiB; 0 = auto).\n"
+        "            Overrides the per-mode adaptive default. Larger windows\n"
+        "            help large, long-range-redundant inputs (measured\n"
+        "            +4-6%% on nci/webster/mozilla at -w 24) but can hurt\n"
+        "            inputs with little long-range structure. The frame\n"
+        "            records the window; any decoder handles it (no format\n"
+        "            change).\n"
         "  -v        Verbose output\n"
         "  -h        Show this help\n",
         VV_VERSION_STRING);
@@ -98,6 +105,7 @@ int main(int argc, char **argv) {
     int nthreads = 1;   /* 1 = single-threaded default */
     int fast_decode = 0;  /* --fast: skip XXH64 verification */
     int use_format_v2 = 0;  /* --format-v2: emit 'T' tag blocks (min_match=3) */
+    int window_log = 0;     /* -w/--window N: explicit window log (0 = auto) */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) do_compress = 1;
@@ -109,6 +117,20 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "-v") == 0) verbose = 1;
         else if (strcmp(argv[i], "--fast") == 0) fast_decode = 1;
         else if (strcmp(argv[i], "--format-v2") == 0) use_format_v2 = 1;
+        else if ((strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--window") == 0)
+                 && i + 1 < argc) {
+            window_log = atoi(argv[++i]);
+            /* Valid window logs are 10..24 (1 KiB .. 16 MiB). The 16 MiB
+             * cap is the 3-byte (24-bit) offset wire-format limit. 0 keeps
+             * the per-mode adaptive default. Reject anything else rather
+             * than silently clamping, so the user knows their value was
+             * out of range. */
+            if (window_log != 0 && (window_log < 10 || window_log > 24)) {
+                fprintf(stderr, "Invalid -w/--window %d: must be 10..24 "
+                        "(1 KiB .. 16 MiB), or 0 for auto\n", window_log);
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) {
             nthreads = atoi(argv[++i]);
             if (nthreads < 0) nthreads = 0;
@@ -143,6 +165,15 @@ int main(int argc, char **argv) {
          * is in place; real ratio gains require hash3 matcher
          * (Sprint 45). */
         opts.format_v2 = use_format_v2;
+
+        /* -w/--window N: explicit window log, overriding the per-mode
+         * adaptive default. The decoder reads window_log from the frame
+         * header and handles any value up to 24 (3-byte offsets), so this
+         * is forward/backward compatible — no format change. Larger
+         * windows help large, long-range-redundant inputs (measured
+         * +4–6% on nci/webster/mozilla at wlog=24) but can hurt inputs
+         * with little long-range structure, so it is opt-in, not default. */
+        if (window_log != 0) opts.window_log = (uint8_t)window_log;
 
         /* MT path uses slightly larger bound because concatenated frames
          * have per-frame overhead. Add 64 KB per potential chunk. */

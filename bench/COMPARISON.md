@@ -84,6 +84,35 @@ binary.
 - **The honest one-liner:** VaptVupt is a strong text/structured codec at
   its operating point and a weak binary codec; it is not a max-ratio codec.
 
+## Long-range window (`-w` / `--window`)
+
+For large inputs with long-range redundancy, the default per-mode window is
+conservative. Forcing a larger window with `-w N` (N = window log, up to 24
+= 16 MiB) recovers real ratio — measured, balanced mode:
+
+```
+file        default   -w 24    gain
+nci         11.462×   12.162×   +5.8%
+webster      3.383×    3.516×   +3.9%
+mozilla      2.649×    2.773×   +4.7%
+data.csv     2.857×    2.899×   +1.5%
+```
+
+But a larger window is **not always better** — on inputs with little
+long-range structure it costs more in offset bits than it saves:
+
+```
+file        default   -w 24    result
+sao          1.334×    1.324×   worse
+app.log      5.016×    4.939×   worse
+```
+
+This is why `-w` is **opt-in, not the default**: the adaptive policy is
+better on average, but `-w 24` wins on large, redundant corpora. The window
+is recorded in the frame header and any decoder handles it (no format
+change; offsets stay 3-byte for window log ≤ 24). Pick `-w 24` for large
+text/log archives with cross-file repetition; leave it on auto otherwise.
+
 ## Reproduce
 
 ```sh

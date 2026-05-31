@@ -2,6 +2,62 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.53.0 — `-w` / `--window`: user-selectable window log (long-range ratio win, opt-in)
+
+New CLI capability. Exposes the window log (already a public API field and
+fully supported by the decoder) on the command line, so large
+long-range-redundant inputs can use a bigger match window and recover real
+ratio. **No wire-format change and no default-output change** — omitting
+`-w` (or `-w 0`) is byte-identical to v2.52.5 in all three modes (`make`
+binary md5 of the codec path unchanged; only `src/main.c` arg parsing and
+help text changed).
+
+### What it does
+
+`-w N` / `--window N` sets the window log, N ∈ [10, 24] (1 KiB … 16 MiB), or
+0 for the per-mode adaptive default. The 16 MiB ceiling is the 3-byte
+(24-bit) offset wire-format limit; the decoder reads the window log from the
+frame header and already handles any value ≤ 24, so frames produced with
+`-w` decode on every existing decoder — no format change.
+
+### Why (measured, balanced mode)
+
+The default per-mode window policy is conservative for balanced (it caps
+around window log 18–20). On large, redundant inputs a bigger window wins:
+
+```
+file        default   -w 24    gain        | not always better:
+nci         11.462×   12.162×   +5.8%       | sao      1.334× → 1.324×  worse
+webster      3.383×    3.516×   +3.9%       | app.log  5.016× → 4.939×  worse
+mozilla      2.649×    2.773×   +4.7%       |
+data.csv     2.857×    2.899×   +1.5%       |
+```
+
+A larger window costs offset bits, so on inputs with little long-range
+structure it loses. That is exactly why this is **opt-in, not a default
+change**: the adaptive policy is better on average; `-w 24` is the right
+tool for large text/log archives with cross-file repetition. (A future
+sprint may add a full-file multi-window auto-trial to capture these wins
+automatically without regressing the others; it would change balanced's
+default output and needs full Silesia re-validation, so it is deliberately
+out of scope here.)
+
+### Validation
+
+- Default output (no `-w`) byte-identical to v2.52.5 on Silesia
+  fast/balanced/extreme; ratio gate passes (baseline unchanged).
+- `-w` validation rejects out-of-range values (< 10 or > 24) with a clear
+  message; `-w 0` equals the default.
+- New `tests/cli_window.py` (roundtrip across windows 10/12/16/20/22/24,
+  validation, and the `-w 0 == default` invariant) — wired into `make test`.
+- Full `make test` green: 19/19 C suites, differential 5200/5200, safezone
+  55/55, DoS 12/12, harness self-test PASS, cli_window PASS.
+- `-Wall -Wextra -Werror` clean.
+
+Also fixed the stale `--format-v2` help text (it claimed "ratio-neutral";
+v2.52.5 measured it as a real ~2–3.5% self-win on binary, slightly worse on
+text-structured — the help now says so).
+
 ## v2.52.5 — Lever L10: competitive honesty harness + measured format-v2 evaluation
 
 Tooling and documentation only. **No codec source changed** — the `make`
