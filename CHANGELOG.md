@@ -2,6 +2,58 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.53.4 — Lever L-BIN: opt-in x86 BCJ filter (binary ratio now beats gzip-9)
+
+A new opt-in, reversible **x86 BCJ branch filter** that closes the
+binary-ratio gap to gzip-9 — the one file class where VaptVupt was losing on
+ratio. **Default output is byte-identical to v2.53.3** (the filter is
+off unless requested); the ratio gate confirms baseline ± 0 bytes.
+
+### What it does
+
+x86/x86-64 near CALL (0xE8) and JMP (0xE9) instructions carry a 32-bit
+relative displacement; the same target reached from different positions
+yields different displacement bytes, which look like noise to the
+compressor. The filter (`src/vv_bcj.c`) converts these to an absolute form
+before compression so repeated references encode identically; the decoder
+inverts it after decompression (and after checksum verification). This is a
+clean-room implementation of the well-known x86 branch-converter transform;
+it is an exact bijection on arbitrary input.
+
+Enable with the API option `vv_options_t.filter_x86 = 1` or the CLI
+`--bcj` / `--filter x86`. Frames carry header flag **bit2**; they are
+decodable by v2.53.4+ decoders. Off by default → no change to the
+fast/balanced/extreme byte output.
+
+### Measured (ratio, higher = better)
+
+```
+file        gzip-9   vv-extreme   BCJ+vv-extreme   delta     result
+libc.bin    2.230    2.179        2.251            +3.2%     now beats gzip-9
+bins.bin    2.834    2.720        2.875            +5.4%     now beats gzip-9
+bash (ELF)  2.091    2.009        2.152            +6.7%     now beats gzip-9
+```
+
+BCJ turns three gzip-9 losses into wins. It does NOT help non-x86 or text
+data (leave it off there) and does NOT beat the max-ratio tier
+(zstd-19/xz-9 still win on binary — they pair a BCJ-equivalent with stronger
+entropy and bigger windows). Honest scope: this fixes the gzip-9 binary gap,
+not the whole binary picture.
+
+### Validation
+
+- **Reversibility:** 20,000+ fuzz cases (random of all sizes, adversarial
+  all-E8/E9/alternating/tail-boundary, and 4 real binaries) — exact
+  `inverse(forward(x)) == x`. New `tests/test_bcj.c` (2344 checks:
+  reversibility + full compress/decompress roundtrip) wired into `make test`
+  as suite #20.
+- **Default unchanged:** Silesia fast/balanced/extreme byte-identical;
+  ratio gate baseline ± 0 bytes; differential fuzzer 5200/5200.
+- **Roundtrip with filter on:** verified on libc/bash + E8-rich synthetics.
+- **Corrupt-input safe:** 8,000 corrupt bcj-flagged frames clean under
+  ASan + UBSan (the inverse is a bounded in-place pass; cannot OOB).
+- Full `make test` green (20/20 C suites); `-Wall -Wextra -Werror` clean.
+
 ## v2.53.3 — Prune dead Path B literal-only entropy (byte-identical) + document the encode-speed floor
 
 Encoder cleanup plus a documented investigation result. **Byte-identical

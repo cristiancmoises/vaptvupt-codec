@@ -84,6 +84,27 @@ binary.
 - **The honest one-liner:** VaptVupt is a strong text/structured codec at
   its operating point and a weak binary codec; it is not a max-ratio codec.
 
+## x86 BCJ filter (`--bcj` / `--filter x86`)
+
+For x86/x86-64 machine code, the opt-in BCJ branch filter converts relative
+CALL/JMP displacements to an absolute form before compression (inverted on
+decode), so repeated references to the same target encode identically.
+Measured (ratio, higher = better):
+
+```
+file        gzip-9   vv-extreme   BCJ+vv-extreme   result
+libc.bin    2.230    2.179        2.251            now beats gzip-9
+bins.bin    2.834    2.720        2.875            now beats gzip-9
+bash (ELF)  2.091    2.009        2.152            now beats gzip-9
+```
+
+BCJ gains +3–7% on x86 binaries and **turns the three gzip-9 losses above
+into wins**. It is opt-in (default output is unchanged), exactly reversible
+on arbitrary input, and decodable by v2.53.4+ decoders (header flag bit2).
+It does not help non-x86 or text data (leave it off there). It does not
+close the gap to the max-ratio tier (zstd-19/xz-9 still win on binary, since
+they pair a BCJ-equivalent with stronger entropy and larger windows).
+
 ## Long-range window (`-w` / `--window`)
 
 For large inputs with long-range redundancy, the default per-mode window is

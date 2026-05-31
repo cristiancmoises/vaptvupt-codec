@@ -15,6 +15,7 @@
 #include "vv_platform.h"
 #include "vv_huffman.h"
 #include "vv_ans.h"
+#include "vv_bcj.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -715,6 +716,16 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
                 if (computed != ff.checksum) return VV_ERR_CORRUPT;
             }
             ip += sizeof(vv_frame_footer_t);
+        }
+
+        /* x86 BCJ inverse (flags bit2): the encoder applied the forward
+         * branch transform to this frame's bytes BEFORE compression, and
+         * checksummed the transformed bytes, so we invert AFTER the
+         * checksum check, over exactly this frame's output region. The
+         * transform was done with ip=0 per frame, so the inverse uses 0
+         * too. No-op for frames without the flag. */
+        if (fh.flags & 4) {
+            vv_bcj_x86(frame_out_start, (size_t)(op - frame_out_start), 0, 0);
         }
 
         /* Loop back to try another frame (if input remains) */

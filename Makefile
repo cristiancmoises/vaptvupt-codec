@@ -35,7 +35,7 @@ ifeq ($(ARCH),x86_64)
   SIMD_FLAGS := -mavx2
 endif
 
-CORE_SRC = src/vv_encoder.c src/vv_decoder.c src/vv_simd.c src/vv_xxh64.c src/vv_huffman.c src/vv_ans.c src/vaptvupt_api.c
+CORE_SRC = src/vv_encoder.c src/vv_decoder.c src/vv_simd.c src/vv_xxh64.c src/vv_huffman.c src/vv_ans.c src/vv_bcj.c src/vaptvupt_api.c
 SOURCES  = src/main.c $(CORE_SRC)
 TARGET   = vaptvupt
 
@@ -97,6 +97,8 @@ TEST18_BIN = test_secure_zero
 # Sprint 122: Zupt 2.2.2 integration smoke test
 TEST19_SRC = tests/test_zupt_integration.c $(CORE_SRC)
 TEST19_BIN = test_zupt_integration
+TEST20_SRC = tests/test_bcj.c $(CORE_SRC)
+TEST20_BIN = test_bcj
 
 .PHONY: all clean test python-test fuzz fuzz-libfuzzer test-fuzz fuzz-clean bench-update speed-update speed-baseline speed-profile run_roundtrip run_huffman bench check-debug perf pgo
 
@@ -250,7 +252,13 @@ $(TEST19_BIN): $(TEST19_SRC)
 	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t19.o
 	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST19_SRC)) build_obj/vv_simd_t19.o build_obj/vv_decoder_t19.o $(LDFLAGS) -o $(TEST19_BIN)
 
-test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TARGET)
+$(TEST20_BIN): $(TEST20_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t20.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t20.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST20_SRC)) build_obj/vv_simd_t20.o build_obj/vv_decoder_t20.o $(LDFLAGS) -o $(TEST20_BIN)
+
+test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TARGET)
 	./$(TEST1_BIN)
 	./$(TEST2_BIN)
 	./$(TEST3_BIN)
@@ -270,6 +278,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST17_BIN)
 	./$(TEST18_BIN)
 	./$(TEST19_BIN)
+	./$(TEST20_BIN)
 	@if command -v python3 >/dev/null 2>&1 ; then \
 		echo "" ; \
 		echo "Python reference decoder self-test (validates FORMAT.md decode side):" ; \
@@ -494,7 +503,7 @@ bench: $(TARGET)
 	fi
 
 clean:
-	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) *.vv *.orig
+	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) *.vv *.orig
 	rm -rf tests/corpus_bad
 
 amalg:

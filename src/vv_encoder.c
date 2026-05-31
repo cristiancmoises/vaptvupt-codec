@@ -18,6 +18,7 @@
 #include "vv_platform.h"
 #include "vv_huffman.h"
 #include "vv_ans.h"
+#include "vv_bcj.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -1563,7 +1564,31 @@ size_t vv_compress_bound(size_t src_len) {
          + sizeof(vv_frame_header_t) + sizeof(vv_frame_footer_t);
 }
 
+/* Public vv_compress: if the x86 BCJ filter is requested, apply the
+ * reversible forward transform to a private copy of the input (the public
+ * input is const and must not be mutated), then compress the copy. The
+ * header flag bit2 set by vv_compress_inner tells the decoder to invert it.
+ * When the filter is off, this is a direct pass-through with no copy. */
+int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
+                          uint8_t *dst, size_t dst_cap,
+                          const vv_options_t *opts);
+
 int64_t vv_compress(const uint8_t *src, size_t src_len,
+                    uint8_t *dst, size_t dst_cap,
+                    const vv_options_t *opts) {
+    if (opts && opts->filter_x86 && src_len > 0 && src) {
+        uint8_t *copy = (uint8_t *)malloc(src_len);
+        if (!copy) return VV_ERR_NOMEM;
+        memcpy(copy, src, src_len);
+        vv_bcj_x86(copy, src_len, 0, 1);   /* forward: relative -> absolute */
+        int64_t r = vv_compress_inner(copy, src_len, dst, dst_cap, opts);
+        free(copy);
+        return r;
+    }
+    return vv_compress_inner(src, src_len, dst, dst_cap, opts);
+}
+
+int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
                     uint8_t *dst, size_t dst_cap,
                     const vv_options_t *opts) {
     /* SPRINT 95 audit: accept NULL opts (fall back to defaults) for
@@ -1679,7 +1704,7 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
     memset(&fh, 0, sizeof(fh));
     fh.magic = VV_MAGIC;
     fh.version = 1;
-    fh.flags = opts->checksum ? 1 : 0;
+    fh.flags = (opts->checksum ? 1 : 0) | (opts->filter_x86 ? 4 : 0);
     fh.mode_hint = (uint8_t)opts->mode;
     fh.window_log = wlog;
     fh.content_size = (uint64_t)src_len;
