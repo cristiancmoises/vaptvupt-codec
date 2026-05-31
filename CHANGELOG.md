@@ -2,6 +2,63 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.53.2 — Decode-speed: stack-allocate ANS spread scratch (+ a corrupt-input OOB fix it surfaced)
+
+Two changes in the ANS literal decoders, both validated byte-identical on
+valid streams.
+
+### 1. Decode speed: stack-allocate the spread scratch buffer
+
+`vva_decode` (single-state, `lit_fmt=2`) and `vva_decode4` (4-way,
+`lit_fmt=1`) each allocated a 4 KB `sp` scratch buffer via `malloc`/`free`
+on **every block**, used only to build the decode table and then
+discarded. With 1 MB blocks, a 33 MB file did ~33 of these heap round-trips
+per decompress. `sp` is now a stack array (`uint8_t sp[ANS_L]`, 4 KB) — no
+heap traffic, better locality for `build_dec`.
+
+Measured in-process decode (best of 7), cumulative with v2.53.1:
+
+```
+file       mode       v2.53.0   v2.53.1   v2.53.2    total
+dickens    balanced   308 MB/s  337 MB/s  410 MB/s   +33%
+dickens    extreme    357 MB/s  371 MB/s  470 MB/s   +32%
+samba      balanced   ~480      497 MB/s  567 MB/s   +18% (from 2.53.1)
+samba      extreme    ~500      517 MB/s  600 MB/s   +16% (from 2.53.1)
+```
+
+For reference, zstd-1 decodes dickens at ~469 MB/s on this machine —
+balanced decode (410) has closed most of that gap, and extreme (470) now
+matches it, while compressing better (extreme 2.992× vs zstd-1 2.391×).
+Decode output is unchanged (differential fuzzer 5200/5200; Silesia
+balanced+extreme byte-identical).
+
+### 2. Security: missing state-bounds check in the 4-way ANS decoder
+
+While ASan-fuzzing the change above, found a **pre-existing** out-of-bounds
+read in `vva_decode4`: the 4-way interleaved hot loop and its scalar tail
+updated each lane's ANS state (`s[i] = baseline + bits`) and used it to
+index the 4096-entry decode table on the next iteration **without checking
+`s[i] < ANS_L`**. The single-state path has always had this check; the
+4-way path never did, so a corrupt `lit_fmt=1` stream could drive a state
+out of range and read past `dec[]` (UBSan: "load … insufficient space").
+Prior fuzzers missed it because it requires a validly-structured ANS4 block
+corrupted into a specific state.
+
+Fix: validate the updated states (`(s0|s1|s2|s3) >= ANS_L` in the hot loop,
+per-lane in the tail) before they index `dec[]`, matching the single-state
+path. On valid streams states are always in range, so the branch is never
+taken and decode output is unchanged. 12,000 corrupt-input decode cases now
+clean under ASan + UBSan.
+
+### Validation
+
+- Valid decode byte-identical to pristine on Silesia balanced + extreme.
+- Differential fuzzer (C↔Python) 5200/5200 consistent.
+- 12,000 corrupt-input decode cases clean under ASan + UBSan (was: OOB read
+  on the 4-way path).
+- Full `make test` green; ratio gate baseline unchanged; safezone 55/55;
+  DoS 12/12. `-Wall -Wextra -Werror` clean.
+
 ## v2.53.1 — Decode-speed: drop redundant per-symbol fill-check in the ANS literal hot loop
 
 A byte-identical decode-speed optimization in the tANS literal decoder (the

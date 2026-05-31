@@ -530,12 +530,11 @@ vva_error_t vva_decode(const uint8_t *src, size_t src_len,
         return VVA_OK;
     }
 
-    uint8_t *sp = (uint8_t *)malloc(ANS_L);
+    uint8_t sp[ANS_L];  /* PERF: scratch for build_dec; stack, not per-block malloc */
     vva_dec_entry_t *dec = (vva_dec_entry_t *)malloc(ANS_L * sizeof(*dec));
-    if (!sp || !dec) { free(sp); free(dec); return VVA_ERR_NOMEM; }
+    if (!dec) { return VVA_ERR_NOMEM; }
     spread_symbols(norm, sp);
     build_dec(norm, sp, dec);
-    free(sp);
 
     if (hdr + 2 > src_len) { free(dec); return VVA_ERR_CORRUPT; }
     uint32_t state = (uint32_t)src[hdr] | ((uint32_t)src[hdr + 1] << 8);
@@ -727,12 +726,11 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
     }
 
     /* Build shared decode table */
-    uint8_t *sp = (uint8_t *)malloc(ANS_L);
+    uint8_t sp[ANS_L];  /* PERF: scratch for build_dec; stack, not per-block malloc */
     vva_dec_entry_t *dec = (vva_dec_entry_t *)malloc(ANS_L * sizeof(*dec));
-    if (!sp || !dec) { free(sp); free(dec); return VVA_ERR_NOMEM; }
+    if (!dec) { return VVA_ERR_NOMEM; }
     spread_symbols(norm, sp);
     build_dec(norm, sp, dec);
-    free(sp);
 
     /* Read 4 states (2B) + 4 bitstream sizes (4B) */
     const uint8_t *p = src + hdr;
@@ -785,7 +783,14 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
         /* 4 state updates — use results from lookups above.
          * PERF: each fill above guarantees r[i].n >= ANS_LOG >= e.nbits,
          * so ans_br_read's internal fill-check is redundant; inline the
-         * read (mask/shift/decrement) and skip it. Byte-identical. */
+         * read (mask/shift/decrement) and skip it. Byte-identical.
+         * SECURITY: validate each updated state < ANS_L before it is used
+         * to index dec[] in the next iteration (and the tail). The
+         * single-state path has always done this; the 4-way path did not,
+         * which let a corrupt ANS4 stream drive s[i] out of range and read
+         * past dec[] (OOB read found under UBSan on corrupt input). On a
+         * VALID stream states are always in range, so this never triggers
+         * and decode output is unchanged. */
         if (r[0].n < ANS_LOG) ans_br_fill(&r[0]);
         { int nb=e0.nbits; uint32_t b=(uint32_t)(r[0].a & (((uint64_t)1<<nb)-1)); r[0].a>>=nb; r[0].n-=nb; s[0]=(uint32_t)e0.baseline+b; }
 
@@ -797,11 +802,16 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
 
         if (r[3].n < ANS_LOG) ans_br_fill(&r[3]);
         { int nb=e3.nbits; uint32_t b=(uint32_t)(r[3].a & (((uint64_t)1<<nb)-1)); r[3].a>>=nb; r[3].n-=nb; s[3]=(uint32_t)e3.baseline+b; }
+
+        if (VV_UNLIKELY((s[0] | s[1] | s[2] | s[3]) >= (uint32_t)ANS_L)) {
+            free(dec); return VVA_ERR_CORRUPT;
+        }
     }
 
     /* Scalar tail for remaining 0-3 symbols */
     for (size_t i = full_quads * 4; i < num_literals; i++) {
         int lane = (int)(i & 3);
+        if (VV_UNLIKELY(s[lane] >= (uint32_t)ANS_L)) { free(dec); return VVA_ERR_CORRUPT; }
         if (r[lane].n < ANS_LOG) ans_br_fill(&r[lane]);
         vva_dec_entry_t e = dec[s[lane]];
         dst[i] = e.symbol;
