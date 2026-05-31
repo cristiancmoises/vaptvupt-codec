@@ -292,6 +292,9 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 		echo "" ; \
 		echo "Decode-speed regression gate (20% tolerance — noisy in containers):" ; \
 		python3 tests/speed_gate.py || echo "  (speed gate is informational; not failing the build)" ; \
+		echo "" ; \
+		echo "Competitive harness self-test (bench/competitive.py):" ; \
+		python3 bench/competitive.py --vv ./$(TARGET) --self-test ; \
 		if command -v node >/dev/null 2>&1 ; then \
 			echo "" ; \
 			echo "JavaScript reference decoder self-test:" ; \

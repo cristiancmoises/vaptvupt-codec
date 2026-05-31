@@ -2,6 +2,58 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.52.5 — Lever L10: competitive honesty harness + measured format-v2 evaluation
+
+Tooling and documentation only. **No codec source changed** — the `make`
+binary md5 remains `23bf9612cd110505b87de3247eb383a5` and all three modes
+are byte-identical to v2.52.4. This sprint adds the measurement foundation
+the rest of the program needs and records the honest competitive position.
+
+### `bench/competitive.py` — competitive harness (new)
+
+Measures VaptVupt against the system compressors (gzip, lz4, zstd, xz)
+across a file set and prints compression ratio per codec plus a "best"
+column. It prints every result, wins and losses alike — it does not hide
+losses or pick favorites. Features: multiple VaptVupt modes
+(`--modes fast,balanced,extreme`), optional `--format-v2` columns
+(`--v2`), per-codec timeout (`--timeout`), CSV export (`--csv`), directory
+sweep (`--dir`), graceful "—" for absent/timed-out codecs, and a
+corpus-free `--self-test` smoke mode. Wired into `make test`.
+
+### `bench/COMPARISON.md` — measured competitive position (new)
+
+The honest two-sided result (VaptVupt v2.52.4; gzip 1.12 / zstd 1.5.5 /
+lz4 1.9.4 / xz 5.4.5; single-core Xeon):
+
+- **Text / structured-text (VaptVupt's strength):** vv-extreme **beats
+  gzip-9 and zstd-3** — xml 9.647× vs 8.071× / 8.363×; reymont 3.863× vs
+  3.640× / 3.413×; recs.ndjson 11.391× vs 9.026× / 9.489×. **Loses to the
+  max-ratio tier** (zstd-19, xz-9), which trade encode speed for ratio.
+- **Binary / logs / CSV (VaptVupt's weakness):** **loses to gzip-9** —
+  libc.bin 2.179× vs 2.230×; app.log 5.419× vs 5.769×; data.csv 3.157× vs
+  3.320×. Stated plainly, not rounded away.
+
+### Measured what `--format-v2` actually buys
+
+`--format-v2` (min_match=3 / hash3 path) was already wired (public
+`opts.format_v2`, CLI `--format-v2`, decoder supports the 'T' blocks since
+v2.33.0). Measured balanced-mode delta (negative = v2 smaller): true binary
+−2.28%, ELF executables −3.49%, structured logs +0.40%, numeric CSV +0.60%,
+JSON records +1.03%, natural-language Silesia ~wash. **Honest takeaway:**
+v2 is a real but modest self-improvement on *binary* and a slight
+regression on text-structured data; it is opt-in and does not change the
+default modes' output. It does not, by itself, make VaptVupt competitive
+with gzip-9 on binary. No auto-enable was added precisely because the win
+is too small and category-losing to justify changing default behavior.
+
+### Validation
+
+- No codec source touched; `make` binary md5 unchanged (`23bf9612…`).
+- `make test` green: 19/19 C suites; ratio gate passes (2 KNOWN synthetic
+  violations, 0 new); differential fuzzer 5200/5200; safezone 55/55; DoS
+  12/12; competitive harness self-test PASS.
+- `-Wall -Wextra -Werror` clean (no C changes).
+
 ## v2.52.4 — Decoder hardening: 3 corrupt-input memory-safety fixes (valid-stream-neutral)
 
 Three memory-safety fixes in the decode path, all triggered only by
