@@ -2,6 +2,53 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.53.3 — Prune dead Path B literal-only entropy (byte-identical) + document the encode-speed floor
+
+Encoder cleanup plus a documented investigation result. **Byte-identical
+output in all modes** — the ratio gate confirms "All 10 fixtures within
+baseline ± 0 bytes" and the differential fuzzer is 5200/5200.
+
+### Prune dead Path B
+
+In `emit_block`, "Path B" (literal-only `'I'`/`'C'` entropy coding) was run
+on every block: `extract_literals` + a redundant ANS4/ANS1 encode of the
+same literals, then compared against Path A (SEQ). Instrumentation across
+text, binary, log, and CSV inputs showed Path B's win rate is **0%** — SEQ
+always codes the same literals at least as small while also coding the
+matches. Path B can only conceivably win on a block where SEQ found no
+structure (its compressed size approaches raw), so it is now skipped
+whenever SEQ is valid and already beats raw by a clear margin
+(`seq_block_sz < braw*7/8`); on non-compressing blocks Path B still runs,
+preserving the only case it could win.
+
+This removes redundant per-block work. It is a **code-cleanliness change,
+not a measurable speedup** — Path B was not the encode bottleneck (see
+below). Verified byte-identical on all 12 Silesia (balanced + extreme) and
+on binary/log/CSV; the ratio gate guards against any regression.
+
+### Documented: balanced encode is at its ratio-constrained floor
+
+The L-ENC (encode-speed) investigation is recorded in
+`VAPTVUPT_PROGRAM_CHARTER.md` so it is not repeated. Measured findings:
+balanced encodes 6.4× slower than fast and ~14× slower than zstd-1,
+dominated by the depth-24 hash-chain walk. A depth sweep showed a smooth
+monotonic ratio/speed tradeoff with **no free sweet spot** (dickens
+depth 24→16: +14% encode, −0.8% ratio; reymont −1.1%). The SEQ-internal
+literal race (ans4+ans1+huf+huf4) costs ~20–25% encode for ~0.6% ratio.
+Conclusion: there is no clean byte-identical encode speedup of meaningful
+size; cutting depth/Path B/the race all trade away the ratio lead over
+zstd-1/-3. A real encode win needs an algorithmically faster matcher that
+finds the same matches (research-scale) or an explicit opt-in level that
+documents the ratio cost. No depth cut was shipped — that would be a ratio
+regression in disguise.
+
+### Validation
+
+- Ratio gate: all 10 fixtures within baseline ± 0 bytes (byte-identical).
+- Differential fuzzer (C↔Python) 5200/5200 consistent.
+- Full `make test` green: 19/19 C suites, safezone 55/55, DoS 12/12,
+  competitive + cli_window PASS. `-Wall -Wextra -Werror` clean.
+
 ## v2.53.2 — Decode-speed: stack-allocate ANS spread scratch (+ a corrupt-input OOB fix it surfaced)
 
 Two changes in the ANS literal decoders, both validated byte-identical on
