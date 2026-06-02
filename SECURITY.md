@@ -95,9 +95,32 @@ The following tools and harnesses are permanently committed to the source tree f
 - **`fuzz_roundtrip.c`** — encoder + decoder roundtrip property
 - **`fuzz_differential.c`** — stateless vs streaming decoder must agree
 
-### Allocation fault injection (`tests/fault_injection/`)
-- **`malloc_fault.c`** — LD_PRELOAD harness simulating allocation failures
-- **`run_fault_inject.sh`** — driver that randomly fails 1 in N malloc/calloc
+### Allocation fault injection
+- **`tests/oom_inject.c`** — LD_PRELOAD allocator interposer that fails the
+  Nth malloc/calloc/realloc.
+- **`tests/oom_sweep.sh`** — sweeps every allocation site in `vv_compress`
+  (including the BCJ copy) and `vv_decompress`, asserting no crash; runs in
+  `make test`. Under ASan/UBSan it also proves no leak or use-after-free on
+  any allocation-failure path. The full sweep (144 allocation points) is
+  clean: no crash, no leak, no use-after-free on any single failure.
+
+### Formal verification (`verification/`, `make verify`)
+The BCJ branch filters in `src/vv_bcj.c` run on the decode path (the inverse
+transform processes attacker-controlled decompressed bytes). They are
+machine-checked with CBMC over fully nondeterministic inputs up to a bounded
+size:
+- **`vv_bcj_x86`**, **`vv_bcj_arm64`** — proven memory-safe (no OOB / invalid
+  pointer), free of signed overflow and invalid conversions, and **lossless**
+  (`inverse(forward(x)) == x`).
+- **`vv_bcj_detect`** — proven memory-safe on arbitrary and truncated input,
+  including the PE-header offset that is read from the input itself.
+
+Proofs use `--unwinding-assertions` (the unwind bounds are themselves
+verified). The filters use intentional modular unsigned arithmetic — defined
+behaviour in C — so `--unsigned-overflow-check` is not enabled; every other
+standard CBMC safety check is. This complements the runtime fuzzing in
+`tests/test_bcj.c` with an exhaustive guarantee over all inputs up to the
+bound. See `verification/README.md`.
 
 ### Regression reproducers (`tests/regression_inputs/`)
 13 permanent reproducer files covering every defect found:

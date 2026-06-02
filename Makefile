@@ -568,3 +568,8 @@ amalg-verify:
 	rm -rf $$tmpdir && \
 	echo "✓ build/vaptvupt.{c,h} are in sync with src/"
 
+
+# Formal verification of the BCJ filters with CBMC (apt-get install cbmc).
+.PHONY: verify
+verify:
+	sh verification/verify.sh

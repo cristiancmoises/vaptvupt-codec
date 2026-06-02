@@ -87,16 +87,16 @@ size_t vv_bcj_x86(uint8_t *data, size_t size, uint32_t ip, int encoding) {
             if (encoding) v += cur; else v -= cur;
             if (mask != 0) {
                 unsigned sh = (mask & 6) << 2;
-                if (bcj_test_msb((uint8_t)(v >> sh))) {
+                if (bcj_test_msb((uint8_t)((v >> sh) & 0xFF))) {
                     v ^= (((uint32_t)0x100 << sh) - 1);
                     if (encoding) v += cur; else v -= cur;
                 }
                 mask = 0;
             }
-            p[1] = (uint8_t)v;
-            p[2] = (uint8_t)(v >> 8);
-            p[3] = (uint8_t)(v >> 16);
-            p[4] = (uint8_t)(0 - ((v >> 24) & 1));
+            p[1] = (uint8_t)(v & 0xFF);
+            p[2] = (uint8_t)((v >> 8) & 0xFF);
+            p[3] = (uint8_t)((v >> 16) & 0xFF);
+            p[4] = (uint8_t)((0u - ((v >> 24) & 1u)) & 0xFF);
         } else {
             mask = (mask >> 1) | 4;
             pos++;
@@ -171,10 +171,10 @@ size_t vv_bcj_arm64(uint8_t *data, size_t size, uint32_t ip, int encoding) {
             continue;
         }
 
-        data[pos]     = (uint8_t)insn;
-        data[pos + 1] = (uint8_t)(insn >> 8);
-        data[pos + 2] = (uint8_t)(insn >> 16);
-        data[pos + 3] = (uint8_t)(insn >> 24);
+        data[pos]     = (uint8_t)(insn & 0xFF);
+        data[pos + 1] = (uint8_t)((insn >> 8) & 0xFF);
+        data[pos + 2] = (uint8_t)((insn >> 16) & 0xFF);
+        data[pos + 3] = (uint8_t)((insn >> 24) & 0xFF);
     }
     return pos;
 }

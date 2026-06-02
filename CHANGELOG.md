@@ -2,6 +2,58 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.56.0 — Formal verification of the BCJ filters (CBMC)
+
+Machine-checked proofs for the branch filters, plus the explicit-masking
+edits that let the strictest checks pass. **Runtime behaviour is unchanged**:
+the filters are byte-for-byte identical (reversibility harnesses and filtered
+roundtrips reproduce the v2.55.0 output), and default (unfiltered) output is
+byte-identical — the ratio gate is baseline ± 0 and the differential fuzzer
+is 5200/5200.
+
+### What is proven
+
+The BCJ filters in `src/vv_bcj.c` run on the decode path: the inverse
+transform processes attacker-controlled decompressed bytes. They are pure and
+bounded, so they are now verified with CBMC rather than only fuzzed. New
+`verification/` directory with three harnesses (run via `make verify` or
+`sh verification/verify.sh`). For fully nondeterministic inputs up to a
+bounded size, CBMC proves:
+
+- **`vv_bcj_x86`** (sizes 0..12) and **`vv_bcj_arm64`** (sizes 0..16):
+  memory safety (no out-of-bounds or invalid pointer access), no signed
+  overflow, no invalid conversion, and **losslessness** —
+  `inverse(forward(x)) == x` for every input. This is the property the codec
+  depends on: a filter must never corrupt data.
+- **`vv_bcj_detect`** (sizes 0..72): memory safety on arbitrary and truncated
+  input, including the PE-header offset that is read from the input itself.
+
+Proofs use `--unwinding-assertions`, so the unwind bounds are themselves
+verified (sound up to the stated sizes, not merely a bounded search). The
+filters use intentional modular unsigned arithmetic — defined behaviour in C
+— so `--unsigned-overflow-check` is deliberately not enabled; every other
+standard CBMC safety check (`--bounds-check --pointer-check --conversion-check
+--signed-overflow-check`) is.
+
+### Supporting source change
+
+To satisfy `--conversion-check`, the filters' byte-serialisation now masks
+explicitly (`(uint8_t)(v & 0xFF)` instead of `(uint8_t)v`) at each store. This
+is behaviour-identical — truncating a `uint32_t` to `uint8_t` already takes
+the low 8 bits — and is verified so: the reversibility harnesses
+(40,402 ARM64 + 20,127 x86 round trips) still pass and filtered output is
+unchanged.
+
+### Validation
+
+- CBMC: all three harnesses `VERIFICATION SUCCESSFUL` with
+  `--unwinding-assertions`.
+- Filters byte-identical: reversibility harnesses pass; `--bcj` /
+  `--bcj-arm64` / `--auto-filter` produce the same output and round-trip.
+- Default output byte-identical (ratio gate ± 0 bytes; differential 5200/5200).
+- Full `make test` green (20/20 C suites + OOM sweep); `-Wall -Wextra -Werror`
+  clean.
+
 ## v2.55.0 — Automatic BCJ filter selection and OOM-robustness test sweep
 
 A usability/performance feature and a security hardening. **Default output is

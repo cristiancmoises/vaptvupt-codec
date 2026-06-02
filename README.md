@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.55.0. License: GPL-3.0-or-later (commercial license available:
+Version 2.56.0. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -143,6 +143,13 @@ UndefinedBehaviorSanitizer; releases that touch the decoder run a
 corrupt-input sweep (12,000+ cases) clean under both. The build is
 `-Wall -Wextra -Werror`.
 
+The BCJ branch filters are additionally formally verified with CBMC
+(`make verify`, or `sh verification/verify.sh`): for all inputs up to a
+bounded size, the x86 and AArch64 filters are proven memory-safe and lossless
+(`inverse(forward(x)) == x`), and the executable-header detector is proven
+memory-safe on arbitrary and truncated input. See
+[verification/README.md](verification/README.md).
+
 ## Repository layout
 
 ```
@@ -151,6 +158,7 @@ include/    public header (vaptvupt.h) and internal headers
 reference/  byte-exact Python and JavaScript reference decoders
 tests/      C suites + Python fuzzer/gate/CLI tests + OOM-robustness sweep
 bench/      competitive harness (competitive.py) and COMPARISON.md
+verification/ CBMC formal-verification harnesses for the BCJ filters
 ```
 
 ## Documentation
