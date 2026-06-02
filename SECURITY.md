@@ -105,8 +105,8 @@ The following tools and harnesses are permanently committed to the source tree f
   clean: no crash, no leak, no use-after-free on any single failure.
 
 ### Formal verification (`verification/`, `make verify`)
-The BCJ branch filters in `src/vv_bcj.c` run on the decode path (the inverse
-transform processes attacker-controlled decompressed bytes). They are
+The BCJ branch filters in `src/vv_bcj.c` and selected decoder helpers run on
+the decode path (processing attacker-controlled bytes). They are
 machine-checked with CBMC over fully nondeterministic inputs up to a bounded
 size:
 - **`vv_bcj_x86`**, **`vv_bcj_arm64`** — proven memory-safe (no OOB / invalid
@@ -114,13 +114,23 @@ size:
   (`inverse(forward(x)) == x`).
 - **`vv_bcj_detect`** — proven memory-safe on arbitrary and truncated input,
   including the PE-header offset that is read from the input itself.
+- **`read_ext_len`** — the decoder's variable-length integer reader, proven
+  never to read at or past the input end, and to advance its pointer within
+  `[base, end]`, for any compressed-input contents and any start offset. An
+  over-read here would be a heap-buffer-overflow on untrusted input. The
+  harness copies the function verbatim from `src/vv_decoder.c` and the verify
+  driver fails on drift, so the proof binds to the shipped code.
+- **block-header pack/unpack** (`vv_bh_pack` / `vv_bh_type` / `vv_bh_last` /
+  `vv_bh_size`) — proven a lossless round trip over the full valid field
+  domain, with every accessor in range for any 32-bit header, including
+  corrupt input.
 
 Proofs use `--unwinding-assertions` (the unwind bounds are themselves
 verified). The filters use intentional modular unsigned arithmetic — defined
 behaviour in C — so `--unsigned-overflow-check` is not enabled; every other
 standard CBMC safety check is. This complements the runtime fuzzing in
-`tests/test_bcj.c` with an exhaustive guarantee over all inputs up to the
-bound. See `verification/README.md`.
+`tests/test_bcj.c` and the differential fuzzer with an exhaustive guarantee
+over all inputs up to the bound. See `verification/README.md`.
 
 ### Regression reproducers (`tests/regression_inputs/`)
 13 permanent reproducer files covering every defect found:

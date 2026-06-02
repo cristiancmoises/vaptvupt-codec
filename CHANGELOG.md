@@ -2,6 +2,42 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.56.1 — Extend formal verification into the decoder (CBMC)
+
+Verification coverage extended to the untrusted-input decode path. **No source
+change to the codec** — `git diff v2.56.0 -- src include` is empty and the
+binary is byte-identical (md5 unchanged) — so behaviour is unchanged. This
+release adds proofs and documentation only.
+
+Two new CBMC harnesses join the three filter proofs (run via `make verify`):
+
+- **`read_ext_len`** — the decoder's variable-length integer reader. Proven,
+  for any compressed-input contents and any start offset, that it never reads
+  at or past the input end and that it advances its pointer within
+  `[base, end]`. This is the decode hot path; an over-read here would be a
+  heap-buffer-overflow on attacker-controlled input. The harness copies the
+  function verbatim from `src/vv_decoder.c`, and `verification/verify.sh`
+  fails if that copy drifts, so the proof binds to the shipped code.
+- **block-header pack/unpack** (`vv_bh_pack` / `vv_bh_type` / `vv_bh_last` /
+  `vv_bh_size`) — proven a lossless round trip over the full valid field
+  domain (type 0..3, last 0..1, size 0..2^21-1), and that every accessor
+  returns in range for any 32-bit header, including corrupt input.
+
+Both use `--unwinding-assertions` (unwind bounds verified) and the full CBMC
+safety suite (`--bounds-check --pointer-check --conversion-check
+--signed-overflow-check`).
+
+`verification/verify.sh` now runs all five proofs plus the drift guard;
+`verification/README.md` and `SECURITY.md` document the decoder coverage.
+
+### Validation
+
+- CBMC: all five harnesses `VERIFICATION SUCCESSFUL`, reproduced from a clean
+  checkout; `read_ext_len` drift guard passes.
+- Codec byte-identical to v2.56.0 (no `src`/`include` change; binary md5
+  unchanged); full `make test` green (20/20 C suites + OOM sweep); ratio gate
+  ± 0; differential 5200/5200.
+
 ## v2.56.0 — Formal verification of the BCJ filters (CBMC)
 
 Machine-checked proofs for the branch filters, plus the explicit-masking
