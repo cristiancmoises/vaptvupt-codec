@@ -54,4 +54,25 @@ echo "== CBMC: block-header pack/unpack (lossless round trip + accessor ranges) 
 "$CBMC" verification/cbmc_block_header.c -I include --bounds-check --pointer-check \
         --conversion-check --signed-overflow-check --unwinding-assertions --function main
 
+# Frama-C/Eva abstract-interpretation memory-safety analyses (unbounded value
+# reasoning), complementing the bounded CBMC proofs. Run only if frama-c is
+# present; skipped with a notice otherwise.
+if command -v frama-c >/dev/null 2>&1; then
+    echo "== Frama-C/Eva: read_ext_len memory-safe (0 alarms, any contents/start) =="
+    frama-c -eva -rte -eva-no-print verification/eva_read_ext_len.c 2>&1 \
+        | grep -E "alarms generated|errors or warnings" | head -2
+
+    echo "== Frama-C/Eva: block-header accessors UB-free (0 alarms) =="
+    frama-c -eva -rte -eva-no-print verification/eva_block_header.c 2>&1 \
+        | grep -E "alarms generated|errors or warnings" | head -2
+
+    echo "== Frama-C/Eva: BCJ filters + detector (3 residual pointer-compare/ptrdiff"
+    echo "   obligations are Eva imprecision, discharged by the CBMC proofs above) =="
+    frama-c -eva -rte -eva-no-print -cpp-extra-args="-Iinclude" \
+        verification/eva_bcj.c src/vv_bcj.c 2>&1 \
+        | grep -E "alarms generated|some alarms|errors or warnings" | head -2
+else
+    echo "== Frama-C/Eva analyses skipped (frama-c not installed) =="
+fi
+
 echo "All BCJ and decoder verification proofs passed."

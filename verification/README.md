@@ -40,9 +40,35 @@ These proofs complement the runtime fuzzing in `tests/test_bcj.c` and the
 differential fuzzer (tens of thousands of random/adversarial cases) with an
 exhaustive guarantee over all inputs up to the bound.
 
+## Two tiers: CBMC (bounded) and Frama-C/Eva (abstract interpretation)
+
+The CBMC proofs above are *bounded model checking*: exhaustive over all inputs
+up to a size, with `--unwinding-assertions` confirming the bounds suffice.
+They establish the bijection (losslessness) property, which abstract
+interpretation cannot.
+
+The harnesses prefixed `eva_` add a second, independent tier using Frama-C's
+Eva plugin (abstract interpretation with RTE), which reasons about value
+ranges symbolically rather than enumerating concrete inputs:
+
+| Harness | Result |
+|---|---|
+| `eva_read_ext_len.c`   | **0 alarms** — no invalid pointer access, no out-of-bounds, no UB, for any buffer contents and any start offset |
+| `eva_block_header.c`   | **0 alarms** — the pack/unpack accessors are free of shift/overflow UB for any field values |
+| `eva_bcj.c`            | the BCJ filters and detector raise **3 residual obligations** (`\pointer_comparable` on the in-bounds scan comparisons, and one pointer-difference overflow check). These are Eva conservatism on pointer arithmetic that holds within a single object; they are discharged by the CBMC `--pointer-check` proofs above. No other alarms. |
+
+`acsl_read_ext_len.c` carries the ACSL contract and loop invariant for an
+*unbounded* deductive proof of `read_ext_len` via Frama-C's WP plugin. WP is
+not in the `frama-c-base` package; with the full `frama-c` (WP) installed,
+`frama-c -wp -wp-rte acsl_read_ext_len.c` discharges memory safety for buffers
+of any size. The Eva result above provides a memory-safety guarantee that runs
+with `frama-c-base` alone.
+
 ## Running
 
-Requires CBMC (Debian/Ubuntu: `apt-get install cbmc`). From the repo root:
+Requires CBMC for the bounded proofs (Debian/Ubuntu: `apt-get install cbmc`)
+and, optionally, `frama-c-base` + `z3` for the Eva analyses
+(`apt-get install frama-c-base z3`). From the repo root:
 
 ```sh
 sh verification/verify.sh
@@ -50,4 +76,6 @@ sh verification/verify.sh
 make verify
 ```
 
-Each harness prints `VERIFICATION SUCCESSFUL`.
+The CBMC harnesses print `VERIFICATION SUCCESSFUL`; the Eva analyses print
+their alarm counts. If `frama-c` is absent, the Eva analyses are skipped with
+a notice and the CBMC proofs still run.

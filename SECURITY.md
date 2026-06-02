@@ -132,6 +132,17 @@ standard CBMC safety check is. This complements the runtime fuzzing in
 `tests/test_bcj.c` and the differential fuzzer with an exhaustive guarantee
 over all inputs up to the bound. See `verification/README.md`.
 
+A second, independent tier uses Frama-C's Eva plugin (abstract interpretation
+with RTE), which reasons about value ranges rather than enumerating inputs and
+runs with the `frama-c-base` package. Eva confirms `read_ext_len` and the
+block-header accessors raise **0 alarms** (no invalid pointer access, no
+out-of-bounds, no undefined behaviour) for any input; the BCJ filters raise
+only 3 residual pointer-comparison / pointer-difference obligations that hold
+within a single object and are discharged by the CBMC `--pointer-check`
+proofs. `verification/acsl_read_ext_len.c` additionally carries an ACSL
+contract and loop invariant for an unbounded deductive proof of `read_ext_len`
+with the full Frama-C WP plugin.
+
 ### Regression reproducers (`tests/regression_inputs/`)
 13 permanent reproducer files covering every defect found:
 - `huf4_inflate_s1.vv`, `huf4_zero_s1.vv`, `huf4_truncate.vv` (Sprint 105 4-stream Huffman DoS attacks)

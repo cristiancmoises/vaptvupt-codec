@@ -2,6 +2,50 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.56.2 — Second verification tier: Frama-C/Eva abstract interpretation
+
+Adds an independent, value-range static-analysis tier alongside the CBMC
+bounded model checking. **No codec source change** (`git diff v2.56.1 -- src
+include` is empty; binary md5 unchanged), so behaviour is identical — proofs
+and docs only.
+
+### Frama-C/Eva analyses (run via `make verify` when `frama-c` is present)
+
+CBMC proves the filters and decoder helpers exhaustively up to a bounded size
+and establishes the bijection (losslessness) property. Frama-C's Eva plugin
+adds a complementary tier that reasons about value ranges symbolically rather
+than enumerating concrete inputs:
+
+- **`eva_read_ext_len.c`** — **0 alarms**: the decoder's varint reader has no
+  invalid pointer access, no out-of-bounds read, and no UB for any buffer
+  contents and any start offset.
+- **`eva_block_header.c`** — **0 alarms**: the block-header pack/unpack
+  accessors are free of shift/overflow UB for any field values.
+- **`eva_bcj.c`** — the BCJ filters and detector raise only 3 residual
+  obligations (`\pointer_comparable` on the in-bounds scan comparisons and one
+  pointer-difference overflow check). These are Eva conservatism on pointer
+  arithmetic within a single object and are discharged by the CBMC
+  `--pointer-check` proofs; no other alarms.
+
+`acsl_read_ext_len.c` carries an ACSL contract and loop invariant for an
+*unbounded* deductive proof of `read_ext_len` via Frama-C's WP plugin. WP is
+not in the `frama-c-base` package; the Eva result above runs with
+`frama-c-base` alone, and the annotated file is ready for `frama-c -wp` where
+the full toolchain is installed.
+
+`verification/verify.sh` now runs the five CBMC proofs and, if `frama-c` is
+installed, the three Eva analyses; it skips the Eva tier with a notice
+otherwise. `verification/README.md` and `SECURITY.md` document both tiers.
+
+### Validation
+
+- CBMC: five harnesses `VERIFICATION SUCCESSFUL` (unchanged).
+- Eva: `read_ext_len` and block-header at 0 alarms; BCJ with 3 documented
+  residual obligations cross-covered by CBMC.
+- Codec byte-identical to v2.56.1 (no `src`/`include` change; binary md5
+  unchanged); full `make test` green (20/20 C suites + OOM sweep); ratio gate
+  ± 0; differential 5200/5200.
+
 ## v2.56.1 — Extend formal verification into the decoder (CBMC)
 
 Verification coverage extended to the untrusted-input decode path. **No source

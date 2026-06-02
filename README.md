@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.56.1. License: GPL-3.0-or-later (commercial license available:
+Version 2.56.2. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -150,8 +150,10 @@ AArch64 BCJ filters are proven memory-safe and lossless
 memory-safe on arbitrary/truncated input; the decoder's variable-length
 integer reader (`read_ext_len`) is proven never to read past the input end;
 and the block-header pack/unpack is proven a lossless round trip with
-in-range accessors for any header. See
-[verification/README.md](verification/README.md).
+in-range accessors for any header. A second tier of Frama-C/Eva
+abstract-interpretation analyses (run with `frama-c-base`) independently
+confirms `read_ext_len` and the block-header accessors raise no runtime error
+for any input. See [verification/README.md](verification/README.md).
 
 ## Repository layout
 
