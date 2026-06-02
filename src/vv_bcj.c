@@ -178,3 +178,55 @@ size_t vv_bcj_arm64(uint8_t *data, size_t size, uint32_t ip, int encoding) {
     }
     return pos;
 }
+
+/*
+ * Detect the executable architecture of `data` to pick a BCJ filter.
+ * Recognises ELF, PE (MZ/PE), and little-endian Mach-O thin binaries. Every
+ * field read is length-checked, so the function is safe on truncated or
+ * non-executable input; in that case it returns VV_FILTER_NONE.
+ */
+vv_filter_kind_t vv_bcj_detect(const uint8_t *data, size_t size) {
+    if (!data)
+        return VV_FILTER_NONE;
+
+    /* ELF: 0x7F 'E' 'L' 'F'. e_ident[EI_DATA] at offset 5 (1=LE, 2=BE);
+     * e_machine is a 2-byte field at offset 18. */
+    if (size >= 20 && data[0] == 0x7F && data[1] == 'E' &&
+        data[2] == 'L' && data[3] == 'F') {
+        unsigned mach = (data[5] == 2)
+            ? (((unsigned)data[18] << 8) | data[19])    /* big-endian */
+            : ((unsigned)data[18] | ((unsigned)data[19] << 8)); /* little-endian */
+        if (mach == 62 || mach == 3)   return VV_FILTER_X86;    /* EM_X86_64, EM_386 */
+        if (mach == 183)               return VV_FILTER_ARM64;  /* EM_AARCH64 */
+        return VV_FILTER_NONE;
+    }
+
+    /* PE/COFF: "MZ", then a 4-byte PE-header offset at 0x3C, then "PE\0\0"
+     * and a 2-byte little-endian Machine field. */
+    if (size >= 0x40 && data[0] == 'M' && data[1] == 'Z') {
+        uint32_t pe = (uint32_t)data[0x3C] | ((uint32_t)data[0x3D] << 8) |
+                      ((uint32_t)data[0x3E] << 16) | ((uint32_t)data[0x3F] << 24);
+        if ((size_t)pe + 6 <= size && data[pe] == 'P' && data[pe + 1] == 'E' &&
+            data[pe + 2] == 0 && data[pe + 3] == 0) {
+            unsigned mach = (unsigned)data[pe + 4] | ((unsigned)data[pe + 5] << 8);
+            if (mach == 0x8664 || mach == 0x014C) return VV_FILTER_X86;   /* AMD64, I386 */
+            if (mach == 0xAA64)                   return VV_FILTER_ARM64; /* ARM64 */
+        }
+        return VV_FILTER_NONE;
+    }
+
+    /* Mach-O thin (little-endian on disk): magic 0xFEEDFACE/0xFEEDFACF, then
+     * a 4-byte little-endian cputype. CPU_ARCH_ABI64 = 0x01000000. */
+    if (size >= 8) {
+        uint32_t magic = (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+                         ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+        if (magic == 0xFEEDFACEu || magic == 0xFEEDFACFu) {
+            unsigned cpu = (unsigned)data[4] | ((unsigned)data[5] << 8) |
+                           ((unsigned)data[6] << 16) | ((unsigned)data[7] << 24);
+            if (cpu == 0x01000007u || cpu == 7u) return VV_FILTER_X86;   /* x86_64, i386 */
+            if (cpu == 0x0100000Cu)              return VV_FILTER_ARM64; /* arm64 */
+        }
+    }
+
+    return VV_FILTER_NONE;
+}

@@ -65,6 +65,9 @@ static void usage(void) {
         "            BCJ filter (BL + ADRP) before compression. Improves\n"
         "            AArch64 machine-code ratio (measured ~+2-5%%). Opt-in;\n"
         "            requires a v2.54.0+ decoder.\n"
+        "  --auto-filter, --filter auto  Detect the input's executable header\n"
+        "            (ELF/PE/Mach-O) and apply the matching BCJ filter\n"
+        "            automatically, or none if not recognised. Opt-in.\n"
         "  -v        Verbose output\n"
         "  -h        Show this help\n",
         VV_VERSION_STRING);
@@ -117,6 +120,7 @@ int main(int argc, char **argv) {
     int window_log = 0;     /* -w/--window N: explicit window log (0 = auto) */
     int filter_x86 = 0;     /* --filter=x86 / --bcj: x86 BCJ branch filter */
     int filter_arm64 = 0;   /* --filter=arm64 / --bcj-arm64: AArch64 filter */
+    int filter_auto = 0;    /* --auto-filter: pick a filter from the header */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) do_compress = 1;
@@ -130,11 +134,13 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--format-v2") == 0) use_format_v2 = 1;
         else if (strcmp(argv[i], "--bcj") == 0) filter_x86 = 1;
         else if (strcmp(argv[i], "--bcj-arm64") == 0) filter_arm64 = 1;
+        else if (strcmp(argv[i], "--auto-filter") == 0) filter_auto = 1;
         else if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
             const char *fname = argv[++i];
             if (strcmp(fname, "x86") == 0) filter_x86 = 1;
             else if (strcmp(fname, "arm64") == 0) filter_arm64 = 1;
-            else { fprintf(stderr, "Unknown --filter %s (supported: x86, arm64)\n", fname); return 1; }
+            else if (strcmp(fname, "auto") == 0) filter_auto = 1;
+            else { fprintf(stderr, "Unknown --filter %s (supported: x86, arm64, auto)\n", fname); return 1; }
         }
         else if ((strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--window") == 0)
                  && i + 1 < argc) {
@@ -199,6 +205,7 @@ int main(int argc, char **argv) {
         }
         opts.filter_x86 = filter_x86;
         opts.filter_arm64 = filter_arm64;
+        opts.filter_auto = filter_auto;
 
         /* MT path uses slightly larger bound because concatenated frames
          * have per-frame overhead. Add 64 KB per potential chunk. */

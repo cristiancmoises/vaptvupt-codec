@@ -2,6 +2,67 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.55.0 — Automatic BCJ filter selection and OOM-robustness test sweep
+
+A usability/performance feature and a security hardening. **Default output is
+byte-identical to v2.54.0** (every new path is opt-in or test-only); the
+ratio gate confirms baseline ± 0 bytes and the differential fuzzer is
+5200/5200.
+
+### Automatic filter selection (`--auto-filter`)
+
+The x86 and AArch64 BCJ filters only help if the caller knows to enable them.
+`vv_bcj_detect` (in `src/vv_bcj.c`) reads an ELF, PE (MZ/PE), or little-endian
+Mach-O header and returns the matching filter:
+
+- x86 / x86-64 (and 32-bit x86) → x86 filter
+- AArch64 → ARM64 filter
+- anything else, or no recognised header → none
+
+Enable with `vv_options_t.filter_auto = 1` or CLI `--auto-filter` /
+`--filter auto`. On an x86 ELF the result is byte-identical to `--bcj`; on an
+AArch64 ELF, identical to `--bcj-arm64`; on text or an unrecognised header no
+filter is applied and output is unchanged. Detection is fully bounds-checked
+(safe on truncated/arbitrary input) and a detection miss is never a
+correctness problem — the filters are bijections, so a wrong guess still
+round-trips, it merely may not improve the ratio. Off by default.
+
+### OOM-robustness test sweep (security)
+
+The formal audit lists allocation-failure crashes and leaks as a
+historically-fixed defect class, and the BCJ encode path added in v2.53.4
+allocates a working copy. `tests/oom_inject.c` (an LD_PRELOAD allocator
+interposer) plus `tests/oom_sweep.sh` now fail **each allocation site** in
+`vv_compress` (including the BCJ copy) and `vv_decompress` in turn and assert
+the binary never crashes — it must return a clean error or succeed. The sweep
+runs on every `make test`. Under AddressSanitizer + UndefinedBehaviorSanitizer
+(point `VV_BIN` at an ASan build) the same sweep additionally proves no leak
+and no use-after-free on every allocation-failure path, because the injector
+routes real allocations through `dlsym(RTLD_NEXT)` into ASan. The full sweep
+(144 allocation points across compress and decompress) is clean: no crash, no
+leak, no use-after-free on any single allocation failure.
+
+### Also
+
+- `tests/test_sprint16.c`: the source-compression assertion now replicates a
+  fixed 60 KiB slice of `vv_encoder.c` instead of the whole file. The whole
+  file had grown past the 64 KiB balanced window, so its 16× replication
+  ratio depended on the file's exact length (a window-boundary cliff) rather
+  than codec quality. The codec is unchanged — verified byte-identical on
+  identical input; only the brittle fixture was fixed.
+
+### Validation
+
+- **Auto-selection correctness:** `--auto-filter` output is byte-identical to
+  the manual flag on real x86 and AArch64 ELF binaries, and to no-filter on
+  text; detection is safe on truncated/garbage/NULL input.
+- **Default unchanged:** Silesia fast/balanced/extreme byte-identical; ratio
+  gate baseline ± 0 bytes; differential fuzzer 5200/5200.
+- **OOM sweep:** all 144 allocation points clean (no crash) in `make test`;
+  no leak/UAF under ASan + UBSan.
+- Full `make test` green (20/20 C suites + OOM sweep); `-Wall -Wextra -Werror`
+  clean.
+
 ## v2.54.0 — AArch64 BCJ filter (BL + ADRP) and permanent BCJ corrupt-input fuzzing
 
 Extends the branch-filter work to a second architecture and hardens the test

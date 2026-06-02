@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.54.0. License: GPL-3.0-or-later (commercial license available:
+Version 2.55.0. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -30,6 +30,8 @@ Ratio (raw / compressed, higher is better):
   gzip-9 (2.251 vs 2.230 on libc); without it, vv trails gzip-9 on binary.
 - On AArch64 machine code, the opt-in `--bcj-arm64` filter (BL + ADRP) adds
   +2.4–4.6%; it narrows the gap to gzip-9 but does not close it.
+- `--auto-filter` picks the right filter from the file's ELF/PE/Mach-O header,
+  so the binary-ratio wins above need no manual architecture flag.
 - zstd-19 and xz-9 win on binary ratio overall; vv does not target that tier.
 
 Throughput, dickens, in-process best-of-7 (MB/s):
@@ -76,12 +78,15 @@ vaptvupt -d -o file.out file.vv               # decompress
 vaptvupt -c -m balanced -w 24 -o big.vv big   # larger window (long-range data)
 vaptvupt -c -m extreme --bcj -o code.vv prog  # x86 BCJ filter (machine code)
 vaptvupt -c -m extreme --bcj-arm64 -o a.vv a  # AArch64 BCJ filter (BL + ADRP)
+vaptvupt -c -m extreme --auto-filter -o o.vv f # detect ELF/PE/Mach-O, pick the filter
 ```
 
 `-w N` sets the window log (10-24 = 1 KiB-16 MiB, 0 = auto). `--bcj`
 (`--filter x86`) and `--bcj-arm64` (`--filter arm64`) apply the reversible
-x86 and AArch64 branch filters respectively; they are mutually exclusive.
-`--fast` skips the XXH64 footer. All of `-w`, `--bcj`, and `--bcj-arm64` are
+x86 and AArch64 branch filters; they are mutually exclusive. `--auto-filter`
+(`--filter auto`) sniffs the input's executable header and selects the
+matching filter automatically, or none if unrecognised. `--fast` skips the
+XXH64 footer. All of `-w`, `--bcj`, `--bcj-arm64`, and `--auto-filter` are
 opt-in and do not change default output.
 
 Library (one-shot):
@@ -125,6 +130,10 @@ bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
 - The Python and JavaScript reference decoders against the C output.
 - A differential fuzzer (5200 cases, fixed seed) cross-checking C and Python.
 - The negative corpus (malformed frames must be rejected, not crash).
+- An OOM-robustness sweep that fails each allocation site in compress and
+  decompress in turn and asserts the codec never crashes (returns a clean
+  error or succeeds). Under AddressSanitizer the same sweep also proves no
+  leak or use-after-free on any allocation-failure path.
 - The ratio gate (every fixture within +/- 0 bytes of the committed
   baseline) and an informational decode-speed gate.
 - The competitive harness self-test and the `-w` CLI test.
@@ -140,7 +149,7 @@ corrupt-input sweep (12,000+ cases) clean under both. The build is
 src/        codec (encoder, decoder, tANS, Huffman, BCJ, xxh64, API, CLI)
 include/    public header (vaptvupt.h) and internal headers
 reference/  byte-exact Python and JavaScript reference decoders
-tests/      C test suites + Python fuzzer/gate/CLI tests
+tests/      C suites + Python fuzzer/gate/CLI tests + OOM-robustness sweep
 bench/      competitive harness (competitive.py) and COMPARISON.md
 ```
 

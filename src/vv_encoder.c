@@ -1564,11 +1564,14 @@ size_t vv_compress_bound(size_t src_len) {
          + sizeof(vv_frame_header_t) + sizeof(vv_frame_footer_t);
 }
 
-/* Public vv_compress: if the x86 BCJ filter is requested, apply the
- * reversible forward transform to a private copy of the input (the public
- * input is const and must not be mutated), then compress the copy. The
- * header flag bit2 set by vv_compress_inner tells the decoder to invert it.
- * When the filter is off, this is a direct pass-through with no copy. */
+/* Public vv_compress: select and apply a reversible BCJ branch filter, then
+ * compress. A filter may be requested explicitly (filter_x86 / filter_arm64)
+ * or chosen automatically (filter_auto: sniff the executable header). The
+ * filter runs on a private copy because the public input is const; the
+ * matching header flag (bit2 x86 / bit3 ARM64), set by vv_compress_inner from
+ * the resolved options, tells the decoder to invert it. When no filter
+ * applies, this is a direct pass-through with no copy and byte-identical
+ * output. */
 int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
                           uint8_t *dst, size_t dst_cap,
                           const vv_options_t *opts);
@@ -1576,17 +1579,31 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
 int64_t vv_compress(const uint8_t *src, size_t src_len,
                     uint8_t *dst, size_t dst_cap,
                     const vv_options_t *opts) {
-    if (opts && (opts->filter_x86 || opts->filter_arm64) && src_len > 0 && src) {
-        uint8_t *copy = (uint8_t *)malloc(src_len);
-        if (!copy) return VV_ERR_NOMEM;
-        memcpy(copy, src, src_len);
-        if (opts->filter_x86)
-            vv_bcj_x86(copy, src_len, 0, 1);     /* forward: relative -> absolute */
-        else
-            vv_bcj_arm64(copy, src_len, 0, 1);   /* AArch64 BL + ADRP */
-        int64_t r = vv_compress_inner(copy, src_len, dst, dst_cap, opts);
-        free(copy);
-        return r;
+    int auto_on = opts && opts->filter_auto &&
+                  !opts->filter_x86 && !opts->filter_arm64;
+
+    if (opts && (opts->filter_x86 || opts->filter_arm64 || auto_on) &&
+        src_len > 0 && src) {
+        vv_options_t eff = *opts;
+        if (auto_on) {
+            vv_filter_kind_t k = vv_bcj_detect(src, src_len);
+            if (k == VV_FILTER_X86)        eff.filter_x86 = 1;
+            else if (k == VV_FILTER_ARM64) eff.filter_arm64 = 1;
+            /* k == NONE: leave eff with no filter -> falls through below */
+        }
+        if (eff.filter_x86 || eff.filter_arm64) {
+            uint8_t *copy = (uint8_t *)malloc(src_len);
+            if (!copy) return VV_ERR_NOMEM;
+            memcpy(copy, src, src_len);
+            if (eff.filter_x86)
+                vv_bcj_x86(copy, src_len, 0, 1);     /* forward: relative -> absolute */
+            else
+                vv_bcj_arm64(copy, src_len, 0, 1);   /* AArch64 BL + ADRP */
+            int64_t r = vv_compress_inner(copy, src_len, dst, dst_cap, &eff);
+            free(copy);
+            return r;
+        }
+        /* auto-detect found no executable header: fall through unchanged */
     }
     return vv_compress_inner(src, src_len, dst, dst_cap, opts);
 }

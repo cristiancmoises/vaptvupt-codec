@@ -279,6 +279,9 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST18_BIN)
 	./$(TEST19_BIN)
 	./$(TEST20_BIN)
+	@echo ""
+	@echo "OOM-robustness sweep (no crash on any single allocation failure):"
+	@VV_BIN=./$(TARGET) CC="$(CC)" sh tests/oom_sweep.sh
 	@if command -v python3 >/dev/null 2>&1 ; then \
 		echo "" ; \
 		echo "Python reference decoder self-test (validates FORMAT.md decode side):" ; \

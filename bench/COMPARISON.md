@@ -126,6 +126,17 @@ exactly reversible on arbitrary input, decodable by v2.54.0+ decoders (header
 flag bit3), and mutually exclusive with the x86 filter. Use it only on
 AArch64 machine code.
 
+## Automatic filter selection (`--auto-filter` / `--filter auto`)
+
+`--auto-filter` reads the input's ELF, PE, or Mach-O header and applies the
+matching filter — x86 for x86/x86-64, ARM64 for AArch64, none otherwise — so
+the binary-ratio wins above are available without knowing the target
+architecture. On an x86 ELF it produces byte-identical output to `--bcj`; on
+an AArch64 ELF, identical to `--bcj-arm64`; on text or an unrecognised header
+it applies no filter and output is unchanged. Detection is fully
+bounds-checked and a detection miss is never a correctness problem (the
+filters are bijections). It remains opt-in: default output is unaffected.
+
 ## Long-range window (`-w` / `--window`)
 
 For large inputs with long-range redundancy, the default per-mode window is

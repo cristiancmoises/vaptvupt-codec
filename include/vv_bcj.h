@@ -34,4 +34,24 @@ size_t vv_bcj_x86(uint8_t *data, size_t size, uint32_t ip, int encoding);
  */
 size_t vv_bcj_arm64(uint8_t *data, size_t size, uint32_t ip, int encoding);
 
+/* Which branch filter best fits a buffer, by sniffing an executable header. */
+typedef enum {
+    VV_FILTER_NONE  = 0,
+    VV_FILTER_X86   = 1,
+    VV_FILTER_ARM64 = 2
+} vv_filter_kind_t;
+
+/*
+ * Inspect the first bytes of `data` for an ELF, PE (MZ/PE), or Mach-O header
+ * and return the BCJ filter that matches its machine type:
+ *   - x86 / x86-64 (and 32-bit x86)        -> VV_FILTER_X86
+ *   - AArch64 (ARM64)                       -> VV_FILTER_ARM64
+ *   - anything else, or no recognised header-> VV_FILTER_NONE
+ * Fully bounds-checked: safe on truncated or arbitrary input. Detection
+ * errors are never correctness bugs — a missed match just means no filter,
+ * and a spurious match still round-trips (the filters are bijections), it
+ * merely may not improve the ratio.
+ */
+vv_filter_kind_t vv_bcj_detect(const uint8_t *data, size_t size);
+
 #endif /* VV_BCJ_H */

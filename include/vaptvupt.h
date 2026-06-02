@@ -212,6 +212,14 @@ typedef struct {
                               *     decoder. Opt-in; default 0. Mutually
                               *     exclusive with filter_x86 (a file is one
                               *     architecture). */
+    int       filter_auto;   /* 1 = sniff the input for an ELF/PE/Mach-O
+                              *     header and automatically select the x86
+                              *     or ARM64 BCJ filter (or none) to match.
+                              *     Has no effect if filter_x86 or
+                              *     filter_arm64 is already set, or if no
+                              *     executable header is recognised — in
+                              *     which case output is unchanged. Opt-in;
+                              *     default 0. */
 } vv_options_t;
 
 static inline void vv_default_options(vv_options_t *o) {
@@ -223,6 +231,7 @@ static inline void vv_default_options(vv_options_t *o) {
     o->compat_v246_5_decoder = 0;
     o->filter_x86 = 0;
     o->filter_arm64 = 0;
+    o->filter_auto = 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════

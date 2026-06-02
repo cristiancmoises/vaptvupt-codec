@@ -132,15 +132,22 @@ int main(void) {
         free(buf);
     }
 
-    /* ─── Test 3: Source code still strong ─── */
+    /* ─── Test 3: Source code still strong ───
+     * Replicate a fixed-size slice (not the whole file) so the assertion is
+     * stable as src/vv_encoder.c grows. A ~105 KB period exceeds the default
+     * 64 KiB balanced window, which would collapse cross-copy matching and
+     * make the ratio depend on the file's exact length rather than on codec
+     * quality. A 60 KiB slice fits inside the window, so 16x replication
+     * stays highly compressible and the test measures what it intends to. */
     {
         FILE *f = fopen("src/vv_encoder.c", "rb");
         if (f) {
-            fseek(f, 0, SEEK_END); size_t len = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
-            uint8_t *buf = (uint8_t *)malloc(len);
+            fseek(f, 0, SEEK_END); size_t flen = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
+            size_t len = flen < 60000 ? flen : 60000;   /* fixed slice <= 60 KiB */
+            uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
             size_t nread = fread(buf, 1, len, f);
             fclose(f);
-            if (nread == len) {
+            if (nread == len && len > 0) {
                 /* Replicate for meaningful ratio */
                 size_t big = len * 16;
                 uint8_t *big_buf = (uint8_t *)malloc(big);
