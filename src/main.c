@@ -61,6 +61,10 @@ static void usage(void) {
         "            ratio (measured ~+3-7%%; e.g. libc.so 2.179x -> 2.251x,\n"
         "            beating gzip-9). The decoder inverts it automatically\n"
         "            via a header flag. Opt-in; requires a v2.53.4+ decoder.\n"
+        "  --bcj-arm64, --filter arm64  Apply the reversible AArch64 (ARM64)\n"
+        "            BCJ filter (BL + ADRP) before compression. Improves\n"
+        "            AArch64 machine-code ratio (measured ~+2-5%%). Opt-in;\n"
+        "            requires a v2.54.0+ decoder.\n"
         "  -v        Verbose output\n"
         "  -h        Show this help\n",
         VV_VERSION_STRING);
@@ -112,6 +116,7 @@ int main(int argc, char **argv) {
     int use_format_v2 = 0;  /* --format-v2: emit 'T' tag blocks (min_match=3) */
     int window_log = 0;     /* -w/--window N: explicit window log (0 = auto) */
     int filter_x86 = 0;     /* --filter=x86 / --bcj: x86 BCJ branch filter */
+    int filter_arm64 = 0;   /* --filter=arm64 / --bcj-arm64: AArch64 filter */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) do_compress = 1;
@@ -124,10 +129,12 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--fast") == 0) fast_decode = 1;
         else if (strcmp(argv[i], "--format-v2") == 0) use_format_v2 = 1;
         else if (strcmp(argv[i], "--bcj") == 0) filter_x86 = 1;
+        else if (strcmp(argv[i], "--bcj-arm64") == 0) filter_arm64 = 1;
         else if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
             const char *fname = argv[++i];
             if (strcmp(fname, "x86") == 0) filter_x86 = 1;
-            else { fprintf(stderr, "Unknown --filter %s (supported: x86)\n", fname); return 1; }
+            else if (strcmp(fname, "arm64") == 0) filter_arm64 = 1;
+            else { fprintf(stderr, "Unknown --filter %s (supported: x86, arm64)\n", fname); return 1; }
         }
         else if ((strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--window") == 0)
                  && i + 1 < argc) {
@@ -186,7 +193,12 @@ int main(int argc, char **argv) {
          * +4–6% on nci/webster/mozilla at wlog=24) but can hurt inputs
          * with little long-range structure, so it is opt-in, not default. */
         if (window_log != 0) opts.window_log = (uint8_t)window_log;
+        if (filter_x86 && filter_arm64) {
+            fprintf(stderr, "Cannot combine --filter x86 and --filter arm64 (a file is one architecture)\n");
+            return 1;
+        }
         opts.filter_x86 = filter_x86;
+        opts.filter_arm64 = filter_arm64;
 
         /* MT path uses slightly larger bound because concatenated frames
          * have per-frame overhead. Add 64 KB per potential chunk. */

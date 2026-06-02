@@ -1576,11 +1576,14 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
 int64_t vv_compress(const uint8_t *src, size_t src_len,
                     uint8_t *dst, size_t dst_cap,
                     const vv_options_t *opts) {
-    if (opts && opts->filter_x86 && src_len > 0 && src) {
+    if (opts && (opts->filter_x86 || opts->filter_arm64) && src_len > 0 && src) {
         uint8_t *copy = (uint8_t *)malloc(src_len);
         if (!copy) return VV_ERR_NOMEM;
         memcpy(copy, src, src_len);
-        vv_bcj_x86(copy, src_len, 0, 1);   /* forward: relative -> absolute */
+        if (opts->filter_x86)
+            vv_bcj_x86(copy, src_len, 0, 1);     /* forward: relative -> absolute */
+        else
+            vv_bcj_arm64(copy, src_len, 0, 1);   /* AArch64 BL + ADRP */
         int64_t r = vv_compress_inner(copy, src_len, dst, dst_cap, opts);
         free(copy);
         return r;
@@ -1704,7 +1707,9 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
     memset(&fh, 0, sizeof(fh));
     fh.magic = VV_MAGIC;
     fh.version = 1;
-    fh.flags = (opts->checksum ? 1 : 0) | (opts->filter_x86 ? 4 : 0);
+    fh.flags = (opts->checksum ? 1 : 0)
+             | (opts->filter_x86 ? 4 : 0)
+             | (opts->filter_arm64 ? 8 : 0);
     fh.mode_hint = (uint8_t)opts->mode;
     fh.window_log = wlog;
     fh.content_size = (uint64_t)src_len;

@@ -103,3 +103,78 @@ size_t vv_bcj_x86(uint8_t *data, size_t size, uint32_t ip, int encoding) {
         }
     }
 }
+
+/*
+ * AArch64 (ARM64) BL + ADRP filter.
+ *
+ * AArch64 instructions are fixed 32-bit, little-endian, 4-byte aligned. Two
+ * instruction classes carry PC-relative immediates worth converting:
+ *
+ *   BL (branch-with-link, "call"): opcode bits [31:26] == 0b100101, with a
+ *   26-bit signed immediate in bits [25:0] giving the target as a *word*
+ *   offset relative to the instruction (byte offset = imm26 * 4).
+ *
+ *   ADRP (address of 4 KiB page, PC-relative): bit [31] == 1 and bits
+ *   [28:24] == 0b10000 (mask 0x9F000000 == 0x90000000), with a 21-bit signed
+ *   immediate split as immlo = bits [30:29] and immhi = bits [23:5], giving a
+ *   page offset relative to the instruction's own page.
+ *
+ * As on x86, the same callee or the same global reached from different sites
+ * yields different relative immediates; converting them to an absolute form
+ * (BL: absolute word index; ADRP: absolute page index) makes repeated
+ * references encode identically, which the LZ+ANS stage then compresses.
+ *
+ * Both conversions add/subtract the instruction's own index modulo the
+ * immediate width (2^26 for BL, 2^21 for ADRP) and write only the immediate
+ * bits back — every opcode/register bit is preserved exactly. The decode
+ * pass therefore recognises the identical set of instructions, and the
+ * modular arithmetic is a perfect bijection on arbitrary input: bytes that
+ * merely look like BL/ADRP are transformed and untransformed identically, so
+ * the round trip is lossless regardless of content. The unconditional-branch
+ * encoding (B, opcode 000101) and everything else are left untouched.
+ *
+ * `ip` is the stream position of byte 0 (use 0 for whole-buffer transforms).
+ * `encoding` != 0 = forward (relative -> absolute), 0 = inverse. Bytes are
+ * processed in aligned 4-byte words; a trailing partial word is left as-is,
+ * consistently between forward and inverse.
+ */
+size_t vv_bcj_arm64(uint8_t *data, size_t size, uint32_t ip, int encoding) {
+    if (size < 4)
+        return 0;
+
+    size_t pos = 0;
+    size_t limit = size & ~(size_t)3;   /* whole 4-byte words only */
+
+    for (; pos < limit; pos += 4) {
+        uint32_t insn = (uint32_t)data[pos] |
+                        ((uint32_t)data[pos + 1] << 8) |
+                        ((uint32_t)data[pos + 2] << 16) |
+                        ((uint32_t)data[pos + 3] << 24);
+
+        if ((insn >> 26) == 0x25u) {
+            /* BL: 26-bit word offset. */
+            uint32_t imm = insn & 0x03FFFFFFu;
+            uint32_t cur = (ip + (uint32_t)pos) >> 2;       /* word index */
+            if (encoding) imm = (imm + cur) & 0x03FFFFFFu;
+            else          imm = (imm - cur) & 0x03FFFFFFu;
+            insn = (insn & 0xFC000000u) | imm;
+        } else if ((insn & 0x9F000000u) == 0x90000000u) {
+            /* ADRP: 21-bit page offset, immlo=[30:29], immhi=[23:5]. */
+            uint32_t imm = ((insn >> 29) & 0x3u) | (((insn >> 5) & 0x7FFFFu) << 2);
+            uint32_t cur = (ip + (uint32_t)pos) >> 12;      /* page index */
+            if (encoding) imm = (imm + cur) & 0x001FFFFFu;
+            else          imm = (imm - cur) & 0x001FFFFFu;
+            insn = (insn & 0x9F00001Fu)
+                 | ((imm & 0x3u) << 29)
+                 | (((imm >> 2) & 0x7FFFFu) << 5);
+        } else {
+            continue;
+        }
+
+        data[pos]     = (uint8_t)insn;
+        data[pos + 1] = (uint8_t)(insn >> 8);
+        data[pos + 2] = (uint8_t)(insn >> 16);
+        data[pos + 3] = (uint8_t)(insn >> 24);
+    }
+    return pos;
+}

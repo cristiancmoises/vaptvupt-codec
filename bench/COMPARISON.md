@@ -105,6 +105,27 @@ It does not help non-x86 or text data (leave it off there). It does not
 close the gap to the max-ratio tier (zstd-19/xz-9 still win on binary, since
 they pair a BCJ-equivalent with stronger entropy and larger windows).
 
+## AArch64 BCJ filter (`--bcj-arm64` / `--filter arm64`)
+
+The AArch64 analogue converts BL (call) and ADRP (PC-relative page address)
+immediates to an absolute form before compression, inverted on decode.
+Measured on real AArch64 ELF binaries (Debian arm64 coreutils), ratio,
+extreme mode:
+
+```
+file              gzip-9   vv-extreme   ARM64+vv-extreme   delta
+a64 sort          2.437    2.210        2.280              +3.06%
+a64 tools concat  2.543    2.404        2.463              +2.42%
+a64 (largest)     2.936    2.660        2.789              +4.63%
+```
+
+Honest scope, and it differs from the x86 result: the ARM64 filter **narrows
+but does not close** the gap to gzip-9 (sort 2.280 vs 2.437), and xz-9 (which
+filters BL + ADRP and uses a larger window) stays well ahead. It is opt-in,
+exactly reversible on arbitrary input, decodable by v2.54.0+ decoders (header
+flag bit3), and mutually exclusive with the x86 filter. Use it only on
+AArch64 machine code.
+
 ## Long-range window (`-w` / `--window`)
 
 For large inputs with long-range redundancy, the default per-mode window is

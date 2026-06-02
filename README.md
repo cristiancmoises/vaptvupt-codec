@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.53.4. License: GPL-3.0-or-later (commercial license available:
+Version 2.54.0. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -28,6 +28,8 @@ Ratio (raw / compressed, higher is better):
   ratio at much lower encode speed.
 - On x86 machine code, the opt-in `--bcj` filter raises `extreme` past
   gzip-9 (2.251 vs 2.230 on libc); without it, vv trails gzip-9 on binary.
+- On AArch64 machine code, the opt-in `--bcj-arm64` filter (BL + ADRP) adds
+  +2.4–4.6%; it narrows the gap to gzip-9 but does not close it.
 - zstd-19 and xz-9 win on binary ratio overall; vv does not target that tier.
 
 Throughput, dickens, in-process best-of-7 (MB/s):
@@ -73,12 +75,14 @@ vaptvupt -c -m extreme -o file.vv file        # compress (modes: fast, balanced,
 vaptvupt -d -o file.out file.vv               # decompress
 vaptvupt -c -m balanced -w 24 -o big.vv big   # larger window (long-range data)
 vaptvupt -c -m extreme --bcj -o code.vv prog  # x86 BCJ filter (machine code)
+vaptvupt -c -m extreme --bcj-arm64 -o a.vv a  # AArch64 BCJ filter (BL + ADRP)
 ```
 
 `-w N` sets the window log (10-24 = 1 KiB-16 MiB, 0 = auto). `--bcj`
-(`--filter x86`) applies the reversible x86 branch filter. `--fast` skips the
-XXH64 footer. Both `-w` and `--bcj` are opt-in and do not change default
-output.
+(`--filter x86`) and `--bcj-arm64` (`--filter arm64`) apply the reversible
+x86 and AArch64 branch filters respectively; they are mutually exclusive.
+`--fast` skips the XXH64 footer. All of `-w`, `--bcj`, and `--bcj-arm64` are
+opt-in and do not change default output.
 
 Library (one-shot):
 
@@ -109,8 +113,8 @@ Reference decoders that reproduce the C decoder byte-for-byte live in
 fuzzer cross-checks C against Python on every `make test`.
 
 Header `flags`: bit0 = XXH64 footer present, bit1 = dictionary frame,
-bit2 = x86 BCJ filter applied. Offsets are 2 bytes for window log <= 16,
-3 bytes for <= 24 (the 16 MiB maximum).
+bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
+2 bytes for window log <= 16, 3 bytes for <= 24 (the 16 MiB maximum).
 
 ## Testing
 

@@ -727,6 +727,11 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
         if (fh.flags & 4) {
             vv_bcj_x86(frame_out_start, (size_t)(op - frame_out_start), 0, 0);
         }
+        /* AArch64 BCJ inverse (flags bit3): same contract as the x86 case
+         * above. A frame carries at most one of bit2/bit3. */
+        if (fh.flags & 8) {
+            vv_bcj_arm64(frame_out_start, (size_t)(op - frame_out_start), 0, 0);
+        }
 
         /* Loop back to try another frame (if input remains) */
     }

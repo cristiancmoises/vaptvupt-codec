@@ -2,6 +2,72 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.54.0 — AArch64 BCJ filter (BL + ADRP) and permanent BCJ corrupt-input fuzzing
+
+Extends the branch-filter work to a second architecture and hardens the test
+suite. **Default output is byte-identical to v2.53.4** (both filters are
+off unless requested); the ratio gate confirms baseline ± 0 bytes and the
+differential fuzzer is 5200/5200.
+
+### AArch64 (ARM64) BCJ filter
+
+`src/vv_bcj.c` gains `vv_bcj_arm64`, the AArch64 analogue of the x86 filter.
+AArch64 is fixed-width 32-bit little-endian; two instruction classes carry
+PC-relative immediates worth converting:
+
+- **BL** (call, opcode `100101`): 26-bit signed word offset in bits [25:0].
+- **ADRP** (PC-relative 4 KiB page address, `1xx10000`): 21-bit offset split
+  as immlo = bits [30:29], immhi = bits [23:5].
+
+Both are converted relative→absolute (BL: word index; ADRP: page index)
+modulo their immediate width, writing back only the immediate bits so every
+opcode/register bit is preserved. The decode pass therefore recognises the
+identical instruction set and the modular arithmetic is an exact bijection on
+arbitrary input.
+
+Enable with `vv_options_t.filter_arm64 = 1` or CLI `--bcj-arm64` /
+`--filter arm64`. Frames carry header flag **bit3** and need a v2.54.0+
+decoder. Mutually exclusive with the x86 filter (a file is one
+architecture); the CLI rejects combining them. Off by default.
+
+Measured on real AArch64 ELF binaries (Debian arm64 coreutils), extreme:
+
+```
+file              gzip-9   vv-extreme   ARM64+vv-extreme   delta
+a64 sort          2.437    2.210        2.280              +3.06%
+a64 tools concat  2.543    2.404        2.463              +2.42%
+a64 (largest)     2.936    2.660        2.789              +4.63%
+```
+
+Honest scope, and unlike the x86 filter: ARM64 BCJ **narrows but does not
+close** the gap to gzip-9 (sort 2.280 vs 2.437), and xz-9 stays well ahead.
+It only helps AArch64 machine code; leave it off for text/x86/other.
+
+### Permanent BCJ corrupt-input fuzzing (security)
+
+`tests/test_bcj.c` (now 5576 checks, was 2344) is extended to cover both
+filters — reversibility on random and adversarial inputs (all-BL, all-ADRP),
+full compress/decompress roundtrip, and, new, a **corrupt-input sweep**: for
+each filter it compresses, bit-flips the stream, and decodes, asserting the
+decoder returns without reading or writing out of bounds. This sweep runs on
+every `make test` and is clean under AddressSanitizer + UndefinedBehavior­-
+Sanitizer. Previously the BCJ corrupt-input check was run ad-hoc per release;
+it is now part of the permanent suite, so the decode path's memory safety on
+attacker-controlled filtered frames is re-validated automatically.
+
+### Validation
+
+- **Reversibility:** 70,000+ fuzz cases across the standalone harnesses
+  (random of all sizes, all-BL, all-ADRP, mixed, real binaries) — exact
+  `inverse(forward(x)) == x` for both filters.
+- **Default unchanged:** Silesia fast/balanced/extreme byte-identical; ratio
+  gate baseline ± 0 bytes; differential fuzzer 5200/5200.
+- **Roundtrip with filter on:** verified on real AArch64 binaries and
+  synthetics; x86 filter regression-checked.
+- **Corrupt-input safe:** `tests/test_bcj.c` corrupt sweep (800 cases/run
+  across both filters) clean under ASan + UBSan.
+- Full `make test` green (20/20 C suites); `-Wall -Wextra -Werror` clean.
+
 ## v2.53.4-docs — Documentation consolidation (codec unchanged)
 
 Documentation-only pass. The codec, wire format, and binary are

@@ -122,7 +122,8 @@ typedef struct {
     uint32_t magic;           /* VV_MAGIC */
     uint8_t  version;         /* Format version (1) */
     uint8_t  flags;           /* bit0: has_checksum, bit1: has_dict,
-                               *  bit2: x86 BCJ filter applied */
+                               *  bit2: x86 BCJ filter applied,
+                               *  bit3: ARM64 BCJ filter applied */
     uint8_t  mode_hint;       /* Compression mode used (informational) */
     uint8_t  window_log;      /* Window size = 1 << window_log */
     uint64_t content_size;    /* Uncompressed size (0 = unknown) */
@@ -202,6 +203,15 @@ typedef struct {
                               *     ratio (~+3–7% measured); the decoder
                               *     inverts it automatically. Requires a
                               *     v2.53.4+ decoder. Opt-in; default 0. */
+    int       filter_arm64;  /* 1 = apply the reversible AArch64 (ARM64) BCJ
+                              *     branch filter (BL + ADRP) before
+                              *     compression (header flag bit3). Improves
+                              *     AArch64 machine-code ratio (~+2–5%
+                              *     measured); the decoder inverts it
+                              *     automatically. Requires a v2.54.0+
+                              *     decoder. Opt-in; default 0. Mutually
+                              *     exclusive with filter_x86 (a file is one
+                              *     architecture). */
 } vv_options_t;
 
 static inline void vv_default_options(vv_options_t *o) {
@@ -212,6 +222,7 @@ static inline void vv_default_options(vv_options_t *o) {
     o->format_v2 = 0;
     o->compat_v246_5_decoder = 0;
     o->filter_x86 = 0;
+    o->filter_arm64 = 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════
