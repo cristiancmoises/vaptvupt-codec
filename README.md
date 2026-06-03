@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.58.0. License: GPL-3.0-or-later (commercial license available:
+Version 2.59.0. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -113,6 +113,23 @@ Returns diminish past `-D 48`. Note the honest limit: encode speed is the
 codec's weak axis and is bound by per-position overhead, not chain depth —
 even `-m fast -D 1` reaches only ~79 MB/s (vs zstd-1 at ~130 and lz4 at ~247).
 Decode is competitive (vv-extreme ≈ zstd-1). See `bench/COMPARISON.md`.
+
+`-A N` / `--accel N` (0..64; 0 = off, the default) enables lz4-style
+position-skip acceleration: after a run of consecutive no-match positions the
+parser advances by more than one byte, skipping the hash/insert work on
+unmatchable regions. It is opt-in (default `0` is byte-identical to prior
+releases), most useful with `-m fast`, and its output is decodable by any
+decoder. On incompressible or already-compressed input the speedup is large;
+on compressible input the cost is a small ratio loss. Measured (fast mode):
+
+| input | `-A 0` | `-A 8` | `-A 32` |
+|---|---|---|---|
+| random 8 MiB | 1.000 @ 60 MB/s | 1.000 @ 547 MB/s | 1.000 @ 569 MB/s |
+| gzip'd text | 1.000 @ 53 MB/s | 1.000 @ 500 MB/s | 1.000 @ 516 MB/s |
+| dickens (text) | 1.992 @ 69 MB/s | 1.988 @ 68 MB/s | 1.930 @ 72 MB/s |
+
+Use a moderate `-A 8` for mixed/already-compressed data; leave it off (`0`) for
+normal compressible input where the default parse already skips via matches.
 
 Library (one-shot):
 

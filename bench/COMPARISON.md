@@ -189,6 +189,29 @@ Returns diminish past `-D 48`. Useful to trade a little ratio for encode speed
 within the entropy tiers, or to push ratio above the balanced default without
 the full extreme optimal-parse cost.
 
+## Position-skip acceleration (`-A` / `--accel`)
+
+`-A N` (0..64; 0 = off, the default) enables lz4-style position skipping: after
+a run of consecutive no-match positions the parser advances by more than one
+byte, skipping the per-position hash/insert work on unmatchable regions. It is
+opt-in (default `0` is byte-identical), most useful with `-m fast`, and its
+output is decodable by any decoder (verified against the Python reference
+decoder). Measured (fast mode):
+
+```
+input          -A 0              -A 8               -A 32
+random 8 MiB   1.000 @  60 MB/s  1.000 @ 547 MB/s   1.000 @ 569 MB/s
+gzip'd text    1.000 @  53 MB/s  1.000 @ 500 MB/s   1.000 @ 516 MB/s
+dickens text   1.992 @  69 MB/s  1.988 @  68 MB/s   1.930 @  72 MB/s
+```
+
+~8–9× faster encode on incompressible / already-compressed input, negligible
+ratio cost on compressible text at `-A 8` (−0.2%), larger only at aggressive
+settings. This is the one lever from the frontier study below that materially
+moves encode speed — it cuts the per-position fixed cost on data the parser
+cannot match. It is opt-in because it nudges the reference-corpus ratio
+(1.992→1.988), which the inviolable ratio gate forbids as a default.
+
 ## Encode-speed frontier (measured; why "superfast" is not a tuning win)
 
 Encode speed is the codec's weak axis. Two levers were measured directly, and

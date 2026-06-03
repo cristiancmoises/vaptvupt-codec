@@ -2,6 +2,55 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.59.0 — Opt-in lz4-style position-skip acceleration (`-A/--accel`)
+
+Adds an opt-in encode accelerator for incompressible / already-compressed
+input. **Default output is byte-identical to v2.58.0** (the accelerator is
+opt-in; ratio gate baseline ± 0; differential fuzzer 5200/5200).
+
+### `-A N` / `--accel N`
+
+After a run of `f` consecutive no-match positions, the greedy parser advances
+by `1 + ((f * accel) >> 6)` instead of 1, skipping the hash/insert/rep work on
+regions that are not matching. The skipped positions simply become literals, so
+output stays a standard stream any decoder reads (verified against the
+independent Python reference decoder). `0` (default) keeps the byte-identical
+prior behaviour; the value is clamped to [0,64] (higher = more aggressive).
+Most useful with `-m fast`.
+
+Measured (fast mode):
+
+| input | `-A 0` | `-A 8` | `-A 32` |
+|---|---|---|---|
+| random 8 MiB | 1.000 @ 60 MB/s | 1.000 @ 547 MB/s | 1.000 @ 569 MB/s |
+| gzip'd text | 1.000 @ 53 MB/s | 1.000 @ 500 MB/s | 1.000 @ 516 MB/s |
+| dickens (text) | 1.992 @ 69 MB/s | 1.988 @ 68 MB/s | 1.930 @ 72 MB/s |
+
+So ~8–9× faster encode on incompressible/already-compressed data, with a
+negligible ratio cost on compressible text at `-A 8` (−0.2% on dickens) and a
+larger cost only at aggressive settings (`-A 32`: −3%). This directly attacks
+the per-position-overhead encode floor identified in the v2.58.0 frontier study
+(the only lever measured to move encode speed materially), while respecting the
+inviolable ratio gate by remaining opt-in — it does nudge the reference-corpus
+ratio (1.992→1.988), so it is not made the default.
+
+Implementation: `matcher_t.accel` (set from `vv_options_t.accel`, clamped to
+[0,64]); a consecutive-no-match counter in `compress_block` reset on every
+emitted match; CLI `-A`/`--accel` with range validation. The match-finder and
+frame format are unchanged; the decoder is untouched.
+
+### Validation
+
+- Default output byte-identical (no `-A`): ratio gate baseline ± 0;
+  differential 5200/5200; `-A 0` byte-identical to default.
+- ASan+UBSan fuzz of the accel encode path: 256 cases (random / zero / low-match
+  / literal-run inputs × sizes 0..300 KB × fast/balanced × `-A` 1..64), 0
+  failures.
+- Accel output round-trips through the C decoder and the independent Python
+  reference decoder; composes with `-D`.
+- Full `make test` green (20/20 + OOM sweep); `make verify` 5/5 proofs
+  SUCCESSFUL; `-Wall -Wextra -Werror` clean.
+
 ## v2.58.0 — Opt-in match-finder depth control (`-D/--depth`) + encode-speed frontier study
 
 Adds a user-tunable speed/ratio knob and records a measured investigation of

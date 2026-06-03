@@ -231,6 +231,20 @@ typedef struct {
                               *     valid stream any decoder reads; default
                               *     output (0) is byte-identical to prior
                               *     releases. Opt-in; default 0. */
+    uint32_t  accel;         /* 0 = off (default; byte-identical). >0 enables
+                              *     lz4-style position-skip acceleration: after
+                              *     a run of f consecutive no-match positions
+                              *     the parser advances by 1 + ((f*accel)>>6)
+                              *     instead of 1, skipping hash/insert work on
+                              *     unmatchable input. Massively speeds up
+                              *     encode on incompressible / already-
+                              *     compressed data (measured ~8-9x on
+                              *     random/gzip input) for a small ratio cost
+                              *     on compressible data (~-0.2% on dickens),
+                              *     which is why it is opt-in. Clamped to
+                              *     [0, 64]; higher = more aggressive skipping.
+                              *     Primarily useful with -m fast. Output stays
+                              *     decodable by any decoder. */
 } vv_options_t;
 
 static inline void vv_default_options(vv_options_t *o) {
@@ -244,6 +258,7 @@ static inline void vv_default_options(vv_options_t *o) {
     o->filter_arm64 = 0;
     o->filter_auto = 0;
     o->depth_override = 0;
+    o->accel = 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════

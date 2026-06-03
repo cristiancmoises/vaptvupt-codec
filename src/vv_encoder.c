@@ -225,6 +225,19 @@ typedef struct {
     uint32_t max_match;    /* Max representable matchlen (65535 for v1,
                             * 65534 for v2: ml_base_v2[35]=32767 with 15
                             * extra bits only reaches 65534). */
+    uint32_t accel;        /* Position-skip acceleration factor (0 = off).
+                            * When >0, after a run of `f` consecutive
+                            * positions with no match, compress_block
+                            * advances by 1 + ((f*accel) >> 6) instead of 1,
+                            * skipping the hash/insert/rep work on
+                            * unmatchable regions. Massively speeds up
+                            * encode on incompressible / already-compressed
+                            * input (measured ~8-9x on random/gzip data),
+                            * with a small ratio cost on compressible data
+                            * (so it is opt-in; default 0 keeps output
+                            * byte-identical). Skipped positions become
+                            * literals; output stays decodable by any
+                            * decoder. */
 } matcher_t;
 
 /* SPRINT 93 audit: returns 1 on success, 0 on allocation failure.
@@ -273,6 +286,7 @@ static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
     m->use_hash4 = 0;  /* Disabled by default — enabled adaptively for binary */
     m->use_hash3 = 0;  /* Disabled by default — enabled for format v2 */
     m->single_probe = 0; /* Disabled by default — set only for ULTRA_FAST encode */
+    m->accel = 0;        /* Position-skip acceleration off by default (opt-in --accel) */
     m->max_match = VV_MAX_MATCH;  /* v1 default, see matcher_set_format_v2 */
     return 1;
 }
@@ -1040,6 +1054,7 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
     int32_t end = (int32_t)(start_pos + block_len);
     const uint8_t *lit_start = src + start_pos;
     int off_bytes = (m->wlog > 16) ? 3 : 2;
+    uint32_t failures = 0; /* consecutive no-match positions (for --accel skip) */
 
     while (pos < end - min_match) {
         int32_t mlen = 0, moff = 0;
@@ -1231,9 +1246,18 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
             update_rep(m, (uint32_t)moff);
             pos += mlen;
             lit_start = src + pos;
+            failures = 0; /* matched: reset the no-match run */
         } else {
             matcher_insert(m, src, pos, end);
-            pos++;
+            /* --accel: skip ahead over unmatchable regions. accel==0 keeps
+             * the byte-identical default (advance 1). The skipped positions
+             * are not hashed/inserted and simply become literals. */
+            if (m->accel) {
+                pos += 1 + (int32_t)(((uint32_t)failures * m->accel) >> 6);
+                failures++;
+            } else {
+                pos++;
+            }
         }
     }
 
@@ -1749,6 +1773,7 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
      * by the balanced/extreme window-selection trial above stay at
      * single_probe==0 and produce bit-identical trial sizes. */
     m.single_probe = (opts->mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
+    m.accel = opts->accel > 64 ? 64 : opts->accel;
     /* Format v2 cap applies to EVERY match emitted from this matcher,
      * not just those produced via hash3. Set unconditionally when
      * opts.format_v2 is active. */
@@ -1924,6 +1949,7 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
     /* SPRINT 58: single-probe finder for ULTRA_FAST streaming, matching
      * the one-shot fast path. balanced/extreme keep single_probe==0. */
     ctx->m.single_probe = (ctx->opts.mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
+    ctx->m.accel = ctx->opts.accel > 64 ? 64 : ctx->opts.accel;
     /* Format v2 matchlen cap applies to every match — set whenever
      * streaming opts has format_v2 on, not just when hash3 fires.
      *
@@ -2017,6 +2043,7 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
     /* SPRINT 58: keep the single-probe flag in sync if the mode changed
      * across reset (e.g. balanced stream reset to fast). */
     ctx->m.single_probe = (ctx->opts.mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
+    ctx->m.accel = ctx->opts.accel > 64 ? 64 : ctx->opts.accel;
 
     matcher_reset(&ctx->m);
 

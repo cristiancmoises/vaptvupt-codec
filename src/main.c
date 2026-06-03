@@ -45,6 +45,13 @@ static void usage(void) {
         "            balanced=24, extreme=256). Output stays decodable by any\n"
         "            decoder; the default (0) is byte-identical to prior\n"
         "            releases.\n"
+        "  -A, --accel N  Position-skip acceleration (0..64; 0 = off, the\n"
+        "            default). >0 skips unmatchable regions during the parse,\n"
+        "            massively speeding up encode on incompressible or already-\n"
+        "            compressed input (measured ~8-9x on random/gzip data) for\n"
+        "            a small ratio cost on compressible data. Most useful with\n"
+        "            -m fast; output stays decodable by any decoder; 0 is\n"
+        "            byte-identical to prior releases.\n"
         "  --fast    With -d: skip XXH64 verification during decompress.\n"
         "            With -c: skip XXH64 footer generation during compress.\n"
         "            Safe when another layer (e.g. AES-GCM) provides\n"
@@ -129,6 +136,7 @@ int main(int argc, char **argv) {
     int filter_arm64 = 0;   /* --filter=arm64 / --bcj-arm64: AArch64 filter */
     int filter_auto = 0;    /* --auto-filter: pick a filter from the header */
     int depth_override = 0; /* --depth N: override match-finder chain depth */
+    int accel = 0;          /* --accel N: lz4-style position-skip on no-match */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) do_compress = 1;
@@ -160,6 +168,19 @@ int main(int argc, char **argv) {
             if (depth_override != 0 && (depth_override < 1 || depth_override > 4096)) {
                 fprintf(stderr, "Invalid -D/--depth %d: must be 1..4096, "
                         "or 0 for the mode default\n", depth_override);
+                return 1;
+            }
+        }
+        else if ((strcmp(argv[i], "-A") == 0 || strcmp(argv[i], "--accel") == 0)
+                 && i + 1 < argc) {
+            accel = atoi(argv[++i]);
+            /* Position-skip acceleration: speeds up encode on incompressible
+             * input for a small ratio cost on compressible data. 0 = off
+             * (byte-identical default). Reject out-of-range rather than
+             * silently clamping. */
+            if (accel < 0 || accel > 64) {
+                fprintf(stderr, "Invalid -A/--accel %d: must be 0..64 "
+                        "(0 = off)\n", accel);
                 return 1;
             }
         }
@@ -228,6 +249,7 @@ int main(int argc, char **argv) {
         opts.filter_arm64 = filter_arm64;
         opts.filter_auto = filter_auto;
         opts.depth_override = (uint32_t)depth_override;
+        opts.accel = (uint32_t)accel;
 
         /* MT path uses slightly larger bound because concatenated frames
          * have per-frame overhead. Add 64 KB per potential chunk. */
