@@ -166,6 +166,48 @@ is recorded in the frame header and any decoder handles it (no format
 change; offsets stay 3-byte for window log ≤ 24). Pick `-w 24` for large
 text/log archives with cross-file repetition; leave it on auto otherwise.
 
+## Match-finder depth control (`-D` / `--depth`)
+
+`-D N` overrides the match-finder chain depth (1..4096; 0 = the per-mode
+default fast=4 / balanced=24 / extreme=256), turning the fixed three-mode
+ladder into a continuous speed/ratio control. It changes only which matches
+are chosen, so output is decodable by any decoder; `-D 0` is byte-identical to
+the mode default. Measured on dickens (balanced):
+
+```
+-D    ratio    encode MB/s
+4     2.520    15.1
+8     2.574    13.3
+16    2.625    11.0
+24    2.647     9.6   (= balanced default)
+48    2.665     7.7
+128   2.670     5.4
+256   2.670     4.1
+```
+
+Returns diminish past `-D 48`. Useful to trade a little ratio for encode speed
+within the entropy tiers, or to push ratio above the balanced default without
+the full extreme optimal-parse cost.
+
+## Encode-speed frontier (measured; why "superfast" is not a tuning win)
+
+Encode speed is the codec's weak axis. Two levers were measured directly, and
+both fail to close the gap to zstd-1 (130 MB/s) / lz4 (247 MB/s):
+
+- **The 4-way literal-coder race is <5% of encode, not ~20%.** ans4-only
+  encoding gives 2.504@14.2 MB/s vs the full race's 2.520@13.8 on dickens —
+  near-identical speed. The entropy cost is the core ANS sequence coding, not
+  the race; a single-coder "fast entropy" tier would not be faster.
+- **The no-entropy floor is ~78 MB/s, bound by per-position overhead.** Fast
+  mode at `-D 1` reaches 78.6 MB/s (ratio 1.785) vs `-D 4`'s 66 MB/s (1.992);
+  the per-position fixed cost (hashing, chain insert, rep check, token emit)
+  dominates, not the chain walk.
+
+Matching zstd-1 encode throughput therefore requires reducing the per-position
+hot-loop cost (e.g. lz4-style position skipping) and a faster entropy stage —
+not deeper or shallower matching. Decode, by contrast, is already competitive
+(vv-extreme ≈ zstd-1).
+
 ## Reproduce
 
 ```sh

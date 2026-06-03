@@ -2,6 +2,55 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.58.0 — Opt-in match-finder depth control (`-D/--depth`) + encode-speed frontier study
+
+Adds a user-tunable speed/ratio knob and records a measured investigation of
+the encode-speed frontier. **Default output is byte-identical to v2.57.0** (the
+override is opt-in; ratio gate baseline ± 0; differential fuzzer 5200/5200).
+
+### `-D N` / `--depth N`
+
+Overrides the match-finder chain depth (1..4096; 0 = the per-mode default of
+fast=4, balanced=24, extreme=256), exposing the smooth monotonic speed/ratio
+tradeoff as a continuous control instead of three fixed points. It changes only
+which matches the encoder selects, so output stays a valid stream any decoder
+reads, and `-D 0` is byte-identical to the mode default. Added
+`vv_options_t.depth_override` (clamped to [1,4096]); CLI `-D`/`--depth` with
+range validation; applied at all three depth-dispatch sites (one-shot,
+streaming, and stream-reset). Measured on dickens (balanced): 2.520@15.1 MB/s
+at `-D 4` rising to 2.670@5.4 MB/s at `-D 128`, with returns diminishing past
+`-D 48`.
+
+### Encode-speed frontier study (measured findings)
+
+Before attempting a "superfast" tier, both candidate levers were measured and
+**both fail**; recording this to redirect the roadmap honestly:
+
+- **The 4-way literal-coder race costs <5%, not ~20%.** Forcing the SEQ encoder
+  to use only the 4-stream ANS coder gave 2.504@14.2 MB/s vs the full race's
+  2.520@13.8 MB/s on dickens — nearly identical speed. The entropy bottleneck
+  is the core ANS sequence coding, not the literal-coder race, so a
+  single-coder "fast entropy" tier would not be meaningfully faster.
+- **The no-entropy encode floor is ~78 MB/s, bound by per-position overhead,
+  not chain depth.** Fast mode at depth-1 reaches only 78.6 MB/s (ratio 1.785)
+  vs depth-4's 66 MB/s (1.992); the per-position fixed cost (hashing, chain
+  insertion, rep check, token emit) dominates, well short of lz4 (247) and
+  zstd-1 (130).
+
+Conclusion: matching zstd-1 encode speed is not a tuning win — it requires
+reducing the per-position hot-loop cost (e.g. lz4-style position-skipping
+acceleration) and a faster entropy stage. A binary-tree match-finder would
+improve ratio-per-depth but not encode speed, since depth is not the
+bottleneck.
+
+### Validation
+
+- Default output byte-identical (no `-D`): ratio gate baseline ± 0;
+  differential fuzzer 5200/5200; `-D 0` byte-identical to the mode default.
+- `-D` round-trips correctly across the measured range; out-of-range rejected.
+- Full `make test` green (20/20 C suites + OOM sweep); `make verify` 5/5
+  proofs SUCCESSFUL; `-Wall -Wextra -Werror` clean.
+
 ## v2.57.0 — Rename to a single VaptVupt brand; `.zupt` file extension
 
 The application formerly called Zupt is now VaptVupt — one name for the codec

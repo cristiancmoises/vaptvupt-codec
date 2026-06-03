@@ -220,6 +220,17 @@ typedef struct {
                               *     executable header is recognised — in
                               *     which case output is unchanged. Opt-in;
                               *     default 0. */
+    uint32_t  depth_override;/* 0 = use the mode's default match-finder chain
+                              *     depth (fast=4, balanced=24, extreme=256).
+                              *     Non-zero overrides it, clamped to
+                              *     [1, 4096], trading encode speed for ratio
+                              *     along a smooth monotonic curve (measured:
+                              *     on dickens, fast depth 1→8 spans
+                              *     1.785@79 MB/s to 2.067@55 MB/s). Affects
+                              *     only the chosen matches, so output stays a
+                              *     valid stream any decoder reads; default
+                              *     output (0) is byte-identical to prior
+                              *     releases. Opt-in; default 0. */
 } vv_options_t;
 
 static inline void vv_default_options(vv_options_t *o) {
@@ -232,6 +243,7 @@ static inline void vv_default_options(vv_options_t *o) {
     o->filter_x86 = 0;
     o->filter_arm64 = 0;
     o->filter_auto = 0;
+    o->depth_override = 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════

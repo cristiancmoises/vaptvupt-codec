@@ -39,6 +39,12 @@ static void usage(void) {
         "            by any vv_decompress call.\n"
         "  -o file   Output file (default: input.zupt on -c; input with the\n"
         "            .zupt/.vv suffix stripped, else input.orig, on -d)\n"
+        "  -D, --depth N  Override the match-finder chain depth (1..4096).\n"
+        "            Higher = better ratio, slower encode (smooth tradeoff);\n"
+        "            0 (default) keeps the per-mode default (fast=4,\n"
+        "            balanced=24, extreme=256). Output stays decodable by any\n"
+        "            decoder; the default (0) is byte-identical to prior\n"
+        "            releases.\n"
         "  --fast    With -d: skip XXH64 verification during decompress.\n"
         "            With -c: skip XXH64 footer generation during compress.\n"
         "            Safe when another layer (e.g. AES-GCM) provides\n"
@@ -122,6 +128,7 @@ int main(int argc, char **argv) {
     int filter_x86 = 0;     /* --filter=x86 / --bcj: x86 BCJ branch filter */
     int filter_arm64 = 0;   /* --filter=arm64 / --bcj-arm64: AArch64 filter */
     int filter_auto = 0;    /* --auto-filter: pick a filter from the header */
+    int depth_override = 0; /* --depth N: override match-finder chain depth */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) do_compress = 1;
@@ -142,6 +149,19 @@ int main(int argc, char **argv) {
             else if (strcmp(fname, "arm64") == 0) filter_arm64 = 1;
             else if (strcmp(fname, "auto") == 0) filter_auto = 1;
             else { fprintf(stderr, "Unknown --filter %s (supported: x86, arm64, auto)\n", fname); return 1; }
+        }
+        else if ((strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--depth") == 0)
+                 && i + 1 < argc) {
+            depth_override = atoi(argv[++i]);
+            /* Overrides the mode's default match-finder chain depth. Higher
+             * = better ratio, slower encode (smooth monotonic tradeoff).
+             * 0 keeps the per-mode default. Reject out-of-range rather than
+             * silently clamping so the value is never misread. */
+            if (depth_override != 0 && (depth_override < 1 || depth_override > 4096)) {
+                fprintf(stderr, "Invalid -D/--depth %d: must be 1..4096, "
+                        "or 0 for the mode default\n", depth_override);
+                return 1;
+            }
         }
         else if ((strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--window") == 0)
                  && i + 1 < argc) {
@@ -207,6 +227,7 @@ int main(int argc, char **argv) {
         opts.filter_x86 = filter_x86;
         opts.filter_arm64 = filter_arm64;
         opts.filter_auto = filter_auto;
+        opts.depth_override = (uint32_t)depth_override;
 
         /* MT path uses slightly larger bound because concatenated frames
          * have per-frame overhead. Add 64 KB per potential chunk. */

@@ -1641,6 +1641,11 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
     case VV_MODE_EXTREME:    depth = 256; break;
     default: depth = 24;
     }
+    /* Opt-in chain-depth override (default 0 = mode default, byte-identical). */
+    if (opts->depth_override) {
+        depth = opts->depth_override;
+        if (depth > 4096) depth = 4096;
+    }
 
     /* ─── ADAPTIVE WINDOW + HASH4 detection in a single trial.
      * PERF: previously this was two separate 128K+64K=192K trials, run
@@ -1905,6 +1910,10 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
     case VV_MODE_EXTREME:    depth = 256; break;
     default: depth = 24;
     }
+    if (ctx->opts.depth_override) {
+        depth = ctx->opts.depth_override;
+        if (depth > 4096) depth = 4096;
+    }
 
     /* SPRINT 93 audit: matcher_init can fail; cstream returns NULL
      * on any allocation error per public API contract. */
@@ -1999,6 +2008,10 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
     case VV_MODE_BALANCED:   depth = 24; break;
     case VV_MODE_EXTREME:    depth = 256; break;
     default: depth = 24;
+    }
+    if (ctx->opts.depth_override) {
+        depth = ctx->opts.depth_override;
+        if (depth > 4096) depth = 4096;
     }
     ctx->m.chain_depth = depth;
     /* SPRINT 58: keep the single-probe flag in sync if the mode changed

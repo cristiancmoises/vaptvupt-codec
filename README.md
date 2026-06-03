@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.57.0. License: GPL-3.0-or-later (commercial license available:
+Version 2.58.0. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -93,6 +93,26 @@ Compressed files use the `.zupt` extension by default (`vaptvupt -c file`
 writes `file.zupt`; `vaptvupt -d file.zupt` writes `file`). The on-disk frame
 format is unchanged, so legacy `.vv` files still decode and `vaptvupt`
 recognises a frame by its header regardless of the filename.
+
+`-D N` / `--depth N` overrides the match-finder chain depth (1..4096; 0 keeps
+the per-mode default of fast=4, balanced=24, extreme=256), trading encode
+speed for ratio along a smooth monotonic curve. It is opt-in and decodable by
+any decoder; `-D 0` is byte-identical to the mode default. Measured on dickens
+(balanced):
+
+| `-D` | ratio | encode MB/s |
+|---|---|---|
+| 4 | 2.520 | 15.1 |
+| 8 | 2.574 | 13.3 |
+| 16 | 2.625 | 11.0 |
+| 24 (default) | 2.647 | 9.6 |
+| 48 | 2.665 | 7.7 |
+| 128 | 2.670 | 5.4 |
+
+Returns diminish past `-D 48`. Note the honest limit: encode speed is the
+codec's weak axis and is bound by per-position overhead, not chain depth —
+even `-m fast -D 1` reaches only ~79 MB/s (vs zstd-1 at ~130 and lz4 at ~247).
+Decode is competitive (vv-extreme ≈ zstd-1). See `bench/COMPARISON.md`.
 
 Library (one-shot):
 
