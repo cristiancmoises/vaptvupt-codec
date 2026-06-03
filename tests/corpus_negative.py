@@ -12,7 +12,7 @@ This script:
 
 This catches an entire class of cross-implementation bugs where one
 decoder might accept malformed input that another rejects (a security
-hazard for Zupt's archive verification flow).
+hazard for VaptVupt's archive verification flow).
 
 Usage:
     python3 tests/corpus_negative.py             # Generate + run all tests

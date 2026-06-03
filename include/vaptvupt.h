@@ -256,7 +256,7 @@ int64_t vv_decompress(const uint8_t *src, size_t src_len,
                                               * Use when the caller has its own
                                               * integrity protection (e.g. AES-GCM
                                               * wrapping the compressed data, as in
-                                              * Zupt backups). On RAW/random-data
+                                              * application backups). On RAW/random-data
                                               * inputs where XXH64 dominates decode
                                               * time, this flag delivers a ~2× speedup.
                                               *
@@ -278,8 +278,8 @@ size_t vv_compress_bound(size_t src_len);
  * MULTI-THREADED COMPRESSION
  *
  * Compresses large inputs in parallel by splitting into independent
- * frames (each a valid .vv frame on its own — concatenated output
- * is a valid .vv file that vv_decompress handles natively as a
+ * frames (each a valid VaptVupt frame on its own — concatenated output
+ * is a valid .zupt file that vv_decompress handles natively as a
  * multi-frame stream).
  *
  * Requires the library to be built with VV_ENABLE_THREADS (and

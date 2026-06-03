@@ -9,7 +9,7 @@ byte-for-byte equivalence when both accept).
 
 This catches the class of bugs where:
 - One decoder accepts input the other rejects
-  (→ potential security hazard: Zupt-archive verifier might
+  (→ potential security hazard: VaptVupt-archive verifier might
    disagree with third-party consumer on what's "valid")
 - One decoder crashes on input the other handles gracefully
   (→ DoS vulnerability)

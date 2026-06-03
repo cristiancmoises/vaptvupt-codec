@@ -2,6 +2,50 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.57.0 — Rename to a single VaptVupt brand; `.zupt` file extension
+
+The application formerly called Zupt is now VaptVupt — one name for the codec
+and the tool. This release removes the `zupt` name from the project, keeping it
+only as the compressed-file **extension** `.zupt`, and updates the docs to
+match. **The on-disk frame format is unchanged**: the compressed bytes are
+byte-identical to v2.56.2 across fast/balanced/extreme on the full corpus (the
+ratio gate is baseline ± 0 and the differential fuzzer is 5200/5200). Only the
+CLI's default filenames and prose/comments changed.
+
+### File extension
+
+- `vaptvupt -c file` now writes `file.zupt` (was `file.vv`).
+- `vaptvupt -d file.zupt` writes `file` (strips the `.zupt` suffix). For
+  backward compatibility it also strips a legacy `.vv` suffix; any other input
+  name falls back to appending `.orig`.
+- Decompression recognises a frame by its header, not its filename, so existing
+  `.vv` files continue to decode unchanged.
+
+### Rename
+
+- `Zupt` → `VaptVupt` throughout source comments, docs, tests, and the
+  Makefile; the `ZUPT-COMPAT` comment tag is now `EMBED-COMPAT`; the
+  amalgamation comments refer to a generic host application.
+- `ZUPT_INTEGRATION.md` → `INTEGRATION.md`, rewritten as a clean, current guide
+  for embedding the codec beneath a host application's AEAD/PQ envelope (the
+  previous file carried self-retracted performance claims; those are gone, the
+  integration mechanics and threat model remain).
+- `tests/test_zupt_integration.c` → `tests/test_integration.c`;
+  `tests/test_zupt_integration_samples.c` → `tests/test_integration_samples.c`;
+  Makefile targets updated accordingly.
+- The only remaining `zupt` token in the tree is the `.zupt` extension.
+
+### Validation
+
+- Compressed frame bytes byte-identical to v2.56.2 (fast/balanced/extreme on
+  dickens/xml/samba and the full ratio-gate corpus: baseline ± 0).
+- `.zupt` round-trips end to end; legacy `.vv` files still decode and strip.
+- Full `make test` green (20/20 C suites including the renamed
+  `test_integration` + OOM sweep); `make verify` all five proofs SUCCESSFUL;
+  differential fuzzer 5200/5200; `-Wall -Wextra -Werror` clean. The binary md5
+  changes only because `main.c`'s CLI logic changed; the codec library code is
+  unchanged.
+
 ## v2.56.2 — Second verification tier: Frama-C/Eva abstract interpretation
 
 Adds an independent, value-range static-analysis tier alongside the CBMC
@@ -273,7 +317,7 @@ include` is empty except for two comments that referenced removed files.
   the duplicate `docs/PERFORMANCE.md` and root `PERFORMANCE.md`, the program
   charter, and `docs/speed_program_bench.py`. The `docs/` directory is gone.
 - The tracked Markdown set is now eight files: `README.md`, `CHANGELOG.md`,
-  `FORMAT.md`, `SECURITY.md`, `FORMAL_AUDIT.md`, `ZUPT_INTEGRATION.md`,
+  `FORMAT.md`, `SECURITY.md`, `FORMAL_AUDIT.md`, `INTEGRATION.md`,
   `DEPLOY.md`, `bench/COMPARISON.md`.
 - Rewrote `README.md` against the current release: consolidated ratio and
   throughput tables (vs gzip, zstd, lz4, xz), the `--bcj` and `-w` results,
@@ -1634,7 +1678,7 @@ Explicit, eight-row table enumerating scope boundaries that were previously impl
 - Disk persistence of working buffers (mlockall is caller's job)
 - Compiler downgrade resistance (`-O0` not audit-targeted)
 
-Specific statement preserved: a `.vv` file alone provides no confidentiality and no authentication. For tamper-resistance, the caller MUST wrap in AEAD. Zupt does this via libpqvaptvupt.
+Specific statement preserved: a `.vv` file alone provides no confidentiality and no authentication. For tamper-resistance, the caller MUST wrap in AEAD. VaptVupt does this via libpqvaptvupt.
 
 This aligns with the project preference: "Threat model in plain English. State explicitly what the system does NOT protect against."
 
@@ -1660,7 +1704,7 @@ References Sprint 38's `.github/workflows/ci.yml`. Documents the four CI jobs (l
 
 ### Added: Section 8c — Companion Crypto Library
 
-ASCII diagram of the full Zupt pipeline showing where the codec sits (between `pqvv_open` and `vv_decompress`, and between `vv_compress` and `pqvv_seal`). Explicit enumeration of what the FULL PIPELINE provides (confidentiality, authenticity, PQ-safety) vs what the codec alone provides (safe decompression of untrusted input). Critical caveat for non-Zupt deployments: the codec's xxh64 is NOT authentication.
+ASCII diagram of the full VaptVupt pipeline showing where the codec sits (between `pqvv_open` and `vv_decompress`, and between `vv_compress` and `pqvv_seal`). Explicit enumeration of what the FULL PIPELINE provides (confidentiality, authenticity, PQ-safety) vs what the codec alone provides (safe decompression of untrusted input). Critical caveat for non-VaptVupt deployments: the codec's xxh64 is NOT authentication.
 
 ### Updated: Section 9 — What's NOT Tested
 
@@ -1681,7 +1725,7 @@ Updated from "internal-development codebase, file an issue" to concrete disclosu
 - Subject prefix: `[VaptVupt SEC]` or `[libpqvaptvupt SEC]`
 - Required reproducer fields enumerated
 - Response SLA: best-effort, typically 7 days, acknowledgement within 48h
-- PGP key TBD before Zupt v2.2.3 ships
+- PGP key TBD before VaptVupt v2.2.3 ships
 - 90-day coordinated disclosure default
 
 ### What this sprint does NOT change
@@ -1799,13 +1843,13 @@ header all unchanged.
 Two cleanup tasks parallel to Sprint 36's work on libvaptvupt v1.5.1
 and libpqvaptvupt v0.5.0:
 
-### 1. README + ZUPT_INTEGRATION honesty audit
+### 1. README + INTEGRATION honesty audit
 
 Sprint 32 (v2.50.6) ran the full-Silesia 12-fixture benchmark and
 **retracted** the claim "vv beats zstd-3 by 1.07% aggregate ratio" —
 full-corpus geomean ratio shows vv is 1.29% behind, not 1.07% ahead.
 That correction landed in `docs/PERFORMANCE.md` but the retracted
-text still propagated through `README.md` and `ZUPT_INTEGRATION.md`.
+text still propagated through `README.md` and `INTEGRATION.md`.
 
 #### README.md updates
 
@@ -1830,13 +1874,13 @@ text still propagated through `README.md` and `ZUPT_INTEGRATION.md`.
 - **Project State summary at the bottom** rewritten with the Sprint
   32 full-Silesia verdicts
 
-#### ZUPT_INTEGRATION.md updates
+#### INTEGRATION.md updates
 
 - **Retraction notice added at the top** of the document. The
   integration mechanics (API calls, build flags, configuration) in
   this document remain accurate and current; only the performance
   claims are flagged. The doc was written against v2.48.1 and will
-  be refreshed when Zupt 2.2.3 actually integrates.
+  be refreshed when VaptVupt 2.2.3 actually integrates.
 
 ### 2. `-Werror` added to default CFLAGS
 
@@ -2019,7 +2063,7 @@ Future codec work should focus on:
 - Maintenance and fuzz coverage extension
 - Integration with libvaptvupt (codec amalgamation refresh on each
   codec release)
-- Integration with libpqvaptvupt (the Zupt application's PQ encryption
+- Integration with libpqvaptvupt (the VaptVupt application's PQ encryption
   library)
 - Architectural change discussions if/when there's appetite for a wire
   format break to close the encode gap
@@ -2919,7 +2963,7 @@ this "length" and reads past the end of the dstream's `in_buf` allocation
 **Severity classification:** medium.
 - Out-of-bounds READ (not write) — no direct memory corruption
 - Affects any consumer of `vv_dstream_decompress_chunk` with attacker-controlled
-  input. Zupt's incoming-backup-frame path is the primary at-risk consumer.
+  input. VaptVupt's incoming-backup-frame path is the primary at-risk consumer.
 - DoS via SIGSEGV on hardened builds (ASan/MSan flag it; unhardened libc
   may silently return garbage from adjacent heap regions, then decode fails
   later — same end state).
@@ -3084,9 +3128,9 @@ A candidate fix (tuning the cost-aware lazy parser's `literal_bits` constant fro
 - Direct upgrade from v2.48.2 with no breaking changes
 
 
-## v2.48.2 — Sprint 122: Zupt 2.2.3 integration + documentation cleanup
+## v2.48.2 — Sprint 122: VaptVupt 2.2.3 integration + documentation cleanup
 
-**Documentation and integration release.** No production code changes; encoder and decoder behavior is byte-identical to v2.48.1. This release retargets the Zupt integration guide for Zupt 2.2.3 (since 2.2.2 has been published), adds a Zupt-specific integration smoke test, removes obsolete documentation, and fixes Makefile parallel-build bugs.
+**Documentation and integration release.** No production code changes; encoder and decoder behavior is byte-identical to v2.48.1. This release retargets the VaptVupt integration guide for VaptVupt 2.2.3 (since 2.2.2 has been published), adds a VaptVupt-specific integration smoke test, removes obsolete documentation, and fixes Makefile parallel-build bugs.
 
 ### Documentation cleanup
 
@@ -3109,24 +3153,24 @@ The seven retained `.md` files are the user-facing documentation:
 - `PERFORMANCE.md` (measured numbers)
 - `SECURITY.md` (security posture)
 - `FORMAL_AUDIT.md` (formal audit reference)
-- `ZUPT_INTEGRATION.md` (Zupt integration guide)
+- `INTEGRATION.md` (VaptVupt integration guide)
 
 All dangling references to removed files have been updated in surviving docs and source comments.
 
-### Zupt 2.2.3 integration
+### VaptVupt 2.2.3 integration
 
-`ZUPT_INTEGRATION.md` rewritten end-to-end for Zupt 2.2.3 + VaptVupt 2.48.2 (was Zupt 2.1.6 + v2.47.5). Substantive changes vs the v2.47.5 guide:
+`INTEGRATION.md` rewritten end-to-end for VaptVupt 2.2.3 + VaptVupt 2.48.2 (was VaptVupt 2.1.6 + v2.47.5). Substantive changes vs the v2.47.5 guide:
 
 - All ratio numbers updated to v2.48.x measurements (was +1.2% behind zstd-3, now −1.07% ahead)
 - New "Why v2.48.x specifically" section documenting the Sprint 120 cost-aware lazy parser breakthrough, Sprint 118 memory hygiene (`vv_secure_zero`), and Sprint 117/118 hardened-build compatibility
 - `format_v2` selection heuristic added: enable for binary-class files only — Sprint 120 measurements show v2 is +0.37% **worse** on text fixtures
-- API examples revised — `is_binary_heavy` parameter added to `zupt_compress_for_archive`
+- API examples revised — `is_binary_heavy` parameter added to `vaptvupt_compress_for_archive`
 - Threat model updated for Sprint 109/118 fixes (literal-run extension bounds, OOB code-table bounds, NULL-deref protection on edge-case empty symbol tables, encoder buffer scrubbing)
 - Integration checklist expanded: amalgamation drift detection, `FORMAL_AUDIT.md` review, hardened-build CI verification
 
-### New: Zupt integration smoke test (TEST19)
+### New: VaptVupt integration smoke test (TEST19)
 
-`tests/test_zupt_integration.c` — 9 tests validating the exact API patterns documented in `ZUPT_INTEGRATION.md`. Tests cover:
+`tests/test_integration.c` — 9 tests validating the exact API patterns documented in `INTEGRATION.md`. Tests cover:
 
 1. Text roundtrip with `format_v2 = 0`
 2. Binary roundtrip with `format_v2 = 1`
@@ -3161,7 +3205,7 @@ Two Makefile fixes to make builds reliable from a fresh source tarball and under
 | Check | Result |
 |---|---|
 | 19 test binaries (~370 cases) | pass |
-| Zupt integration smoke test | 9/9 pass |
+| VaptVupt integration smoke test | 9/9 pass |
 | Aggregate ratio vs zstd-3 | −1.07% (unchanged from v2.48.1) |
 | Strict UBSan `-fsanitize=integer` | 0 errors |
 | `make amalg-verify` | in sync |
@@ -3459,7 +3503,7 @@ v2.47.10 introduces explicit secure-zero scrubbing:
 - **One-shot `vv_compress`** scrubs the same buffers before exit
 - Implementation prefers `explicit_bzero` (BSD/glibc 2.25+); falls back to volatile-pointer memset that the optimizer cannot eliminate
 
-For Zupt's pipeline (compress → encrypt → write), the codec's working buffers are now scrubbed before the encryption step. **This is defense in depth, not a primary security boundary** — the caller's input buffer is unaffected.
+For VaptVupt's pipeline (compress → encrypt → write), the codec's working buffers are now scrubbed before the encryption step. **This is defense in depth, not a primary security boundary** — the caller's input buffer is unaffected.
 
 New test: **`tests/test_secure_zero.c`** (TEST18) — validates streaming destroy completes cleanly under sanitizers, 100 alloc/destroy cycles, one-shot scrub. 4/4 passing.
 
@@ -3748,7 +3792,7 @@ content are all unchanged.
 
 This release adds a build-time check that prevents the specific
 class of drift that produced Sprint 114's security finding (stale
-`build/vaptvupt.c` shipping a vulnerable decoder to Zupt while
+`build/vaptvupt.c` shipping a vulnerable decoder to VaptVupt while
 `src/` had the fix). The check is a single new Makefile target —
 no new dependencies, no source changes.
 
@@ -3762,9 +3806,9 @@ no new dependencies, no source changes.
 
 ### Why This Matters
 
-Sprint 114 found that `build/vaptvupt.c` (the file ZUPT_INTEGRATION.md
-tells Zupt to link against) was 4 days stale, missing the 3 OOB/NULL
-fixes from Sprint 109. A Zupt build following the v2.47.4 or v2.47.5
+Sprint 114 found that `build/vaptvupt.c` (the file INTEGRATION.md
+tells VaptVupt to link against) was 4 days stale, missing the 3 OOB/NULL
+fixes from Sprint 109. A VaptVupt build following the v2.47.4 or v2.47.5
 guidance would have linked the **vulnerable** decoder. The fix in
 Sprint 114 was to regenerate the amalgamation; the gap was that
 nothing was watching for staleness.
@@ -3808,7 +3852,7 @@ expected non-zero exit + diff output, then reverting.
 | Check | Result |
 |---|---|
 | 17/17 C test binaries pass | ✓ |
-| `test_zupt_integration_samples` | exit 0 |
+| `test_integration_samples` | exit 0 |
 | `make amalg-verify` (post-build) | exit 0 |
 | `make amalg-verify` (drift injected) | exit 1 with diff (verified) |
 | Encoder byte-identical to v2.47.6 | ✓ on 3 fixtures |
@@ -3819,7 +3863,7 @@ expected non-zero exit + diff output, then reverting.
 The Sprint 114 retrospective identified two bounded follow-ups:
 - ✅ `make amalg-verify` (this sprint)
 - Doc-example test that runs shell-extracted code from
-  ZUPT_INTEGRATION.md / FORMAT.md / README.md (deferred —
+  INTEGRATION.md / FORMAT.md / README.md (deferred —
   meaningful but multi-hour effort)
 
 The first follow-up is the higher-leverage of the two: amalgamation
@@ -3840,27 +3884,27 @@ before the patch is considered shippable.
 - Did not regenerate the amalgamation (it was already current)
 
 
-## v2.47.6 — Sprint 114: Zupt integration documentation + amalgamation rebuild (SECURITY-RELEVANT)
+## v2.47.6 — Sprint 114: VaptVupt integration documentation + amalgamation rebuild (SECURITY-RELEVANT)
 
 **SECURITY-RELEVANT documentation/build patch.** The C source has not
 changed — the C decoder remains byte-identical to v2.47.4/v2.47.5 —
 but the **amalgamated single-file build** at `build/vaptvupt.c`
-that Zupt is told to link against has been regenerated to include
-the Sprint 109 OOB/NULL fixes. **Any Zupt deployment using
+that VaptVupt is told to link against has been regenerated to include
+the Sprint 109 OOB/NULL fixes. **Any VaptVupt deployment using
 `build/vaptvupt.c` from v2.47.4 or v2.47.5 has the Sprint 109
 vulnerabilities** and should pull v2.47.6.
 
 ### What Was Wrong
 
 This sprint surfaced a chain of integration-blocking documentation
-and build defects in the Zupt-facing artifacts:
+and build defects in the VaptVupt-facing artifacts:
 
 #### 1. Stale amalgamation contained pre-Sprint-109 vulnerabilities
 
 `build/vaptvupt.c` was last regenerated on Apr 25 — **before**
 Sprint 109 (Apr 29) fixed the 3 OOB/NULL decoder bugs. The
-TL;DR of `ZUPT_INTEGRATION.md` instructs Zupt to "link against the
-amalgamation `build/vaptvupt.c`". A Zupt build following this
+TL;DR of `INTEGRATION.md` instructs VaptVupt to "link against the
+amalgamation `build/vaptvupt.c`". A VaptVupt build following this
 guidance pre-v2.47.6 would have linked the **vulnerable** decoder.
 
 The amalgamation has been regenerated; it now contains all Sprint
@@ -3881,15 +3925,15 @@ The Makefile's amalg target now correctly emits
 `SPDX-License-Identifier: GPL-3.0-or-later` in both
 `build/vaptvupt.h` and `build/vaptvupt.c`.
 
-#### 3. Wrong license guidance in ZUPT_INTEGRATION.md
+#### 3. Wrong license guidance in INTEGRATION.md
 
 The integration checklist said:
 
-> Document the GPL-2.0-or-later license compatibility (Zupt must be
+> Document the GPL-2.0-or-later license compatibility (VaptVupt must be
 > GPL-2.0+ or use VaptVupt via IPC rather than linking)
 
-This was wrong. VaptVupt is GPL-**3**.0-or-later. Zupt must be
-GPL-3.0+ compatible (or use VaptVupt via IPC). A Zupt team trusting
+This was wrong. VaptVupt is GPL-**3**.0-or-later. VaptVupt must be
+GPL-3.0+ compatible (or use VaptVupt via IPC). A VaptVupt team trusting
 this checklist could have made an incorrect license-compatibility
 determination.
 
@@ -3897,10 +3941,10 @@ The checklist now correctly states GPL-3.0-or-later requirements.
 
 #### 4. Documented streaming API doesn't exist
 
-The "Streaming path" section of ZUPT_INTEGRATION.md described
+The "Streaming path" section of INTEGRATION.md described
 APIs `vv_cstream_push`, `vv_cstream_pull`, `vv_cstream_finish`, and
 `vv_dstream_set_flags` — **none of which exist** in the public
-header. A Zupt developer following this code sample would have
+header. A VaptVupt developer following this code sample would have
 written code that fails to compile.
 
 The actual API is documented in `include/vaptvupt.h`:
@@ -3932,7 +3976,7 @@ the LZ+tANS code path, framing, checksumming, and the 'A' tag.
 #### 6. Stale version references throughout
 
 References to "VaptVupt 2.40.0", "v2.40.x patch releases",
-"Zupt 2.1.5's prior compression layer", and "Open issues as of
+"VaptVupt 2.1.5's prior compression layer", and "Open issues as of
 v2.40.0" were all multi-version stale. Performance numbers in the
 "Known Limitations" section claimed "Text decode lags zstd by
 ~2.5×" — closed by Sprint 104's 4-stream Huffman speedup, which
@@ -3946,11 +3990,11 @@ with reference to `DESIGN_RETROSPECTIVE.md` for the full analysis.
 
 ### What's New
 
-- **`tests/test_zupt_integration_samples.c`** — compile-test ensuring
-  the code samples in `ZUPT_INTEGRATION.md` actually build against the
+- **`tests/test_integration_samples.c`** — compile-test ensuring
+  the code samples in `INTEGRATION.md` actually build against the
   current public API. If a future format/API change breaks the doc,
   this test will fail at build time rather than silently misleading
-  Zupt developers. Compiles all 4 samples (encode, decode, streaming
+  VaptVupt developers. Compiles all 4 samples (encode, decode, streaming
   encode, streaming decode) clean.
 
 ### Verification
@@ -3959,8 +4003,8 @@ with reference to `DESIGN_RETROSPECTIVE.md` for the full analysis.
   (was 0)
 - Amalgamation roundtrip test: 4500 → 103 → 4500 bytes clean
 - Amalgamation rejects all 3 Sprint 109 reproducers correctly
-- All 4 ZUPT_INTEGRATION.md code samples compile cleanly via the
-  new `test_zupt_integration_samples`
+- All 4 INTEGRATION.md code samples compile cleanly via the
+  new `test_integration_samples`
 - 17/17 C test binaries pass
 - Encoder byte-identical to v2.47.5 baseline
 
@@ -3972,18 +4016,18 @@ with reference to `DESIGN_RETROSPECTIVE.md` for the full analysis.
 - **Decoder behavior**: byte-identical to v2.47.5 (C decoder)
 - **License**: GPL-3.0-or-later (now correctly tagged in amalgamation)
 - **`build/vaptvupt.c`**: regenerated — **functionally important**
-  for any Zupt deployment using the amalgamation
+  for any VaptVupt deployment using the amalgamation
 - **Drop-in replacement** for v2.47.5 with security improvements
-  realized in the Zupt build path
+  realized in the VaptVupt build path
 
-### Recommended Action for Zupt
+### Recommended Action for VaptVupt
 
 1. **Pull v2.47.6 source tarball**
-2. Re-link Zupt against the regenerated `build/vaptvupt.c` (or
+2. Re-link VaptVupt against the regenerated `build/vaptvupt.c` (or
    re-run `make amalg` if regenerating from source)
-3. Re-validate license attribution in Zupt's SBOM as
+3. Re-validate license attribution in VaptVupt's SBOM as
    GPL-3.0-or-later
-4. Re-read `ZUPT_INTEGRATION.md` — the streaming path code samples
+4. Re-read `INTEGRATION.md` — the streaming path code samples
    have changed materially
 
 ### Discipline Note
@@ -3998,11 +4042,11 @@ surfaced **three documentation drift patterns**:
 3. Multi-version drift went unnoticed because no test verified
    doc/code consistency
 
-The new `test_zupt_integration_samples` is one mitigation. A future
+The new `test_integration_samples` is one mitigation. A future
 sprint could add: (a) a `make amalg-verify` target that diffs
 `build/vaptvupt.c` against a freshly-generated copy and fails CI
 if they differ, and (b) a `tests/test_doc_examples.py` that runs
-shell-extracted code samples from ZUPT_INTEGRATION.md, FORMAT.md,
+shell-extracted code samples from INTEGRATION.md, FORMAT.md,
 and README.md.
 
 Both are bounded follow-ups that would shift the documentation-
@@ -4203,7 +4247,7 @@ The PERFORMANCE.md document explicitly publishes that:
   prior sprints (102, 108) attempted to close it and failed.
 
 This honest publication is itself a security/quality signal: the
-codec is not over-claimed. Users (and Zupt integrators) get the
+codec is not over-claimed. Users (and VaptVupt integrators) get the
 real picture.
 
 ### Compatibility
@@ -4239,7 +4283,7 @@ campaign. The trajectory:
 
 The audit campaign is now in a "documenting and confirming"
 phase rather than a "finding new bugs" phase. v2.47.4 is the
-recommended baseline for Zupt 2.1.7 integration.
+recommended baseline for VaptVupt 2.1.7 integration.
 
 
 ## v2.47.3 — Sprint 110: Fuzz infrastructure expansion (clean run, 0 bugs)
@@ -4584,7 +4628,7 @@ adding per-block adaptive Huffman table selection (the actual
 mechanism behind zstd's text-data ratio win), not just stream
 parallelism. That's a separate multi-sprint design effort.
 
-For Zupt 2.1.7 integration: **v2.47.1 is the recommended baseline**.
+For VaptVupt 2.1.7 integration: **v2.47.1 is the recommended baseline**.
 The codec is materially faster on decode for text-heavy workloads
 than v2.46.5, with the full audit-driven safety profile preserved.
 
@@ -4738,7 +4782,7 @@ blocks, decode speedup).
 
 ### Action Required
 
-For Zupt 2.1.7 integration: v2.47.0 is the recommended baseline for
+For VaptVupt 2.1.7 integration: v2.47.0 is the recommended baseline for
 new deployments. v2.46.5 remains supported for deployments needing
 the older wire format.
 
@@ -5330,7 +5374,7 @@ Within measurement noise.
 
 ### Action Required
 
-For services accepting **untrusted compressed input** (Zupt servers,
+For services accepting **untrusted compressed input** (VaptVupt servers,
 backup verification of unknown sources, network-served decompression):
 **upgrade immediately to v2.46.2**. The DoS vulnerability is reachable
 with a single byte modification of any valid v2.46.x compressed file.
@@ -5397,7 +5441,7 @@ For most users: **none**. The leak only triggers on malformed input
 returning a decoder error code. Single decoders processing trusted
 input never hit the leak.
 
-For long-running services accepting untrusted input (e.g., a Zupt
+For long-running services accepting untrusted input (e.g., a VaptVupt
 server processing potentially adversarial backups), the leak compounds:
 - 16 KB per malformed frame
 - 10,000 corrupted frames per day → 160 MB/day leaked
@@ -5532,7 +5576,7 @@ back to the same coder v2.45.0 would have chosen. In practice, every
 tested fixture produces at least some Huffman-coded blocks, so
 v2.46.0 output differs from v2.45.0 on all tested content.
 
-All Zupt 2.1.6 integrators using v2.44.0 or v2.45.0 can upgrade to
+All VaptVupt 2.1.6 integrators using v2.44.0 or v2.45.0 can upgrade to
 v2.46.0 with no API changes or integration work — the ratio gain is
 transparent.
 
@@ -5567,7 +5611,7 @@ The remaining work to fully win the zstd-tier competition:
 - Better LZ parse on small files (optimal parse vs greedy lazy)
 - Multi-stream ANS for text decode ≥ 1 GB/s (Option A in v5 prompt)
 
-Neither is a blocker for Zupt 2.1.7 integration. v2.46.0 is a solid
+Neither is a blocker for VaptVupt 2.1.7 integration. v2.46.0 is a solid
 incremental step with measurable, uniform improvements.
 
 
@@ -5664,7 +5708,7 @@ the 2-10% ratio gain. Decode speed is unaffected.
 
 Strict byte-identity preserved on all fixtures BELOW the 3 MB
 threshold. Above the threshold, output differs by design (the fix
-produces smaller output). For any Zupt integrator currently using
+produces smaller output). For any VaptVupt integrator currently using
 v2.44.0 with file sizes < 3 MB, upgrade to v2.45.0 is a no-op.
 For larger files, upgrade delivers measurable ratio improvement
 with no correctness risk.
@@ -5711,7 +5755,7 @@ found and fixed the regression in one session.
 ## v2.44.0 — Sprint 60-C to 64: correctness release (ships over v2.43.0)
 
 **This is a correctness release.** v2.44.0 supersedes v2.43.0 as the
-production release for Zupt 2.1.6. The v2.40-v2.43 byte-identity
+production release for VaptVupt 2.1.6. The v2.40-v2.43 byte-identity
 chain is broken ONLY for inputs that trigger the 65536-byte literal-run
 split path — no prior test fixture exercised this; real user data that
 was fine on v2.43.0 continues to round-trip identically on v2.44.0 in
@@ -5751,7 +5795,7 @@ This bug has been latent since v0.8 (when the SEQ tag was introduced).
 No test fixture or real-world input previously exercised the path:
 the standard benchmarking suite uses files ≤8 MB where trailing
 literal runs of 65536+ bytes don't occur in practice. It was surfaced
-by Zupt 2.1.6 integration testing (Sprint 60-C) on 60 MB+ mixed-
+by VaptVupt 2.1.6 integration testing (Sprint 60-C) on 60 MB+ mixed-
 content inputs.
 
 ### The Fix
@@ -5780,7 +5824,7 @@ until both the literal buffer and match count are fully consumed.
 
 ### Also Fixed
 
-- **`ZUPT_INTEGRATION.md` documentation bug**: points #4 and the code
+- **`INTEGRATION.md` documentation bug**: points #4 and the code
   example referenced a non-existent `opts.fast_path` field. Corrected
   to `opts.checksum = 0` (the actual encoder-side-skip-XXH64 option,
   matching how `main.c` implements `--fast`).
@@ -5824,14 +5868,14 @@ is preserved — none of them trigger the split path.
 Before Sprint 60-C, six consecutive optimization sprints (55, 56, 57,
 58, 59-B) had ended in dead-ends with no code shipping. Following
 master prompt v4 §3 guidance, the project explicitly pivoted to
-Zupt 2.1.6 integration testing (Option C). Within two sessions, that
+VaptVupt 2.1.6 integration testing (Option C). Within two sessions, that
 pivot surfaced this correctness bug that no amount of further
 speculative optimization would have found. The v4 prompt's anti-pattern
 #7 ("when 3+ consecutive sprints don't ship code, STOP and pivot
 explicitly") proved its value here.
 
 **v2.44.0 is the first version of VaptVupt suitable for production
-use in Zupt 2.1.6.**
+use in VaptVupt 2.1.6.**
 
 
 ## Sprint 56 — Investigation Notes (no release)
@@ -5935,7 +5979,7 @@ identified.
 
 ### Production Status
 
-- **v2.43.0 remains the production release** for Zupt 2.1.6
+- **v2.43.0 remains the production release** for VaptVupt 2.1.6
 - All 6,557 tests pass on the restored v2.43.0 source tree
 - Extended fuzzer: 2,700 cases pass with zero mismatches
 - Byte-identity with shipped v2.43.0 binary verified on dickens,
@@ -6122,7 +6166,7 @@ invariants preserved. All tests pass:
 | 5 | Zero wire-format corruption | ✓ | ✓ |
 | 6 | Three-lang decoder coverage | ✓ | ✓ |
 | 7 | Security invariants tested | ✓ | ✓ |
-| 8 | Zupt integration | ready | **ready** |
+| 8 | VaptVupt integration | ready | **ready** |
 
 **First god-tier bullet fully crossed on a content class.**
 fx_source at 32.1 MB/s meets the ≥ 30 MB/s target. fx_json at
@@ -6130,15 +6174,15 @@ fx_source at 32.1 MB/s meets the ≥ 30 MB/s target. fx_json at
 at 7-12 MB/s remain below — they'll need different levers
 (SIMD chain walk, reduced chain depth adaptive, or similar).
 
-### Zupt 2.1.6 Integration
+### VaptVupt 2.1.6 Integration
 
-v2.43.0 is a drop-in speed upgrade for Zupt 2.1.6:
+v2.43.0 is a drop-in speed upgrade for VaptVupt 2.1.6:
 
 - Zero migration effort — byte-identical to v2.40.0/2.41.0/2.42.0
 - Additional ~20% encode throughput on text/source (journals,
   logs, config) content
-- All prior Zupt production validation carries over unchanged
-- If Zupt 2.1.6 is still integrating, pin to **v2.43.0**
+- All prior VaptVupt production validation carries over unchanged
+- If VaptVupt 2.1.6 is still integrating, pin to **v2.43.0**
 
 ### Test Suite — 6,557 Tests (unchanged count)
 
@@ -6313,7 +6357,7 @@ in structural waste visible only to a human reviewer.
 - **API unchanged**: same public surface as v2.41.0
 - **Archives from v2.41.0 decode identically with v2.42.0 decoder**
 - **Archives from v2.42.0 are byte-identical to v2.41.0 archives**
-- **Zupt 2.1.6 integration**: drop-in upgrade, zero migration effort
+- **VaptVupt 2.1.6 integration**: drop-in upgrade, zero migration effort
 
 ### Cumulative Encode Speed Arc (v2.40.0 → v2.42.0)
 
@@ -6344,7 +6388,7 @@ without format changes, ratio tradeoffs, or correctness risk.
 | 5 | Zero corruption bugs since v2.35 | ✓ | ✓ | ✓ |
 | 6 | Three-lang decoder coverage | ✓ | ✓ | ✓ |
 | 7 | Security invariants tested | ✓ | ✓ | ✓ |
-| 8 | Zupt integration | pending | ready | **ready** |
+| 8 | VaptVupt integration | pending | ready | **ready** |
 
 **Criterion #4 closing on 30 MB/s target.** fx_source at 26.5 is
 88% of goal. One more encoder-focused sprint targeting
@@ -6523,7 +6567,7 @@ first" mandate in Section 10 is the direct cause of both wins.
 
 The CTX coder isn't wasted work historically — it *could* win on
 the right input class. But for VaptVupt's actual user workload
-(Zupt backups, structured records, binaries), the LZ+SEQ path
+(VaptVupt backups, structured records, binaries), the LZ+SEQ path
 is aggressive enough that CTX's additional modeling overhead
 never pays off. That's a measurement finding, not a prediction.
 
@@ -6540,16 +6584,16 @@ Nothing about v2.41.0 changes how existing archives are read or
 written at the byte level. The only observable difference is that
 new encodes complete faster.
 
-### Zupt 2.1.6 Integration
+### VaptVupt 2.1.6 Integration
 
-v2.41.0 is a drop-in speed upgrade for Zupt 2.1.6:
+v2.41.0 is a drop-in speed upgrade for VaptVupt 2.1.6:
 
 - Zero migration effort — byte-exact archive output
 - Faster backup ingest (7-76% encode speedup depending on content)
 - No re-validation of output required (outputs are identical)
-- All Zupt 2.1.6 production validation from v2.40.0 carries over
+- All VaptVupt 2.1.6 production validation from v2.40.0 carries over
 
-If Zupt 2.1.6 is already pinned to v2.40.0, upgrading to v2.41.0
+If VaptVupt 2.1.6 is already pinned to v2.40.0, upgrading to v2.41.0
 is a "safe" point-release change. If still in the integration
 window, pin to v2.41.0 directly.
 
@@ -6586,7 +6630,7 @@ Per master prompt v2 Section 12:
 | 5 | Zero wire-format corruption | ✓ | ✓ |
 | 6 | Three-lang decoder coverage | ✓ | ✓ |
 | 7 | Security invariants tested | ✓ | ✓ |
-| 8 | Zupt integration | pending | **ready for Zupt 2.1.6** |
+| 8 | VaptVupt integration | pending | **ready for VaptVupt 2.1.6** |
 
 **Criterion #4 (encode speed) moved from ~18 to ~25 MB/s on
 representative fixtures.** The 30 MB/s goal is achievable within
@@ -6618,22 +6662,22 @@ time (per profile) lives in:
 
 ## [2.40.0] - 2026-04-22
 
-**Production release for Zupt 2.1.6 integration. No new decoder
+**Production release for VaptVupt 2.1.6 integration. No new decoder
 optimizations — v2.39.0's bounds elision was enough. This release
 is about HARDENING: a new 55-case adversarial test suite targeting
 the v2.39.0 safe-zone boundaries, 2× extended differential fuzzer
-(10,200 cases), and the ZUPT_INTEGRATION.md reference document.**
+(10,200 cases), and the INTEGRATION.md reference document.**
 
 ### Why No New Performance Work
 
-v2.40.0 is the version that ships into Zupt 2.1.6 as the compression
+v2.40.0 is the version that ships into VaptVupt 2.1.6 as the compression
 layer beneath AES-256-GCM + ML-KEM. Production releases have different
 risk calculus than experimental ones:
 
 - v2.39.0's safe-zone bounds elision delivered 7-11% across all
   fixture classes — substantial win, already proven
 - One more micro-optimization in v2.40 creates a new code path that
-  hasn't seen real-world use; in Zupt's production context, that's a
+  hasn't seen real-world use; in VaptVupt's production context, that's a
   bad tradeoff vs its 2-5% potential upside
 - The right v2.40 investment is **hardening the code that's already
   shipping**, not adding new code
@@ -6686,9 +6730,9 @@ Zero mismatches between C decoder and Python reference. Zero
 crashes across 10,200 random inputs. Zero adversarial-test
 failures across 55 targeted scenarios.
 
-### New: ZUPT_INTEGRATION.md
+### New: INTEGRATION.md
 
-A 300-line reference document written specifically for the Zupt
+A 300-line reference document written specifically for the VaptVupt
 2.1.6 integration team. Contents:
 
 - TL;DR with the five integration points
@@ -6698,12 +6742,12 @@ A 300-line reference document written specifically for the Zupt
 - Performance expectations with library-level measurements
 - Security guarantees and non-guarantees (what VaptVupt does NOT
   protect against — timing side channels, ratio side channels)
-- Integration checklist for Zupt's release validation
+- Integration checklist for VaptVupt's release validation
 - API stability promise across 2.x versions
 - Known limitations (text decode gap, binary ratio gap, no dict)
 - Version pinning recommendation (pin to 2.40.0 exactly)
 
-This document is the canonical reference for Zupt integration
+This document is the canonical reference for VaptVupt integration
 questions. File bugs against it when it's wrong.
 
 ### Test Suite — 6,557 Tests (was 6,502)
@@ -6734,11 +6778,11 @@ decompression behavior. The only shipped code difference is:
 
 - `+ tests/test_safezone_adversarial.c` (new file)
 - `+ Makefile` entry for TEST13
-- `+ ZUPT_INTEGRATION.md` (new documentation)
+- `+ INTEGRATION.md` (new documentation)
 
 An existing v2.39.0 deployment upgrading to v2.40.0 gets only the
 additional test confidence, not new codec behavior. This minimizes
-the risk surface for Zupt's integration window.
+the risk surface for VaptVupt's integration window.
 
 ### Competitive Position at v2.40.0
 
@@ -6756,7 +6800,7 @@ Bold entries mark where VaptVupt leads.
 | json / structured | 569 | 1,298 | 2,891 | 471 |
 
 VaptVupt decode dominates when payload is **AEAD-wrapped, pattern-rich,
-or synthetic** — i.e. the Zupt workload.
+or synthetic** — i.e. the VaptVupt workload.
 
 **Compression ratio (input / compressed; higher is better)**
 
@@ -6786,14 +6830,14 @@ or synthetic** — i.e. the Zupt workload.
 | Cross-language refs | **3 languages** (C, Py, JS) | zstd: C only |
 | Decoder attack surface | **14 invariants, 11,556 test cases** | industry-standard |
 
-**Summary**: VaptVupt wins decisively on the Zupt workload profile —
+**Summary**: VaptVupt wins decisively on the VaptVupt workload profile —
 AEAD-wrapped archives where `--fast` unlocks 3.7× zstd and 1.2× lz4
 decode throughput, and where pattern-rich binaries and structured
 records (JSON, sensor data, record tables) compress better than gzip
 while decoding faster than lz4 on the same content class.
 
 The tradeoff: prose text at high compression levels stays behind zstd
-(ratio) and lz4 (decode speed). Text is not the Zupt workload.
+(ratio) and lz4 (decode speed). Text is not the VaptVupt workload.
 
 ### The God-Tier Criterion — Status at v2.40.0
 
@@ -6808,14 +6852,14 @@ Per master prompt v2 Section 12:
 | Zero wire-format corruption bugs since v2.35 | 0 | **0** ✓ |
 | Three-language decoder coverage | unbroken | **unbroken** ✓ |
 | Security invariants tested + guarded | all 14 | **all 14** ✓ |
-| Zupt integration shipped and stable | shipped | **pending Zupt 2.1.6 release** |
+| VaptVupt integration shipped and stable | shipped | **pending VaptVupt 2.1.6 release** |
 
 **Security bullets all clear. Performance bullets still have
 runway.** This is an acceptable state to ship into production.
 
-### Sprint 51 Candidates (Post-Zupt-Integration)
+### Sprint 51 Candidates (Post-VaptVupt-Integration)
 
-Once Zupt 2.1.6 stabilizes with v2.40.0 in production, the next
+Once VaptVupt 2.1.6 stabilizes with v2.40.0 in production, the next
 sprints can resume optimization work:
 
 - **Match-copy branchless** (ablation showed 25% of decode time
@@ -7260,8 +7304,8 @@ The cumulative binary-gap reduction vs gzip-9:
 
 The "amazing compression on binary files" objective is meaningfully
 delivered. Not parity with gzip-9 — closing the last 6-9% requires
-either optimal parsing (explicit Zupt non-goal) or Huffman literal
-coding (v3 format change). But the Zupt user who wants better
+either optimal parsing (explicit VaptVupt non-goal) or Huffman literal
+coding (v3 format change). But the VaptVupt user who wants better
 binary compression than v1 has a solid answer today.
 
 ### COMPETITIVE.md Refresh
@@ -7331,7 +7375,7 @@ decode identically with v2.36.0 (different sequences, same format).
 
 - **Python encoder for 'T' tag** — restores symmetry with the 'S'
   tag encoder in `reference/vv_encoder.py`. Enables pure-Python
-  Zupt clients
+  VaptVupt clients
 - **Deeper hash3 offset filter tuning** — current 256-byte limit
   is rough; a log-scale sliding threshold may pick up a few more
   bytes on binary
@@ -7462,14 +7506,14 @@ that v2.35.0 produces decodes identically with v2.36.0, and every
 archive v2.36.0 produces decodes identically with v2.35.0. This
 is a pure reference-decoder + CI coverage release.
 
-### Why This Matters for Zupt
+### Why This Matters for VaptVupt
 
-Zupt is built on the premise that any decoder can verify any
+VaptVupt is built on the premise that any decoder can verify any
 archive. Gaps in reference-decoder coverage erode that guarantee
-— if the Python or JS reference can't read a 'T' archive, Zupt's
+— if the Python or JS reference can't read a 'T' archive, VaptVupt's
 verification story has a hole exactly where format-v2 lives.
 
-v2.36.0 restores that guarantee. A Zupt archive that goes into
+v2.36.0 restores that guarantee. A VaptVupt archive that goes into
 format-v2 can be:
 - Produced by any v2.35.0+ encoder
 - Consumed by the C/Python/JS decoder of anyone's choice
@@ -7668,17 +7712,17 @@ Test count: 8 → 15 (v2.34.0) → 18 (v2.35.0).
   (where hash3 activates). Cost: extra hash-table insert per
   position + chain walk. Acceptable given the 2-5% ratio gain.
 
-### Why This Matters for Zupt
+### Why This Matters for VaptVupt
 
-The stated Zupt priority is "amazing compression on binary files".
+The stated VaptVupt priority is "amazing compression on binary files".
 v2.35.0 is the first release where format-v2 delivers real binary
 improvements — 2-5% on executables and libraries — while remaining
 cross-platform, embeddable, and GPL-3.0.
 
-Recommended migration path for Zupt:
+Recommended migration path for VaptVupt:
 1. Deploy v2.33.0+ decoders (can read both 'S' and 'T' tags)
 2. After decoder fleet is at v2.33.0+, enable `opts.format_v2 = 1`
-   in the Zupt encoder
+   in the VaptVupt encoder
 3. Binary backup archives shrink by 2-5%; text/JSON unchanged
 
 ### Known Gaps (Sprint 46 Candidates)
@@ -7821,7 +7865,7 @@ Expected improvements (target from gzip-9 comparison):
 Text/JSON/source already hit diminishing returns from the text
 matcher; hash3 may help modestly (+0.5 to +1%) but won't reach
 gzip-9 on those fixtures. The primary win is on real binaries,
-which is the explicit Zupt priority.
+which is the explicit VaptVupt priority.
 
 ### What Sprint 45 Won't Do
 
@@ -8019,9 +8063,9 @@ still passes against the Python reference decoder. The ratio gate
 
 Target: ~300 lines. One-session scope.
 
-### Why This Matters for Zupt
+### Why This Matters for VaptVupt
 
-Zupt's target archive format includes real binary data
+VaptVupt's target archive format includes real binary data
 (executables, libraries, binary blobs). The current 10-14% gap
 vs gzip-9 translates directly to larger backup archives and
 higher storage costs.
@@ -8033,7 +8077,7 @@ Closing that gap while keeping:
 - ✅ Encode speed (minimal impact — one extra table lookup
      during parsing for 3-byte matches)
 
-...makes v3.0.0 a clean win for the Zupt use case.
+...makes v3.0.0 a clean win for the VaptVupt use case.
 
 ### Honest Note
 
@@ -8045,8 +8089,8 @@ v2.33.0+ can read the new archives immediately.
 
 This staged rollout is deliberate. It decouples "can read v2"
 from "can produce v2" so:
-- Zupt can upgrade decoders first (low risk)
-- Then Zupt can flip encoder mode with confidence
+- VaptVupt can upgrade decoders first (low risk)
+- Then VaptVupt can flip encoder mode with confidence
 - Old clients gracefully fail with clear error ("unknown tag")
 
 ---
@@ -8221,7 +8265,7 @@ where the LZ/ANS path is nearly free.
 
 ### The Insight
 
-Zupt (the target downstream product) wraps every archive in
+VaptVupt (the target downstream product) wraps every archive in
 AES-256-GCM. The AEAD's 16-byte authentication tag provides
 **cryptographic** integrity — strictly stronger than XXH64's
 non-cryptographic checksum. Running XXH64 on top is pure
@@ -8585,7 +8629,7 @@ archives (read-old, write-new). Out of scope for sprint 39.
 
 **JavaScript 'S' tag decoder — the JS reference now covers 100% of
 live encoder output. Zero SKIPs in any reference implementation.
-Browser-side reading of any real-world Zupt archive is viable
+Browser-side reading of any real-world VaptVupt archive is viable
 without a WebAssembly fallback.**
 
 ### Added
@@ -8640,7 +8684,7 @@ The bit reader fills the accumulator until it has >56 bits, and
 the fill loop shifts bytes by up to 56 — which overflows Number.
 
 BigInt is slower than Number (~3-5× on this workload), but
-correct. For browser-side verification of modest-size Zupt
+correct. For browser-side verification of modest-size VaptVupt
 archives (up to a few MB) performance is acceptable. For larger
 archives, a WASM build of the C codec remains preferable.
 
@@ -8721,7 +8765,7 @@ produced by encoders between format versions v0.3 and v0.7, and
 still live in `src/vv_decoder.c` for back-compat with archives
 from that era (~2025 timeframe).
 
-Any real production Zupt archive from a v1.0+ encoder will NOT
+Any real production VaptVupt archive from a v1.0+ encoder will NOT
 contain these tags, so for practical browser-side decoding the
 JS decoder is fully functional. But be aware: feeding a pre-v0.8
 archive to the JS decoder will raise `NotImplementedError`.
@@ -8878,7 +8922,7 @@ extension.
 ## [2.27.0] - 2026-04-21
 
 **JavaScript reference decoder — third independent implementation
-of the wire format. Enables browser-side Zupt archive reading
+of the wire format. Enables browser-side VaptVupt archive reading
 without WebAssembly.**
 
 ### Added
@@ -8924,18 +8968,18 @@ XXH64 implementation uses `BigInt` arithmetic to match the C
 reference bit-for-bit. Performance: roughly 50 MB/s on this
 container (vs the C reference's several hundred MB/s). Acceptable
 for browser-side verification of small archives; for multi-GB
-Zupt archives the XXH64 verification is the bottleneck and a
+VaptVupt archives the XXH64 verification is the bottleneck and a
 WASM build would be a better path.
 
-### Primary Use Case — Browser Zupt Archives
+### Primary Use Case — Browser VaptVupt Archives
 
-Zupt archives are `.vv` streams. Before v2.27.0, the only way to
+VaptVupt archives are `.vv` streams. Before v2.27.0, the only way to
 read them in a browser was:
 1. Ship a WASM build of the C codec (~80 KB gzipped, requires
    build pipeline)
 2. Or send the archive to a server for decompression
 
-With v2.27.0, small Zupt archives can be decompressed natively in
+With v2.27.0, small VaptVupt archives can be decompressed natively in
 any modern browser using a ~320-line JS module — assuming the
 archive doesn't contain ENTROPY blocks. For archives that do
 contain ENTROPY, the browser would need a WASM fallback (or the
@@ -9526,7 +9570,7 @@ that I — having written parts of this codec — got the API wrong on
 first try is itself a useful signal. The API's current contract
 is fragile; the docstring now reflects that reality.
 
-For Zupt integration, this matters: Zupt will use the streaming API
+For VaptVupt integration, this matters: VaptVupt will use the streaming API
 to back up multi-GB files without holding them in memory. Getting
 the dstream usage right on first try is now much easier with the
 updated docs.
@@ -9881,7 +9925,7 @@ decoder limit themselves to RAW/RLE/COMPRESSED.)
   The test fails if the two decoders disagree on accept/reject for
   any input. This catches a class of cross-implementation security
   bugs where one decoder might accept malformed input that another
-  rejects (a hazard for Zupt's archive verification flow if a third-
+  rejects (a hazard for VaptVupt's archive verification flow if a third-
   party reader sees data the C decoder considered valid).
 
 - **`make test` now runs the negative corpus** in addition to the
@@ -10041,7 +10085,7 @@ will fail loudly — making format drift undetectably impossible.
 
 - ENTROPY block decoding in Python: would require porting
   ~6,000 LOC of ANS/Huffman/CTX/SEQ from C. Possible if
-  ever needed (e.g., browser-side decompression of Zupt
+  ever needed (e.g., browser-side decompression of VaptVupt
   backups), but the C reference is authoritative.
 
 ---
@@ -10122,7 +10166,7 @@ docs are:
   implemented from FORMAT.md alone
 - Future format v2 (if ever needed) has a clear baseline to
   diff against
-- Zupt and other downstream consumers have a stable contract
+- VaptVupt and other downstream consumers have a stable contract
 - The format is now reviewable by people who don't read C
 
 ---
@@ -10137,7 +10181,7 @@ directory.**
 
 - **`tests/test_edge_cases.c`** — a comprehensive new test suite
   covering edge cases that don't show up in normal benchmarking
-  but matter for a real Zupt deployment:
+  but matter for a real VaptVupt deployment:
 
   **Tiny inputs (16 tests)**: Roundtrip every input size from 1 to
   16 bytes. Catches off-by-one errors in the encoder's "below
@@ -10183,7 +10227,7 @@ directory.**
   untrusted compressed streams.
 
   **Stress tests (2 tests)**:
-  - 1000 × 50-byte tiny-file compressions (Zupt's primary workflow).
+  - 1000 × 50-byte tiny-file compressions (VaptVupt's primary workflow).
   - 50 alternating 100B/100KB compressions (catches state leakage
     between calls).
 
@@ -10216,7 +10260,7 @@ The byte-flip fuzz with checksums enabled revealed:
 - Zero flips produce data that *passes the XXH64 check but
   differs from source* — i.e., the checksum is doing its job
 
-These are not bugs but valuable confidence-builders for Zupt
+These are not bugs but valuable confidence-builders for VaptVupt
 integration: the codec rejects malformed input safely.
 
 ---
@@ -10647,7 +10691,7 @@ From the start of this alloc-reduction sprint arc:
 
 ### Benchmark Impact
 
-500 × 4 KB files (Zupt-style batch compression):
+500 × 4 KB files (VaptVupt-style batch compression):
 
 | Path | v2.10.0 | **v2.11.0** | Net from v2.7.0 |
 |------|---------|-------------|------------------|
@@ -10698,7 +10742,7 @@ compression block** (5 in v2.8.0, 5 in v2.9.0, 5 in v2.10.0 -- and
 
 ### Benchmark Impact
 
-500 × 4 KB files (Zupt-style batch compression):
+500 × 4 KB files (VaptVupt-style batch compression):
 
 | Path | v2.7.0 | v2.8.0 | v2.9.0 | **v2.10.0** | Net gain |
 |------|--------|--------|--------|-------------|----------|
@@ -10754,7 +10798,7 @@ hot path where per-block fixed overhead dominates total cost.
 
 ### Benchmark Impact
 
-500 × 4 KB files (Zupt-style batch compression):
+500 × 4 KB files (VaptVupt-style batch compression):
 
 | Path | v2.7.0 | v2.8.0 | **v2.9.0** | Net gain |
 |------|--------|--------|------------|----------|
@@ -10802,7 +10846,7 @@ for streaming small files.**
 
 ### Benchmark Impact
 
-500 × 4 KB files (Zupt-style batch compression):
+500 × 4 KB files (VaptVupt-style batch compression):
 
 | Path | v2.7.0 | **v2.8.0** | Gain |
 |------|--------|------------|------|
@@ -10908,7 +10952,7 @@ speedup on small-file batch compression.**
   Same optimization applies to fresh `matcher_init()` (first-compress
   cost lower).
 
-### Benchmark: Zupt-Style Per-File Compression
+### Benchmark: VaptVupt-Style Per-File Compression
 
 Compressing 500 × 4 KB files (typical backup workload):
 
@@ -10918,7 +10962,7 @@ Compressing 500 × 4 KB files (typical backup workload):
 | `vv_cstream_create/destroy` per file | 959 ms | 521 | 0.84× |
 | **`vv_cstream_create + reset` loop** | **484 ms** | **1032** | **1.67×** |
 
-The winning pattern for Zupt:
+The winning pattern for VaptVupt:
 ```c
 vv_cstream_t *c = vv_cstream_create(&opts);
 for (each file) {
@@ -11059,9 +11103,9 @@ memory at once.
   and streaming encoders now share identical block-selection logic
   (raw / LZ / 'S' / 'I'/'C' winner-takes-all).
 
-### Notes for Zupt Integration
+### Notes for VaptVupt Integration
 
-The streaming API is ideal for Zupt's backup workflow:
+The streaming API is ideal for VaptVupt's backup workflow:
 
 ```c
 /* Compress a file chunk-by-chunk without loading it fully */
@@ -11395,8 +11439,8 @@ decode side):
 **6/8 file types beat gzip-9.**
 
 ### Credit
-Bug discovered during Zupt 2.1.5 integration testing on
-`zupt_format.c` (79 KB C source file) where decode produced `\x00`
+Bug discovered during VaptVupt 2.1.5 integration testing on
+`vaptvupt_format.c` (79 KB C source file) where decode produced `\x00`
 bytes where `'4'` should appear in the text `"1024 * 1024"`.
 
 ---
@@ -11578,7 +11622,7 @@ decode reliably.**
   Handles AVX2 via `-mavx2` (GCC/Clang) or `/arch:AVX2` (MSVC).
 - **Sprint 16 test suite** (`tests/test_sprint16.c`) with 19 tests
   covering binary ratio (≥1.40), text no-regression, decode
-  specialization (w16/w20), edge cases, Zupt API, 200-trial fuzz,
+  specialization (w16/w20), edge cases, VaptVupt API, 200-trial fuzz,
   decode speed sanity.
 
 ### Changed
@@ -11726,12 +11770,12 @@ gzip by 2×. All remaining gaps are under 15%.**
 ## [1.2.0] - 2026-04-03
 
 ### Added
-- **Zupt integration API** (`include/vaptvupt_api.h`, `src/vaptvupt_api.c`):
+- **VaptVupt integration API** (`include/vaptvupt_api.h`, `src/vaptvupt_api.c`):
   - `vvz_compress(src, len, dst, cap, level)` — level 1/5/9
   - `vvz_decompress(src, len, dst, cap)`
   - `vvz_compress_bound(len)`
 - **Amalgamation build**: `make amalg` produces `build/vaptvupt.c` +
-  `build/vaptvupt.h` for Zupt drop-in embedding.
+  `build/vaptvupt.h` for VaptVupt drop-in embedding.
 - Context model decode prefetch for improved extreme-mode throughput.
 
 ### Changed

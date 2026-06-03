@@ -3,7 +3,7 @@
 **Document version**: 1.5 (Sprint 51)
 **Codebase audited**: v2.52.0
 **License**: GPL-3.0-or-later
-**Intended deployment**: Embedded codec library inside Zupt secure backup tool
+**Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
 
 ---
@@ -31,8 +31,8 @@ Per the project's discipline ("State explicitly what the system does NOT protect
 
 | Out of scope | Whose responsibility |
 |---|---|
-| **Confidentiality of compressed data** | Caller (Zupt wraps with AES-256-GCM + ML-KEM-768 via libpqvaptvupt) |
-| **Authenticity of compressed data** | Caller (Zupt provides Encrypt-then-MAC; codec's xxh64 is integrity-only, not authentication) |
+| **Confidentiality of compressed data** | Caller (VaptVupt wraps with AES-256-GCM + ML-KEM-768 via libpqvaptvupt) |
+| **Authenticity of compressed data** | Caller (VaptVupt provides Encrypt-then-MAC; codec's xxh64 is integrity-only, not authentication) |
 | **Side-channel resistance** (timing, cache, power) | Caller (codec is throughput-tuned; constant-time properties apply only to libpqvaptvupt's crypto path) |
 | **Compression-oracle attacks** (CRIME, BREAST, BREACH) | Caller (do not mix attacker-controlled and secret plaintext in the same compression stream — same caveat as zlib, zstd, brotli) |
 | **Denial of service from `dst_cap` exhaustion** | Caller (the codec enforces `dst_cap` but the caller chooses the value; passing `SIZE_MAX` defeats DoS protection) |
@@ -41,7 +41,7 @@ Per the project's discipline ("State explicitly what the system does NOT protect
 | **Disk persistence of working buffers** | Caller (Sprint 118's secure-zero scrubs heap, not swap; mlockall is caller's job) |
 | **Resistance to compiler downgrades** | Caller (the security properties below assume `-O2` or `-O3` with a modern gcc/clang; `-O0` builds are functional but not audit-targeted) |
 
-**Specifically**: a `.vv` file alone provides **no** confidentiality and **no** authentication. It is a compressed blob with an integrity checksum that detects accidental corruption, not deliberate tampering. For deliberate-tampering resistance, the caller MUST wrap the codec output in an authenticated encryption scheme (AEAD). This is exactly how Zupt uses it (via libpqvaptvupt's `pqvv_seal` / `pqvv_open`).
+**Specifically**: a `.vv` file alone provides **no** confidentiality and **no** authentication. It is a compressed blob with an integrity checksum that detects accidental corruption, not deliberate tampering. For deliberate-tampering resistance, the caller MUST wrap the codec output in an authenticated encryption scheme (AEAD). This is exactly how VaptVupt uses it (via libpqvaptvupt's `pqvv_seal` / `pqvv_open`).
 
 The codec's job is: **safely decompress untrusted input**. Everything outside that boundary belongs to the layer above.
 
@@ -216,7 +216,7 @@ The encoder's working buffers contain plaintext-derived data (literal bytes from
 
 The implementation (`vv_secure_zero` in `src/vv_encoder.c`) prefers `explicit_bzero` (BSD/glibc 2.25+) and falls back to a volatile-pointer memset that the optimizer cannot eliminate. Behavior is verified by `tests/test_secure_zero.c` (TEST18 in the suite).
 
-**This is defense in depth**, not a primary security boundary. The original input buffer (caller-owned) is unaffected; if the caller doesn't zero it themselves, the codec's hygiene doesn't help. But for Zupt's pipeline (compress → encrypt → write), the codec's working buffers are now scrubbed before the encryption step gets the data.
+**This is defense in depth**, not a primary security boundary. The original input buffer (caller-owned) is unaffected; if the caller doesn't zero it themselves, the codec's hygiene doesn't help. But for VaptVupt's pipeline (compress → encrypt → write), the codec's working buffers are now scrubbed before the encryption step gets the data.
 
 **Encoder output is byte-identical to v2.47.8** — scrubbing happens after output is emitted, so the wire format and compressed bytes are unchanged.
 
@@ -296,7 +296,7 @@ The full 13-tool audit campaign from Section 3 is NOT run on every commit (some 
 
 ## 8c. Companion Crypto Library: libpqvaptvupt
 
-In Zupt deployment, VaptVupt is wrapped by libpqvaptvupt's `pqvv_seal` / `pqvv_open` to provide the confidentiality and authentication that the codec itself does not provide (Section 1a). The crypto library's security posture is documented in its own repository, but the relevant integration boundary is:
+In VaptVupt deployment, VaptVupt is wrapped by libpqvaptvupt's `pqvv_seal` / `pqvv_open` to provide the confidentiality and authentication that the codec itself does not provide (Section 1a). The crypto library's security posture is documented in its own repository, but the relevant integration boundary is:
 
 ```
 Plaintext
@@ -434,7 +434,7 @@ In the interest of accuracy, the following remain not yet covered:
 
 5. **Formal verification of `matcher_insert_fast`'s precondition** (Sprint 29). The fast variant assumes the caller's `j <= end - 5` guard proves the boundary. This is verified by inspection (every call site is preceded by the guard) but not by static analysis. **Status: open**. Frama-C/ACSL annotation would close this; multi-sprint.
 
-6. **Side-channel resistance**. The codec is throughput-tuned, not constant-time. This is correct per Section 1a (out of scope) — the codec operates on already-decrypted data inside Zupt's pipeline, so secret-dependent timing in the codec leaks no information about Zupt's keys. But callers using VaptVupt to compress secrets directly should be aware. **Status: out of scope by design**.
+6. **Side-channel resistance**. The codec is throughput-tuned, not constant-time. This is correct per Section 1a (out of scope) — the codec operates on already-decrypted data inside VaptVupt's pipeline, so secret-dependent timing in the codec leaks no information about VaptVupt's keys. But callers using VaptVupt to compress secrets directly should be aware. **Status: out of scope by design**.
 
 7. **Reproducibility of `make pgo` across compilers**. PGO output is byte-identical to the default build for the same compiler and training set; behavior across compilers (gcc vs clang vs MSVC) has not been audited. **Status: open**, low-priority (PGO is opt-in).
 
@@ -444,13 +444,13 @@ In the interest of accuracy, the following remain not yet covered:
 
 Items 2-4 and 9 are the highest-priority for future audit work. Item 5 is the highest-value formal-verification target if Jasmin/Frama-C effort becomes available.
 
-These represent residual risk to be addressed in future audit sprints if Zupt deployment surfaces relevant concerns.
+These represent residual risk to be addressed in future audit sprints if VaptVupt deployment surfaces relevant concerns.
 
 ---
 
 ## 10. Reporting Vulnerabilities
 
-This is currently a pre-Zupt-integration codebase. For all security disclosures:
+This is currently a pre-VaptVupt-integration codebase. For all security disclosures:
 
 **Email**: `sac@securityops.co`
 
@@ -465,11 +465,11 @@ This is currently a pre-Zupt-integration codebase. For all security disclosures:
 
 **Response SLA**: best-effort, typically within 7 days. Acknowledgement of receipt within 48 hours.
 
-**PGP**: a project-specific PGP key for encrypted disclosure will be published before Zupt v2.2.3 ships. Until then, sensitive details can be exchanged out-of-band after initial contact.
+**PGP**: a project-specific PGP key for encrypted disclosure will be published before VaptVupt v2.2.3 ships. Until then, sensitive details can be exchanged out-of-band after initial contact.
 
 **Coordinated disclosure**: preferred. Public CVE assignment will follow standard 90-day embargo unless the reporter and maintainer agree otherwise.
 
-When VaptVupt is integrated into Zupt and reaches public release, vulnerability disclosure should also follow Zupt's policy at securityops.co (TBD URL).
+When VaptVupt is integrated into VaptVupt and reaches public release, vulnerability disclosure should also follow VaptVupt's policy at securityops.co (TBD URL).
 
 ---
 

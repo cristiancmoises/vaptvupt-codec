@@ -3,7 +3,7 @@
 **Document version**: 1.1
 **Codebase audited**: v2.53.4
 **License**: GPL-3.0-or-later
-**Intended deployment**: Embedded codec library inside the Zupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
+**Intended deployment**: Embedded codec library inside the VaptVupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
 
 This document is the formal audit reference for VaptVupt. It specifies what has been verified, by which mechanism, against what threat model, with what limits. It is intended to satisfy the due-diligence requirements of:
 
@@ -41,7 +41,7 @@ The codec is part of a layered system. Threats are categorized by which layer is
 
 | Threat | Why out of scope |
 |---|---|
-| Confidentiality of the original input | Caller's responsibility. The codec never claims to encrypt; an attacker with the compressed bytes can recover the original. Use AEAD (Zupt does). |
+| Confidentiality of the original input | Caller's responsibility. The codec never claims to encrypt; an attacker with the compressed bytes can recover the original. Use AEAD (VaptVupt does). |
 | Authentication / integrity of compressed output | Caller's responsibility. The codec emits an XXH64 checksum optionally but this is for accidental-corruption detection, not authentication. Use AEAD. |
 | Key management for downstream encryption | Out of scope by definition — the codec doesn't see keys. |
 | Side-channel attacks (timing, cache, power) on the encoder | Not mitigated. The encoder's runtime depends on the input data. If the input is sensitive, use a constant-time encryption layer downstream. |
@@ -53,7 +53,7 @@ The codec is part of a layered system. Threats are categorized by which layer is
 
 ```
                                ┌─────────────────────────────────┐
-                               │  Caller (Zupt or 3rd party)     │
+                               │  Caller (VaptVupt or 3rd party)     │
                                │  - owns input bytes             │
                                │  - owns dst_cap                 │
                                │  - owns key material            │
@@ -211,7 +211,7 @@ The audit campaign also produced **0 findings** in three follow-up campaigns (Sp
 
 Two categories of defect are intentionally not pursued by the audit:
 
-1. **Encoder-side timing or cache side channels.** Mitigation would require constant-time compression, which is incompatible with the codec's design goals. Callers concerned about side channels should encrypt the codec's output before time-of-check (Zupt does — encryption is the next stage in the pipeline).
+1. **Encoder-side timing or cache side channels.** Mitigation would require constant-time compression, which is incompatible with the codec's design goals. Callers concerned about side channels should encrypt the codec's output before time-of-check (VaptVupt does — encryption is the next stage in the pipeline).
 
 2. **Format compatibility with future zstd / lz4 versions.** VaptVupt's wire format is independent and will not converge to either competitor's format. Frame-level format detection at the application layer (look for magic bytes) is the responsibility of any application that needs to support multiple codecs.
 

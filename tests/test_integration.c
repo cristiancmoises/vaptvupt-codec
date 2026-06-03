@@ -1,15 +1,15 @@
-/* Zupt 2.2.2 Integration Smoke Test
+/* VaptVupt 2.2.2 Integration Smoke Test
  *
  * Validates that the exact code patterns documented in
- * ZUPT_INTEGRATION.md compile, link, and execute correctly against
+ * INTEGRATION.md compile, link, and execute correctly against
  * the v2.48.1 amalgamation. Run from a fresh extract:
  *
  *   make
- *   gcc -Wall -Wextra -O2 -std=c11 -Iinclude tests/test_zupt_integration.c
+ *   gcc -Wall -Wextra -O2 -std=c11 -Iinclude tests/test_integration.c
  *       src/vv_encoder.c src/vv_xxh64.c src/vv_huffman.c src/vv_ans.c
- *       src/vaptvupt_api.c build_obj/vv_simd_zupt.o build_obj/vv_decoder_zupt.o
- *       -o test_zupt_integration
- *   ./test_zupt_integration
+ *       src/vaptvupt_api.c build_obj/vv_simd_vaptvupt.o build_obj/vv_decoder_vaptvupt.o
+ *       -o test_integration
+ *   ./test_integration
  */
 
 #define _POSIX_C_SOURCE 199309L
@@ -35,10 +35,10 @@ static int test_pass = 0;
     do { printf("FAIL — %s\n", reason); return 1; } while (0)
 
 /* ─────────────────────────────────────────────────────────────────
- * Encode/Decode functions exactly as documented in ZUPT_INTEGRATION.md
+ * Encode/Decode functions exactly as documented in INTEGRATION.md
  * ───────────────────────────────────────────────────────────────── */
 
-static int zupt_compress_for_archive(const uint8_t *plaintext, size_t plaintext_len,
+static int vaptvupt_compress_for_archive(const uint8_t *plaintext, size_t plaintext_len,
                                       uint8_t **out_buf, size_t *out_len,
                                       int is_binary_heavy) {
     vv_options_t opts;
@@ -59,7 +59,7 @@ static int zupt_compress_for_archive(const uint8_t *plaintext, size_t plaintext_
     return 0;
 }
 
-static int zupt_decompress_from_archive(const uint8_t *cmp, size_t cmp_len,
+static int vaptvupt_decompress_from_archive(const uint8_t *cmp, size_t cmp_len,
                                          uint8_t *dst, size_t dst_cap,
                                          size_t *decoded_len) {
     int64_t dlen = vv_decompress_flags(cmp, cmp_len, dst, dst_cap,
@@ -83,13 +83,13 @@ static int test_roundtrip_text(void) {
 
     uint8_t *cmp = NULL;
     size_t cmp_len = 0;
-    if (zupt_compress_for_archive((const uint8_t *)src, src_len,
+    if (vaptvupt_compress_for_archive((const uint8_t *)src, src_len,
                                    &cmp, &cmp_len, 0 /* not binary */) != 0)
         FAIL("compress failed");
 
     uint8_t dec[4096];
     size_t dec_len = 0;
-    if (zupt_decompress_from_archive(cmp, cmp_len, dec, sizeof(dec), &dec_len) != 0) {
+    if (vaptvupt_decompress_from_archive(cmp, cmp_len, dec, sizeof(dec), &dec_len) != 0) {
         free(cmp); FAIL("decompress failed");
     }
 
@@ -112,13 +112,13 @@ static int test_roundtrip_binary(void) {
 
     uint8_t *cmp = NULL;
     size_t cmp_len = 0;
-    if (zupt_compress_for_archive(src, sizeof(src),
+    if (vaptvupt_compress_for_archive(src, sizeof(src),
                                    &cmp, &cmp_len, 1 /* binary */) != 0)
         FAIL("compress failed");
 
     uint8_t dec[8192];
     size_t dec_len = 0;
-    if (zupt_decompress_from_archive(cmp, cmp_len, dec, sizeof(dec), &dec_len) != 0) {
+    if (vaptvupt_decompress_from_archive(cmp, cmp_len, dec, sizeof(dec), &dec_len) != 0) {
         free(cmp); FAIL("decompress failed");
     }
 
@@ -140,7 +140,7 @@ static int test_high_entropy_random(void) {
 
     uint8_t *cmp = NULL;
     size_t cmp_len = 0;
-    if (zupt_compress_for_archive(src, sizeof(src),
+    if (vaptvupt_compress_for_archive(src, sizeof(src),
                                    &cmp, &cmp_len, 0) != 0)
         FAIL("compress failed");
 
@@ -151,7 +151,7 @@ static int test_high_entropy_random(void) {
 
     uint8_t dec[16384];
     size_t dec_len = 0;
-    if (zupt_decompress_from_archive(cmp, cmp_len, dec, sizeof(dec), &dec_len) != 0) {
+    if (vaptvupt_decompress_from_archive(cmp, cmp_len, dec, sizeof(dec), &dec_len) != 0) {
         free(cmp); FAIL("decompress failed");
     }
     if (dec_len != sizeof(src) || memcmp(dec, src, sizeof(src)) != 0) {
@@ -166,7 +166,7 @@ static int test_skip_checksum_decode(void) {
     TEST("skip-checksum decode decodes encoder-with-checksum output");
 
     /* Encoder writes checksum, decoder skips it — should still roundtrip */
-    const char *src = "Zupt 2.2.2 backup file content " "PADPADPAD" "PADPADPAD";
+    const char *src = "VaptVupt 2.2.2 backup file content " "PADPADPAD" "PADPADPAD";
     size_t src_len = strlen(src);
 
     vv_options_t opts;
@@ -257,7 +257,7 @@ static int test_corrupt_input_returns_error(void) {
 
     uint8_t dec[1024];
     size_t dec_len = 0;
-    int rc = zupt_decompress_from_archive(corrupt, sizeof(corrupt),
+    int rc = vaptvupt_decompress_from_archive(corrupt, sizeof(corrupt),
                                            dec, sizeof(dec), &dec_len);
     /* Either rejects (rc != 0) cleanly, or recognizes it as a tiny valid
      * frame by accident (extremely unlikely with random bytes); both are
@@ -328,12 +328,12 @@ static int test_format_v2_binary_smaller(void) {
 
     uint8_t *cmp_v2 = NULL;
     size_t len_v2 = 0;
-    if (zupt_compress_for_archive(bin, sizeof(bin), &cmp_v2, &len_v2, 1) != 0)
+    if (vaptvupt_compress_for_archive(bin, sizeof(bin), &cmp_v2, &len_v2, 1) != 0)
         FAIL("v2 compress failed");
 
     uint8_t dec[4096];
     size_t dec_len = 0;
-    if (zupt_decompress_from_archive(cmp_v2, len_v2, dec, sizeof(dec), &dec_len) != 0) {
+    if (vaptvupt_decompress_from_archive(cmp_v2, len_v2, dec, sizeof(dec), &dec_len) != 0) {
         free(cmp_v2); FAIL("v2 decode failed");
     }
     if (dec_len != sizeof(bin) || memcmp(dec, bin, sizeof(bin)) != 0) {
@@ -349,7 +349,7 @@ static int test_format_v2_binary_smaller(void) {
  * ───────────────────────────────────────────────────────────────── */
 
 int main(void) {
-    printf("Zupt 2.2.2 ↔ VaptVupt 2.48.1 integration smoke test\n");
+    printf("VaptVupt 2.2.2 ↔ VaptVupt 2.48.1 integration smoke test\n");
     printf("─────────────────────────────────────────────────────\n");
 
     if (test_roundtrip_text()) return 1;

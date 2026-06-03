@@ -2,7 +2,7 @@
  * VaptVupt — Edge case + security tests
  *
  * Tests that catch bugs that don't show up in normal use but DO show
- * up in real deployments (Zupt at scale): malformed input rejection,
+ * up in real deployments (VaptVupt at scale): malformed input rejection,
  * truncated frames, exact buffer-boundary cases, NULL handling, very
  * small valid inputs (1-3 bytes), and inputs at exact block-size
  * boundaries.
@@ -375,7 +375,7 @@ static void test_garbage_input(void) {
 
 static void test_stress_many_tiny(void) {
     /* Compress 1000 tiny files in sequence — exercises the path
-     * commonly used by Zupt for per-file backups. */
+     * commonly used by VaptVupt for per-file backups. */
     TEST("stress: 1000 × 50-byte files");
     vv_options_t opts; vv_default_options(&opts); opts.mode = VV_MODE_BALANCED;
     int failures = 0;

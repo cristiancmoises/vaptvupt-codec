@@ -300,7 +300,7 @@ int main(void) {
         }
     }
 
-    /* ─── Test 16: Zupt API ─── */
+    /* ─── Test 16: VaptVupt API ─── */
     {
         size_t len = 10000;
         uint8_t *buf = (uint8_t *)malloc(len);
@@ -316,8 +316,8 @@ int main(void) {
             int64_t dsz = vvz_decompress(comp, (size_t)csz, dec, len + 32);
             ok = (dsz == (int64_t)len && memcmp(buf, dec, len) == 0);
         }
-        if (ok) PASS("Zupt API (vvz_compress/decompress)");
-        else FAIL("Zupt API", "roundtrip");
+        if (ok) PASS("VaptVupt API (vvz_compress/decompress)");
+        else FAIL("VaptVupt API", "roundtrip");
         free(buf); free(comp); free(dec);
     }
 

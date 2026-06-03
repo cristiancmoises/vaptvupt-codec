@@ -838,7 +838,7 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
  *   For each non-inherited context c:
  *     [1B context_id] [2B table_size] [table_data]
  *
- * ZUPT-COMPAT: this function is available when VV_ANS_STANDALONE defined.
+ * EMBED-COMPAT: this function is available when VV_ANS_STANDALONE defined.
  * Memory: ~4 MB decode tables (L3-resident), allocated per call.
  * ═══════════════════════════════════════════════════════════════ */
 
@@ -1237,7 +1237,7 @@ ctx_dec_fail:
  * Match length codes: 36 codes mapping to lengths 4-65538
  * Offset codes: 24 codes mapping to offsets 1-16M
  *
- * ZUPT-COMPAT: these functions are standalone when VV_ANS_STANDALONE.
+ * EMBED-COMPAT: these functions are standalone when VV_ANS_STANDALONE.
  *
  * Output format:
  *   [2B lit_count] [2B lit_ans_size] [lit_ans_data]
@@ -2335,7 +2335,7 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
      * decoder.
      *
      * This was a denial-of-service vulnerability for any service that
-     * decompressed untrusted input (Zupt's exact threat model).
+     * decompressed untrusted input (a host application's untrusted-input threat model).
      *
      * Bound: every well-formed iteration must advance at least ONE of
      * the two counters by at least 1 (it's how the wire format is

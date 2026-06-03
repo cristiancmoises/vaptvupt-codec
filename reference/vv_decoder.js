@@ -16,7 +16,7 @@
  * v0.3-v0.7) throw NotImplementedError — those aren't emitted by
  * modern encoders and exist in the C decoder only for back-compat.
  *
- * Primary use case: **browser-side reading of Zupt archives
+ * Primary use case: **browser-side reading of VaptVupt archives
  * without shipping a WebAssembly build of the C codec**. The full
  * codec surface that matters for real archives is now covered.
  *

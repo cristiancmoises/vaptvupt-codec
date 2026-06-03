@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.56.2. License: GPL-3.0-or-later (commercial license available:
+Version 2.57.0. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -73,12 +73,12 @@ Fedora: `dnf install gcc make`. The build uses only the C standard library.
 CLI:
 
 ```sh
-vaptvupt -c -m extreme -o file.vv file        # compress (modes: fast, balanced, extreme)
-vaptvupt -d -o file.out file.vv               # decompress
-vaptvupt -c -m balanced -w 24 -o big.vv big   # larger window (long-range data)
-vaptvupt -c -m extreme --bcj -o code.vv prog  # x86 BCJ filter (machine code)
-vaptvupt -c -m extreme --bcj-arm64 -o a.vv a  # AArch64 BCJ filter (BL + ADRP)
-vaptvupt -c -m extreme --auto-filter -o o.vv f # detect ELF/PE/Mach-O, pick the filter
+vaptvupt -c -m extreme -o file.zupt file     # compress (modes: fast, balanced, extreme)
+vaptvupt -d -o file.out file.zupt           # decompress
+vaptvupt -c -m balanced -w 24 -o big.zupt big # larger window (long-range data)
+vaptvupt -c -m extreme --bcj -o code.zupt prog # x86 BCJ filter (machine code)
+vaptvupt -c -m extreme --bcj-arm64 -o a.zupt a  # AArch64 BCJ filter (BL + ADRP)
+vaptvupt -c -m extreme --auto-filter -o o.zupt f # detect ELF/PE/Mach-O, pick the filter
 ```
 
 `-w N` sets the window log (10-24 = 1 KiB-16 MiB, 0 = auto). `--bcj`
@@ -88,6 +88,11 @@ x86 and AArch64 branch filters; they are mutually exclusive. `--auto-filter`
 matching filter automatically, or none if unrecognised. `--fast` skips the
 XXH64 footer. All of `-w`, `--bcj`, `--bcj-arm64`, and `--auto-filter` are
 opt-in and do not change default output.
+
+Compressed files use the `.zupt` extension by default (`vaptvupt -c file`
+writes `file.zupt`; `vaptvupt -d file.zupt` writes `file`). The on-disk frame
+format is unchanged, so legacy `.vv` files still decode and `vaptvupt`
+recognises a frame by its header regardless of the filename.
 
 Library (one-shot):
 

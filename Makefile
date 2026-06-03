@@ -94,9 +94,9 @@ TEST17_BIN = test_huffman4
 TEST18_SRC = tests/test_secure_zero.c $(CORE_SRC)
 TEST18_BIN = test_secure_zero
 
-# Sprint 122: Zupt 2.2.2 integration smoke test
-TEST19_SRC = tests/test_zupt_integration.c $(CORE_SRC)
-TEST19_BIN = test_zupt_integration
+# Sprint 122: VaptVupt 2.2.2 integration smoke test
+TEST19_SRC = tests/test_integration.c $(CORE_SRC)
+TEST19_BIN = test_integration
 TEST20_SRC = tests/test_bcj.c $(CORE_SRC)
 TEST20_BIN = test_bcj
 
@@ -506,12 +506,12 @@ bench: $(TARGET)
 	fi
 
 clean:
-	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) *.vv *.orig
+	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) *.vv *.zupt *.orig
 	rm -rf tests/corpus_bad
 
 amalg:
 	@mkdir -p build
-	@echo "/* VaptVupt amalgamation — single-file build for Zupt */" > build/vaptvupt.h
+	@echo "/* VaptVupt amalgamation — single-file build for VaptVupt */" > build/vaptvupt.h
 	@echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> build/vaptvupt.h
 	@for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h; do \
 		grep -v '#include "' $$f >> build/vaptvupt.h; \
@@ -529,7 +529,7 @@ amalg:
 # ─────────────────────────────────────────────────────────────────
 # amalg-verify: fail if build/vaptvupt.{c,h} differ from a fresh
 # regeneration. Catches the Sprint 114 drift class where security
-# fixes land in src/ but the Zupt-facing amalgamation goes stale.
+# fixes land in src/ but the VaptVupt-facing amalgamation goes stale.
 #
 # Usage: `make amalg-verify` — exits 0 if amalgamation is current,
 # non-zero (with diff output) otherwise.
@@ -540,7 +540,7 @@ amalg:
 amalg-verify:
 	@tmpdir=$$(mktemp -d) && \
 	mkdir -p $$tmpdir/build && \
-	echo "/* VaptVupt amalgamation — single-file build for Zupt */" > $$tmpdir/build/vaptvupt.h && \
+	echo "/* VaptVupt amalgamation — single-file build for VaptVupt */" > $$tmpdir/build/vaptvupt.h && \
 	echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> $$tmpdir/build/vaptvupt.h && \
 	for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h; do \
 		grep -v '#include "' $$f >> $$tmpdir/build/vaptvupt.h; \
@@ -560,8 +560,8 @@ amalg-verify:
 	fi && \
 	if ! diff -q $$tmpdir/build/vaptvupt.c build/vaptvupt.c >/dev/null 2>&1; then \
 		echo "✗ build/vaptvupt.c is STALE — re-run 'make amalg'"; \
-		echo "  (this is the Zupt-facing amalgamation; staleness can"; \
-		echo "   ship security fixes from src/ but not to Zupt builds)"; \
+		echo "  (this is the VaptVupt-facing amalgamation; staleness can"; \
+		echo "   ship security fixes from src/ but not to VaptVupt builds)"; \
 		diff -u build/vaptvupt.c $$tmpdir/build/vaptvupt.c | head -30; \
 		rm -rf $$tmpdir; exit 1; \
 	fi && \

@@ -613,7 +613,7 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
     uint8_t *op_end = dst + dst_cap;
 
     /* MULTI-FRAME: a .vv file may contain one or more concatenated frames
-     * (useful for parallel encode, Zupt-style archives, append-mode
+     * (useful for parallel encode, multi-frame archives, append-mode
      * writes). We decode frames in a loop until input is exhausted. */
     while (ip < ip_end) {
         if (ip + sizeof(vv_frame_header_t) > ip_end) return VV_ERR_CORRUPT;

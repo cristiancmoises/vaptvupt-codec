@@ -23,9 +23,9 @@ static void usage(void) {
         "VaptVupt %s — Next-generation lossless compression\n"
         "\n"
         "Usage:\n"
-        "  vaptvupt -c [-m mode] [-T N] [-o out.vv] input   Compress\n"
-        "  vaptvupt -d [-o output] input.vv                 Decompress\n"
-        "  vaptvupt -t input.vv                             Test integrity\n"
+        "  vaptvupt -c [-m mode] [-T N] [-o out.zupt] input Compress\n"
+        "  vaptvupt -d [-o output] input.zupt               Decompress\n"
+        "  vaptvupt -t input.zupt                           Test integrity\n"
         "  vaptvupt -b input                                Benchmark\n"
         "\n"
         "Modes: fast, balanced (default), extreme\n"
@@ -35,9 +35,10 @@ static void usage(void) {
         "  -T N      Encode with N threads (1=single, 0=auto-detect CPUs).\n"
         "            Requires the binary to be built with -DVV_ENABLE_THREADS\n"
         "            and -lpthread; otherwise runs sequentially with multi-frame\n"
-        "            output. Multi-threaded output is a valid .vv stream readable\n"
+        "            output. Multi-threaded output is a valid .zupt stream readable\n"
         "            by any vv_decompress call.\n"
-        "  -o file   Output file (default: input.vv / input.orig)\n"
+        "  -o file   Output file (default: input.zupt on -c; input with the\n"
+        "            .zupt/.vv suffix stripped, else input.orig, on -d)\n"
         "  --fast    With -d: skip XXH64 verification during decompress.\n"
         "            With -c: skip XXH64 footer generation during compress.\n"
         "            Safe when another layer (e.g. AES-GCM) provides\n"
@@ -237,7 +238,7 @@ int main(int argc, char **argv) {
         /* Default output name */
         char out_buf[4096];
         if (!output_path) {
-            snprintf(out_buf, sizeof(out_buf), "%s.vv", input_path);
+            snprintf(out_buf, sizeof(out_buf), "%s.zupt", input_path);
             output_path = out_buf;
         }
 
@@ -342,8 +343,19 @@ int main(int argc, char **argv) {
         } else {
             char out_buf[4096];
             if (!output_path) {
-                /* Strip .vv extension */
-                snprintf(out_buf, sizeof(out_buf), "%s.orig", input_path);
+                /* Strip a known compressed suffix (.zupt, or legacy .vv) if
+                 * present; otherwise append .orig so output never overwrites
+                 * the input. */
+                size_t ilen = strlen(input_path);
+                if (ilen > 5 && strcmp(input_path + ilen - 5, ".zupt") == 0) {
+                    snprintf(out_buf, sizeof(out_buf), "%.*s",
+                             (int)(ilen - 5), input_path);
+                } else if (ilen > 3 && strcmp(input_path + ilen - 3, ".vv") == 0) {
+                    snprintf(out_buf, sizeof(out_buf), "%.*s",
+                             (int)(ilen - 3), input_path);
+                } else {
+                    snprintf(out_buf, sizeof(out_buf), "%s.orig", input_path);
+                }
                 output_path = out_buf;
             }
             if (write_file(output_path, dst, (size_t)decomp_size) < 0) {

@@ -1,4 +1,4 @@
-/* Compile-test for the code samples in ZUPT_INTEGRATION.md.
+/* Compile-test for the code samples in INTEGRATION.md.
  *
  * If this file fails to build, the integration documentation is broken.
  * Sprint 113: surfaced + fixed; this file ensures it stays correct. */
@@ -9,7 +9,7 @@
 #include <stdlib.h>
 
 /* Sample 1: encode path */
-int zupt_compress_for_archive(const uint8_t *plaintext, size_t plaintext_len,
+int vaptvupt_compress_for_archive(const uint8_t *plaintext, size_t plaintext_len,
                               uint8_t **out_buf, size_t *out_len) {
     vv_options_t opts;
     vv_default_options(&opts);
@@ -30,7 +30,7 @@ int zupt_compress_for_archive(const uint8_t *plaintext, size_t plaintext_len,
 }
 
 /* Sample 2: decode path */
-int zupt_decompress_from_archive(const uint8_t *cmp, size_t cmp_len,
+int vaptvupt_decompress_from_archive(const uint8_t *cmp, size_t cmp_len,
                                  uint8_t *dst, size_t dst_cap,
                                  size_t *decoded_len) {
     int64_t dlen = vv_decompress_flags(cmp, cmp_len, dst, dst_cap,
@@ -74,8 +74,8 @@ int sample_streaming_decode(const uint8_t *cmp, size_t cmp_len,
 
 int main(void) {
     /* Just a link-test — don't actually run. */
-    (void)zupt_compress_for_archive;
-    (void)zupt_decompress_from_archive;
+    (void)vaptvupt_compress_for_archive;
+    (void)vaptvupt_decompress_from_archive;
     (void)sample_streaming_encode;
     (void)sample_streaming_decode;
     return 0;

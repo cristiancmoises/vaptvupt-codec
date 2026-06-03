@@ -1,9 +1,9 @@
 /*
- * VaptVupt — Zupt Integration API Implementation
+ * VaptVupt — VaptVupt Integration API Implementation
  * SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright 2026 Cristian.
  *
- * ZUPT-COMPAT: thin wrapper over vv_compress/vv_decompress with
+ * EMBED-COMPAT: thin wrapper over vv_compress/vv_decompress with
  * backup-optimized defaults. Decode speed prioritized over encode.
  */
 
