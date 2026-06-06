@@ -1,7 +1,7 @@
 # VaptVupt Security Posture
 
-**Document version**: 1.5 (Sprint 51)
-**Codebase audited**: v2.52.0
+**Document version**: 1.6 (v2.60.2)
+**Codebase audited**: v2.60.2
 **License**: GPL-3.0-or-later
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
@@ -63,7 +63,7 @@ All three surfaces are covered by the audit campaign described below.
 
 ## 3. Audit Campaign Summary
 
-13 distinct security/correctness defects have been found and fixed across 8 patch releases (v2.46.1 through v2.47.4) using 11 distinct audit tools:
+14 distinct security/correctness defects have been found and fixed using 12 distinct audit tools / techniques:
 
 | # | Tool | Sprint | Findings |
 |---|---|---|---|
@@ -78,10 +78,42 @@ All three surfaces are covered by the audit campaign described below.
 | 9 | libFuzzer (streaming decoder) | Sprint 110 | 0 (clean) |
 | 10 | libFuzzer (encoder roundtrip) | Sprint 110 | 0 (clean) |
 | 11 | libFuzzer (differential decoder) | Sprint 111 | 0 (clean) |
+| 12 | Manual decode-path audit + ASan repro | v2.60.2 | 1 (phase-1 match-length OOB write — see advisory below) |
 
-**Total: 13 defects fixed, 11 distinct tools applied.**
+**Total: 14 defects fixed, 12 distinct tools/techniques applied.**
 
-10 of 11 tools surfaced ≥1 defect on first application. Tools #7, #9, #10, #11 have produced no findings, indicating diminishing returns and a maturing security posture.
+### Advisory — v2.60.2: heap-buffer-overflow (OOB write) in AVX2 decode warmup
+
+**Severity:** high (out-of-bounds heap write on attacker-controlled input).
+**Affected:** the AVX2 token decode path (`decode_block_tokens_impl`), phase-1
+"warmup" loop, in releases that shipped it prior to v2.60.2. Non-AVX2 builds
+(general/tail path only) are unaffected.
+
+**Cause:** phase 2 and the general/tail decode paths check
+`op + mlen <= op_end` before each match copy; the phase-1 warmup loop validated
+the match *offset* but omitted the match *length* output bound. A crafted
+`.zupt`/`.vv` stream with a corrupt match-length extension (token `mc == 15`
+plus continuation bytes) in the first ~64 KiB of output could drive any of the
+four match-copy variants — confirmed under AddressSanitizer in `match_overlap`
+(offset < 8) — to write past the output buffer. The `op < op_safe` loop guard
+only reserves a fixed 72-byte margin and does not bound an extended match
+length.
+
+**Fix:** add the same `(size_t)(op_end - op) < mlen → VV_ERR_OVERFLOW` check the
+other paths already carry, to the phase-1 warmup loop. On a valid stream
+`op + mlen` never exceeds `op_end`, so the branch is never taken and decode
+output is **byte-identical** (ratio gate ± 0; differential fuzzer 5200/5200
+unchanged); it only rejects corrupt input.
+
+**Detection:** manual audit of the decode bounds-check structure, reproduced
+with a focused ASan harness. The fuzzers that found the analogous phase-2 gap
+(Sprint 109) had not exercised this specific phase-1 path.
+
+**Regression:** `tests/test_phase1_overflow.c` (TEST21, in `make test`) crafts
+the overrun for all four offset classes plus the 3-byte-offset path and asserts
+a clean rejection; verified under ASan+UBSan (9/9).
+
+10 of the first 11 tools surfaced ≥1 defect on first application; tools #7, #9, #10, #11 produced no findings. The v2.60.2 defect shows that targeted manual audit of invariant *symmetry* across fast/slow paths still finds what coverage-guided fuzzing can miss.
 
 ---
 

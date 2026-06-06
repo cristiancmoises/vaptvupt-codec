@@ -2,6 +2,51 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.60.2 — SECURITY: fix heap-buffer-overflow (OOB write) in AVX2 decode warmup
+
+**Security fix.** Default output is byte-identical to v2.60.1 on valid streams
+(ratio gate baseline +/- 0; differential 5200/5200); the change only adds a
+missing bounds check on the corrupt-input path.
+
+### Vulnerability
+
+The AVX2 token decode path (`decode_block_tokens_impl`) has three loops: a
+phase-1 "warmup", a phase-2 "hot" loop, and a general/tail loop. Phase 2 and the
+tail check `op + mlen <= op_end` before each match copy; **the phase-1 warmup
+validated the match offset but omitted the match-length output bound.** A
+crafted `.zupt`/`.vv` stream with a corrupt match-length extension (token
+`mc == 15` plus continuation bytes) in the first ~64 KiB of output could drive a
+match copy past the output buffer — a heap-buffer-overflow WRITE, confirmed
+under AddressSanitizer in `match_overlap` (offset < 8). The `op < op_safe` loop
+guard reserves only a fixed 72-byte margin and does not bound an extended match
+length. Severity: high (OOB heap write on attacker-controlled input). Non-AVX2
+builds (tail path only) are unaffected.
+
+### Fix
+
+Add the same `(size_t)(op_end - op) < mlen` → `VV_ERR_OVERFLOW` check the other
+two paths already carry, to the phase-1 warmup loop (one line, plus comment). On
+a valid stream `op + mlen` never exceeds `op_end`, so the branch is never taken
+and decode output is byte-identical; it only rejects corrupt input. The
+match-finder, frame format, and encoder are unchanged.
+
+### Detection & regression
+
+Found by manual audit of the decode bounds-check symmetry across the three
+loops (the fuzzers that found the analogous phase-2 gap in Sprint 109 had not
+exercised this phase-1 path), reproduced with a focused ASan harness.
+`tests/test_phase1_overflow.c` (TEST21, in `make test`) crafts the overrun for
+all four offset classes (match_copy_32_hot / _16 / _8 / match_overlap) and the
+3-byte-offset path, asserting clean rejection; verified ASan+UBSan clean (9/9).
+
+### Validation
+
+- Default output byte-identical on valid streams: ratio gate baseline +/- 0;
+  differential fuzzer 5200/5200; full Silesia roundtrips intact.
+- Full `make test` green (21 C suites incl. TEST21 + OOM sweep); `make verify`
+  5/5 proofs SUCCESSFUL; `-Wall -Wextra -Werror` clean.
+- SECURITY.md updated with the advisory (audit campaign tool #12).
+
 ## v2.60.1 — Correction: accurate `--no-rep` characterization (docs only)
 
 **Documentation-only release; the binary is byte-identical to v2.60.0**

@@ -207,6 +207,17 @@ decode_block_tokens_impl(
         if (VV_UNLIKELY(offset == 0 || offset > (uint32_t)(op - dst_base)))
             return VV_ERR_CORRUPT;
 
+        /* Phase-1 warmup previously lacked the match-length output bound that
+         * phase 2 and the general/tail path carry. A corrupt match-length
+         * extension can make mlen large enough that match_copy writes past
+         * op_end (heap-buffer-overflow WRITE, e.g. via match_overlap for
+         * offset < 8). The op < op_safe loop guard only reserves a 72-byte
+         * margin and does not bound an extended mlen. On a VALID stream
+         * op + mlen never exceeds op_end, so this branch is never taken and
+         * decode output is byte-identical; it only rejects corrupt input. */
+        if (VV_UNLIKELY((size_t)(op_end - op) < mlen))
+            return VV_ERR_OVERFLOW;
+
         if (VV_LIKELY(offset >= 32)) {
             match_copy_32_hot(op, op - offset, mlen);
         } else if (offset >= 16) {
