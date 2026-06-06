@@ -238,6 +238,13 @@ typedef struct {
                             * byte-identical). Skipped positions become
                             * literals; output stays decodable by any
                             * decoder. */
+    uint8_t  no_rep;       /* 1 = skip rep-match probing in compress_block.
+                            * Measured net-positive on ratio in FAST mode
+                            * (no entropy stage, so rep's short-offset code
+                            * advantage never materializes; it only perturbs
+                            * the greedy parse) and ~10% faster. Opt-in
+                            * (--no-rep); default 0 keeps rep enabled and
+                            * output byte-identical. */
 } matcher_t;
 
 /* SPRINT 93 audit: returns 1 on success, 0 on allocation failure.
@@ -287,6 +294,7 @@ static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
     m->use_hash3 = 0;  /* Disabled by default — enabled for format v2 */
     m->single_probe = 0; /* Disabled by default — set only for ULTRA_FAST encode */
     m->accel = 0;        /* Position-skip acceleration off by default (opt-in --accel) */
+    m->no_rep = 0;       /* rep-match probing on by default (opt-in --no-rep) */
     m->max_match = VV_MAX_MATCH;  /* v1 default, see matcher_set_format_v2 */
     return 1;
 }
@@ -1061,7 +1069,7 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
 
         /* ─── Step 1: Try rep-match (free, no hash lookup) ─── */
         int32_t rep_idx = -1;
-        int32_t rep_len = try_rep_match(m, src, pos, end, &rep_idx);
+        int32_t rep_len = m->no_rep ? 0 : try_rep_match(m, src, pos, end, &rep_idx);
 
         if (rep_len >= min_match) {
             mlen = rep_len;
@@ -1130,7 +1138,7 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
 
             /* Also check rep at pos+1 */
             int32_t nri = -1;
-            int32_t nrl = try_rep_match(m, src, pos + 1, end, &nri);
+            int32_t nrl = m->no_rep ? 0 : try_rep_match(m, src, pos + 1, end, &nri);
             if (nrl > nlen && nri >= 0) { nlen = nrl; noff = (int32_t)m->rep[nri]; }
 
             /* SPRINT 119: cost-aware lazy decision (closes the +1.2%
@@ -1774,6 +1782,7 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
      * single_probe==0 and produce bit-identical trial sizes. */
     m.single_probe = (opts->mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
     m.accel = opts->accel > 64 ? 64 : opts->accel;
+    m.no_rep = opts->no_rep ? 1 : 0;
     /* Format v2 cap applies to EVERY match emitted from this matcher,
      * not just those produced via hash3. Set unconditionally when
      * opts.format_v2 is active. */
@@ -1950,6 +1959,7 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
      * the one-shot fast path. balanced/extreme keep single_probe==0. */
     ctx->m.single_probe = (ctx->opts.mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
     ctx->m.accel = ctx->opts.accel > 64 ? 64 : ctx->opts.accel;
+    ctx->m.no_rep = ctx->opts.no_rep ? 1 : 0;
     /* Format v2 matchlen cap applies to every match — set whenever
      * streaming opts has format_v2 on, not just when hash3 fires.
      *
@@ -2044,6 +2054,7 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
      * across reset (e.g. balanced stream reset to fast). */
     ctx->m.single_probe = (ctx->opts.mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
     ctx->m.accel = ctx->opts.accel > 64 ? 64 : ctx->opts.accel;
+    ctx->m.no_rep = ctx->opts.no_rep ? 1 : 0;
 
     matcher_reset(&ctx->m);
 

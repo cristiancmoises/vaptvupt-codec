@@ -52,6 +52,11 @@ static void usage(void) {
         "            a small ratio cost on compressible data. Most useful with\n"
         "            -m fast; output stays decodable by any decoder; 0 is\n"
         "            byte-identical to prior releases.\n"
+        "      --no-rep   Disable rep-match probing in the parser. In fast mode\n"
+        "            (no entropy stage) this is measured ~10%% faster and\n"
+        "            net-positive on ratio for text/structured data (logs,\n"
+        "            CSV, JSON), with a small ratio cost on some binaries.\n"
+        "            Opt-in; default keeps rep enabled (byte-identical).\n"
         "  --fast    With -d: skip XXH64 verification during decompress.\n"
         "            With -c: skip XXH64 footer generation during compress.\n"
         "            Safe when another layer (e.g. AES-GCM) provides\n"
@@ -137,6 +142,7 @@ int main(int argc, char **argv) {
     int filter_auto = 0;    /* --auto-filter: pick a filter from the header */
     int depth_override = 0; /* --depth N: override match-finder chain depth */
     int accel = 0;          /* --accel N: lz4-style position-skip on no-match */
+    int no_rep = 0;         /* --no-rep: disable rep-match probing (fast mode) */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) do_compress = 1;
@@ -151,6 +157,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--bcj") == 0) filter_x86 = 1;
         else if (strcmp(argv[i], "--bcj-arm64") == 0) filter_arm64 = 1;
         else if (strcmp(argv[i], "--auto-filter") == 0) filter_auto = 1;
+        else if (strcmp(argv[i], "--no-rep") == 0) no_rep = 1;
         else if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
             const char *fname = argv[++i];
             if (strcmp(fname, "x86") == 0) filter_x86 = 1;
@@ -250,6 +257,7 @@ int main(int argc, char **argv) {
         opts.filter_auto = filter_auto;
         opts.depth_override = (uint32_t)depth_override;
         opts.accel = (uint32_t)accel;
+        opts.no_rep = no_rep;
 
         /* MT path uses slightly larger bound because concatenated frames
          * have per-frame overhead. Add 64 KB per potential chunk. */

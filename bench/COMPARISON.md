@@ -212,6 +212,28 @@ moves encode speed — it cuts the per-position fixed cost on data the parser
 cannot match. It is opt-in because it nudges the reference-corpus ratio
 (1.992→1.988), which the inviolable ratio gate forbids as a default.
 
+## Rep matching in fast mode (`--no-rep`)
+
+Fast mode emits raw LZ tokens (no entropy stage), so a rep match's short-offset
+code is not actually cheaper — rep only perturbs the greedy parse. Removing it
+(`--no-rep`) is a measured **ratio** win on text/structured data in fast mode:
+
+```
+input         rep (default)   --no-rep    d-ratio
+recs.ndjson   4.851           5.027       +3.6%
+app.log       3.306           3.360       +1.6%
+samba         3.117           3.142       +0.8%
+dickens       1.992           1.992        0.0%
+mozilla       2.114           2.098       -0.8%
+libc.bin      1.757           1.747       -0.6%
+```
+
+Speed is data-dependent (dickens +8%, samba +4%, recs.ndjson -8% where rep was
+cheaply skipping chain walks). Net-positive on ratio overall, but two binaries
+regress, so it is opt-in rather than default (the ratio gate forbids any
+reference regression). On balanced/extreme, which entropy-code, rep stays
+beneficial; `--no-rep` is intended for `-m fast`.
+
 ## Encode-speed frontier (measured; why "superfast" is not a tuning win)
 
 Encode speed is the codec's weak axis. Two levers were measured directly, and

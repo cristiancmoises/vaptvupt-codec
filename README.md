@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.59.0. License: GPL-3.0-or-later (commercial license available:
+Version 2.60.0. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands
@@ -130,6 +130,28 @@ on compressible input the cost is a small ratio loss. Measured (fast mode):
 
 Use a moderate `-A 8` for mixed/already-compressed data; leave it off (`0`) for
 normal compressible input where the default parse already skips via matches.
+
+`--no-rep` disables rep-match probing in the parser. In fast mode (which has no
+entropy stage, so a rep match's short-offset code is not actually cheaper) rep
+mostly perturbs the greedy parse, so dropping it is a measured **ratio**
+improvement on text/structured data, with a small ratio cost on some binaries.
+It is opt-in (default keeps rep enabled, byte-identical). Measured (fast mode):
+
+| input | rep (default) | `--no-rep` | Δ ratio | Δ speed |
+|---|---|---|---|---|
+| recs.ndjson | 4.851 | 5.027 | +3.6% | −8% |
+| app.log | 3.306 | 3.360 | +1.6% | −1% |
+| samba | 3.117 | 3.142 | +0.8% | +4% |
+| dickens | 1.992 | 1.992 | 0% | +8% |
+| mozilla | 2.114 | 2.098 | −0.8% | — |
+| libc.bin | 1.757 | 1.747 | −0.6% | — |
+
+So `--no-rep` is a fast-mode ratio knob for text/structured data (logs, CSV,
+JSON); the speed effect is data-dependent (faster on text, slower on highly
+repetitive input where rep was cheaply skipping chain walks). It is not made
+the default because it regresses some binaries, which the ratio gate forbids.
+On balanced/extreme (which do entropy-code, making rep offsets genuinely
+cheaper) rep stays beneficial — `--no-rep` is intended for `-m fast`.
 
 Library (one-shot):
 

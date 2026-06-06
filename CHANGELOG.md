@@ -2,6 +2,44 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.60.0 — Opt-in `--no-rep` (fast-mode rep-match disable) + rep-in-fast-mode finding
+
+Adds an opt-in parser knob and records a measured finding about rep matching in
+fast mode. **Default output is byte-identical to v2.59.0** (opt-in; ratio gate
+baseline +/- 0; differential 5200/5200).
+
+### Finding: rep matching is net-negative in fast mode
+
+Fast mode emits raw LZ tokens with no entropy stage, so a rep match's
+short-offset advantage (the reason rep helps entropy-coded modes) never
+materializes; rep only perturbs the greedy parse. Measured per-file ratio when
+rep is removed from fast mode: recs.ndjson +3.6%, app.log +1.6%, samba +0.8%,
+dickens 0%, webster 0%, but mozilla -0.8% and libc -0.6%. Net-positive on
+average, but because two reference binaries regress, the inviolable ratio gate
+forbids making it the default. It is therefore shipped opt-in; a future
+fast-mode re-baseline could adopt it by decision.
+
+### `--no-rep`
+
+Disables rep-match probing in the greedy/lazy parser (`vv_options_t.no_rep` ->
+`matcher_t.no_rep`; both `try_rep_match` call sites gated). Default 0 keeps rep
+enabled and output byte-identical. Designed for `-m fast`, where it is a ratio
+improvement on text/structured data; the speed effect is data-dependent (e.g.
+dickens +8%, samba +4%, but recs.ndjson -8% where rep was cheaply skipping
+chain walks). On balanced/extreme rep stays beneficial, so the flag is intended
+for fast mode. Output stays decodable by any decoder; the match-finder and
+frame format are unchanged.
+
+### Validation
+
+- Default output byte-identical (no `--no-rep`): ratio gate baseline +/- 0;
+  differential 5200/5200.
+- ASan+UBSan fuzz of the no_rep path: 168 cases (random / repetitive / CSV /
+  zero inputs x sizes 0..200 KB x fast/balanced x `--no-rep` alone and combined
+  with `-A 8` / `-D 16`), 0 failures.
+- Full `make test` green (20/20 + OOM sweep); `make verify` 5/5 proofs
+  SUCCESSFUL; `-Wall -Wextra -Werror` clean.
+
 ## v2.59.0 — Opt-in lz4-style position-skip acceleration (`-A/--accel`)
 
 Adds an opt-in encode accelerator for incompressible / already-compressed

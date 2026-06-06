@@ -245,6 +245,15 @@ typedef struct {
                               *     [0, 64]; higher = more aggressive skipping.
                               *     Primarily useful with -m fast. Output stays
                               *     decodable by any decoder. */
+    int       no_rep;        /* 1 = disable rep-match probing in the greedy/
+                              *     lazy parser. Measured net-positive on ratio
+                              *     in fast mode (which has no entropy stage, so
+                              *     rep offsets are not cheaper to code) and
+                              *     ~10% faster; on binary it can cost a little
+                              *     ratio, so it is opt-in. Default 0 keeps rep
+                              *     enabled and output byte-identical. Affects
+                              *     fast/balanced (the greedy/lazy parser);
+                              *     designed for -m fast. */
 } vv_options_t;
 
 static inline void vv_default_options(vv_options_t *o) {
@@ -259,6 +268,7 @@ static inline void vv_default_options(vv_options_t *o) {
     o->filter_auto = 0;
     o->depth_override = 0;
     o->accel = 0;
+    o->no_rep = 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════
