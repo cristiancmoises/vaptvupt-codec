@@ -215,24 +215,34 @@ cannot match. It is opt-in because it nudges the reference-corpus ratio
 ## Rep matching in fast mode (`--no-rep`)
 
 Fast mode emits raw LZ tokens (no entropy stage), so a rep match's short-offset
-code is not actually cheaper — rep only perturbs the greedy parse. Removing it
-(`--no-rep`) is a measured **ratio** win on text/structured data in fast mode:
+code is not actually cheaper — the greedy rep preference can block better chain
+matches. Removing it (`--no-rep`) is **strongly data-dependent and
+specialized**: it helps data with many short repeated structures, and hurts
+most general text/binary. Measured in fast mode:
 
 ```
 input         rep (default)   --no-rep    d-ratio
-recs.ndjson   4.851           5.027       +3.6%
-app.log       3.306           3.360       +1.6%
+recs.ndjson   4.851           5.027       +3.5%   (structured)
+data.csv      1.997           2.055       +2.8%   (structured)
+app.log       3.306           3.360       +1.6%   (structured)
 samba         3.117           3.142       +0.8%
-dickens       1.992           1.992        0.0%
-mozilla       2.114           2.098       -0.8%
-libc.bin      1.757           1.747       -0.6%
+xml           5.254           5.210       -0.85%
+mozilla       2.114           2.098       -0.76%
+nci           6.660           6.611       -0.74%
+ooffice       1.598           1.593       -0.31%
+dickens       1.992           1.992       ~0%
 ```
 
-Speed is data-dependent (dickens +8%, samba +4%, recs.ndjson -8% where rep was
-cheaply skipping chain walks). Net-positive on ratio overall, but two binaries
-regress, so it is opt-in rather than default (the ratio gate forbids any
-reference regression). On balanced/extreme, which entropy-code, rep stays
-beneficial; `--no-rep` is intended for `-m fast`.
+On the **full Silesia corpus `--no-rep` is net-negative** (7 of 12 files
+regress). It is therefore NOT a general improvement and NOT a default
+candidate — it is a targeted opt-in for log/JSON/CSV-style data with heavy
+short-repeat structure. Speed is also data-dependent (dickens +8%, samba +4%,
+recs.ndjson -8%). On balanced/extreme, which entropy-code, rep stays
+beneficial; `--no-rep` is intended for `-m fast` on structured data only.
+
+(Correction: v2.60.0 described `--no-rep` as "net-positive overall"; that was
+measured on a non-representative file subset. Fuller measurement on the full
+Silesia corpus shows it is net-negative there. See CHANGELOG v2.60.1.)
 
 ## Encode-speed frontier (measured; why "superfast" is not a tuning win)
 

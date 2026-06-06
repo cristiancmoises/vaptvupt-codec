@@ -2,6 +2,33 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.60.1 — Correction: accurate `--no-rep` characterization (docs only)
+
+**Documentation-only release; the binary is byte-identical to v2.60.0**
+(md5 463ac833). No code change.
+
+v2.60.0 described `--no-rep` as "net-positive on ratio overall." That claim was
+measured on a non-representative file subset (4 Silesia files + 4 synthetic
+structured files weighted toward CSV/JSON). Fuller measurement on the **full
+12-file Silesia corpus** shows `--no-rep` is **net-negative** there: 7 of 12
+files regress (xml -0.85%, mozilla -0.76%, nci -0.74%, ooffice -0.31%, plus
+reymont/webster/dickens ~0 to slightly worse), while 5 improve.
+
+Accurate characterization: `--no-rep` is a **specialized** opt-in for data with
+heavy short-repeat structure (logs, JSON, CSV, delimited records), where the
+greedy rep preference blocks better chain matches:
+
+```
+recs.ndjson  +3.5%   data.csv  +2.8%   app.log  +1.6%   samba  +0.8%
+```
+
+It hurts most general text and binary, so it is NOT a general improvement and
+NOT a default candidate. The v2.60.0 note suggesting a future fast-mode
+re-baseline to drop rep is **withdrawn** — dropping rep regresses the majority
+of Silesia. Use `--no-rep` only for log/JSON/CSV-style workloads in `-m fast`.
+
+Corrected in README.md, bench/COMPARISON.md, and VAPTVUPT_PROGRAM_PROMPT.md.
+
 ## v2.60.0 — Opt-in `--no-rep` (fast-mode rep-match disable) + rep-in-fast-mode finding
 
 Adds an opt-in parser knob and records a measured finding about rep matching in
