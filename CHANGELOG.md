@@ -2,6 +2,49 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.60.3 — Decode-safety audit of the SEQ entropy decoder (no defect) + safe-zone coverage
+
+**No codec code change; binary byte-identical to v2.60.2** (md5 985efefe).
+Test-suite, comment, and SECURITY.md changes only. Default output unchanged
+(ratio gate baseline +/- 0; differential 5200/5200).
+
+### Audit
+
+Following the v2.60.2 fix (a missing match-length bound in the raw-token
+decoder's phase-1 warmup), the same bounds-check-symmetry methodology was
+applied to the *other* decoder, `vva_decode_sequences_impl` (the `'S'`/`'T'`
+entropy/sequence path), which has its own safe-zone fast path that elides both
+the offset check and the match-length output-bound check past
+`op >= dst_base + (1<<24)` and `op <= op_end - 65535`.
+
+**Result: no defect.** Every SEQ-path length is hard-bounded by a fixed ANS code
+table (litlen <= 65535 via ll_base[35]=61440 + 4095; matchlen <= 65535 via
+ml_base[35]=32768 + 32767; offset <= 2^24-1, plus an unconditional
+`offset > SAFEZONE_MAX_OFFSET` reject). The safe-zone margins
+(op_end - 65535, dst_base + 2^24) match these maxima exactly, so the skipped
+checks are genuine tautologies on all input. There is no analogue of the
+v2.60.2 overflow: the raw-token path was vulnerable because its match length
+grows via an unbounded 0xFF-continuation varint; the SEQ path has no such
+mechanism.
+
+### Coverage
+
+The SEQ safe-zone fast path engages only past 16 MB of frame output (dst_base is
+per-frame, op cumulative across blocks). Every prior adversarial test used
+<= 2 MB buffers, so the bounds-elision branch had ZERO coverage. An instrumented
+run confirmed it executes 617,812 times on a 24 MB frame and decodes correctly.
+`tests/test_safezone_adversarial.c` now includes `test_safezone_fastpath_engaged`
+(a 20 MB single-frame roundtrip) exercising the fast path, ASan+UBSan-clean
+(58/58). Stale comments in that file were corrected: the safe-zone floor is
+1<<24 = 16 MB (since Sprint 46), not the 1 MB previously stated, and its 2 MB
+buffers are below that floor.
+
+### Validation
+
+Full `make test` green (incl. TEST13 58/58 + TEST21 9/9 + OOM); `make verify`
+5/5; `-Wall -Wextra -Werror` clean; gate baseline +/- 0; differential 5200/5200.
+SECURITY.md updated (Document version 1.7) with the companion-audit result.
+
 ## v2.60.2 — SECURITY: fix heap-buffer-overflow (OOB write) in AVX2 decode warmup
 
 **Security fix.** Default output is byte-identical to v2.60.1 on valid streams

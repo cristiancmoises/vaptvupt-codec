@@ -3,7 +3,7 @@
  * Targets the v2.39.0 safe-zone bounds-elision optimization in
  * vva_decode_sequences_impl. The safe zone skips per-iteration
  * bounds checks when:
- *   op >= dst_base + SAFEZONE_MAX_OFFSET (= 1 MB)
+ *   op >= dst_base + SAFEZONE_MAX_OFFSET (= 16 MB, 1<<24 since Sprint 46)
  *   op <= op_end - SAFEZONE_MAX_RUN (= op_end - 65535)
  *
  * These tests construct adversarial frames that attempt to trigger
@@ -53,7 +53,7 @@ static void test_small_buffer_no_safezone(void) {
 /* Test 2: Medium buffer (between SAFEZONE_MAX_RUN and SAFEZONE_MAX_OFFSET).
  * Safe zone activates PARTIALLY. Verify no boundary-crossing bugs. */
 static void test_medium_buffer_boundary(void) {
-    /* 512 KB — less than SAFEZONE_MAX_OFFSET = 1 MB */
+    /* 512 KB — far below SAFEZONE_MAX_OFFSET = 16 MB; safe zone never engages */
     size_t sz = 512 * 1024;
     uint8_t *src = malloc(sz);
     /* Mixed content: some random, some repetitive */
@@ -75,10 +75,12 @@ static void test_medium_buffer_boundary(void) {
     free(src); free(cmp); free(dec);
 }
 
-/* Test 3: Large buffer (> SAFEZONE_MAX_OFFSET).
+/* Test 3: 2 MB buffer. NOTE: below the 16 MB SAFEZONE_MAX_OFFSET floor, so
+ * the safe-zone fast path does NOT engage here (it runs the per-iter checks);
+ * test_safezone_fastpath_engaged below exercises the >16 MB fast path.
  * Safe zone fully activates. Most sequences hit the fast path. */
 static void test_large_buffer_full_safezone(void) {
-    size_t sz = 2 * 1024 * 1024; /* 2 MB > SAFEZONE_MAX_OFFSET */
+    size_t sz = 2 * 1024 * 1024; /* 2 MB — below the 16 MB safe-zone floor */
     uint8_t *src = malloc(sz);
     for (size_t i = 0; i < sz; i++)
         src[i] = (uint8_t)((i * 37 + 3) ^ (i >> 8));
@@ -237,6 +239,58 @@ static void test_v2_large_output(void) {
     free(src); free(cmp); free(dec);
 }
 
+/* Test 9: >16 MB single-frame output — actually engages the safe-zone
+ * fast path. SAFEZONE_MAX_OFFSET is 1<<24 (16 MB) since Sprint 46, and
+ * dst_base is per-frame with op advancing cumulatively across blocks, so
+ * the in_safe_zone branch (which elides both per-iteration bounds checks)
+ * only runs once op passes dst_base + 16 MB. Every test above uses <= 2 MB
+ * buffers, so before this test the bounds-elision branch had ZERO coverage.
+ *
+ * The decoded lengths are hard-bounded by the fixed ANS tables
+ * (litlen <= 65535 via ll_base[35]=61440 + 4095; matchlen <= 65535 via
+ * ml_base[35]=32768 + 32767; offset <= 2^24-1, plus the unconditional
+ * offset > SAFEZONE_MAX_OFFSET reject), so op_safe_end = op_end - 65535 and
+ * offset_check_floor = dst_base + 16 MB make the skipped checks genuine
+ * tautologies. This test verifies the fast path decodes correctly; run
+ * under ASan to confirm no OOB in the bounds-elided region. */
+static void test_safezone_fastpath_engaged(void) {
+    size_t sz = 20u * 1024 * 1024;   /* > 16 MB + 65535 so the safe zone is non-empty */
+    uint8_t *src = malloc(sz);
+    if (!src) { CHECK(0, "alloc 20MB src"); return; }
+    /* Moderately compressible: repeated tokens with pseudo-random order, so
+     * balanced mode emits SEQ ('S') blocks with real matches and the output
+     * stays a single frame whose decode crosses the 16 MB safe-zone floor. */
+    static const char *w[] = {"the ","quick ","brown ","fox ","jumps ","over ",
+                              "lazy ","dog ","and ","then ","runs ","away "};
+    size_t p = 0; unsigned r = 0x1234567u;
+    while (p < sz) {
+        r = r * 1103515245u + 12345u;
+        const char *t = w[(r >> 16) % 12];
+        size_t l = strlen(t);
+        if (p + l > sz) break;
+        memcpy(src + p, t, l); p += l;
+    }
+    while (p < sz) src[p++] = ' ';
+
+    size_t cap = sz + sz / 2 + 4096;
+    uint8_t *cmp = malloc(cap);
+    if (!cmp) { free(src); CHECK(0, "alloc compress buffer"); return; }
+    vv_options_t o; vv_default_options(&o); o.mode = VV_MODE_BALANCED;
+    int64_t clen = vv_compress(src, sz, cmp, cap, &o);
+    CHECK(clen > 0, "compress 20MB (balanced, SEQ)");
+
+    uint8_t *dec = malloc(sz + 64);
+    if (clen > 0 && dec) {
+        int64_t dlen = vv_decompress(cmp, clen, dec, sz + 64);
+        CHECK(dlen == (int64_t)sz, "decompress 20MB size (safe-zone fast path)");
+        CHECK(dlen == (int64_t)sz && memcmp(src, dec, sz) == 0,
+              "roundtrip 20MB contents (safe-zone fast path, bounds-elided)");
+    } else {
+        CHECK(0, "alloc decode buffer / compress");
+    }
+    free(dec); free(cmp); free(src);
+}
+
 int main(void) {
     printf("=== SAFEZONE ADVERSARIAL TESTS (v2.40.0) ===\n");
     test_small_buffer_no_safezone();
@@ -247,6 +301,7 @@ int main(void) {
     test_boundary_dst_cap_sizes();
     test_repeated_compression();
     test_v2_large_output();
+    test_safezone_fastpath_engaged();
     printf("\nResults: %d passed, %d failed\n", passed, failures);
     return failures;
 }

@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.60.2. License: GPL-3.0-or-later (commercial license available:
+Version 2.60.3. License: GPL-3.0-or-later (commercial license available:
 sac@securityops.co).
 
 ## Where it stands

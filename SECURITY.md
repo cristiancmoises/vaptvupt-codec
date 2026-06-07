@@ -1,7 +1,7 @@
 # VaptVupt Security Posture
 
-**Document version**: 1.6 (v2.60.2)
-**Codebase audited**: v2.60.2
+**Document version**: 1.7 (v2.60.3)
+**Codebase audited**: v2.60.3
 **License**: GPL-3.0-or-later
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
@@ -114,6 +114,40 @@ the overrun for all four offset classes plus the 3-byte-offset path and asserts
 a clean rejection; verified under ASan+UBSan (9/9).
 
 10 of the first 11 tools surfaced ≥1 defect on first application; tools #7, #9, #10, #11 produced no findings. The v2.60.2 defect shows that targeted manual audit of invariant *symmetry* across fast/slow paths still finds what coverage-guided fuzzing can miss.
+
+### Companion audit — v2.60.3: SEQ entropy decoder safe-zone (no defect)
+
+After v2.60.2, the same bounds-check-symmetry methodology was applied to the
+*other* decoder — `vva_decode_sequences_impl`, the entropy/sequence path for
+`'S'`/`'T'` blocks, which has its own safe-zone fast path that elides both the
+offset and the match-length output-bound checks once
+`op >= dst_base + SAFEZONE_MAX_OFFSET (1<<24)` and `op <= op_end - 65535`.
+
+**Result: no defect.** Unlike the raw-token path (whose match length grows via
+an *unbounded* `0xFF`-continuation varint — the v2.60.2 root cause), every
+SEQ-path length is hard-bounded by a *fixed* ANS code table with a fixed
+extra-bit count:
+
+| quantity | bound | source |
+|---|---|---|
+| litlen | ≤ 65535 | `ll_base[35]=61440` + max 4095 (12 extra bits) |
+| matchlen | ≤ 65535 | `ml_base[35]=32768` + max 32767 (15 extra bits); `ml_base_v2[35]` → 65534 |
+| offset | ≤ 2²⁴−1 | code ≤ 26 → `[2²³,2²⁴)`, plus the **unconditional** `offset > SAFEZONE_MAX_OFFSET` reject (line 2507) |
+
+Because `op_safe_end = op_end - 65535` and `offset_check_floor = dst_base + 2²⁴`
+match these maxima exactly, the checks skipped in the safe zone are genuine
+tautologies for *all* input, including adversarial — there is no analogue of the
+v2.60.2 overflow. The structural difference is the absence of an unbounded
+length-extension mechanism.
+
+**Coverage added:** the safe-zone fast path engages only past 16 MB of frame
+output (`dst_base` is per-frame, `op` cumulative across blocks). Every prior
+adversarial test used ≤ 2 MB buffers, so the bounds-elision branch had **zero
+coverage**; an instrumented run confirmed it executes 617,812 times on a 24 MB
+frame and decodes correctly. `tests/test_safezone_adversarial.c` now includes a
+20 MB single-frame roundtrip (`test_safezone_fastpath_engaged`) that exercises
+the fast path, ASan+UBSan-clean (58/58). Stale comments in that file (the floor
+is 1<<24 = 16 MB since Sprint 46, not the 1 MB they stated) were corrected.
 
 ---
 
