@@ -1,7 +1,7 @@
 # VaptVupt Security Posture
 
-**Document version**: 1.7 (v2.60.3)
-**Codebase audited**: v2.60.3
+**Document version**: 1.8 (v2.60.4)
+**Codebase audited**: v2.60.4
 **License**: GPL-3.0-or-later
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
@@ -80,7 +80,7 @@ All three surfaces are covered by the audit campaign described below.
 | 11 | libFuzzer (differential decoder) | Sprint 111 | 0 (clean) |
 | 12 | Manual decode-path audit + ASan repro | v2.60.2 | 1 (phase-1 match-length OOB write — see advisory below) |
 
-**Total: 14 defects fixed, 12 distinct tools/techniques applied.**
+**Total: 15 defects fixed, 13 distinct tools/techniques applied.**
 
 ### Advisory — v2.60.2: heap-buffer-overflow (OOB write) in AVX2 decode warmup
 
@@ -113,7 +113,7 @@ with a focused ASan harness. The fuzzers that found the analogous phase-2 gap
 the overrun for all four offset classes plus the 3-byte-offset path and asserts
 a clean rejection; verified under ASan+UBSan (9/9).
 
-10 of the first 11 tools surfaced ≥1 defect on first application; tools #7, #9, #10, #11 produced no findings. The v2.60.2 defect shows that targeted manual audit of invariant *symmetry* across fast/slow paths still finds what coverage-guided fuzzing can miss.
+10 of the first 11 tools surfaced ≥1 defect on first application; tools #7, #9, #10, #11 produced no findings. The v2.60.2 defect shows that targeted manual audit of invariant *symmetry* across fast/slow paths still finds what coverage-guided fuzzing can miss; the v2.60.4 defect (tool #13 — downstream integration testing with exact-sized decode buffers) shows that a class of bug invisible to both fuzzing and the symmetry audit — a SIMD store *width* exceeding a tight output buffer on a *valid* stream — is caught only when a consumer exercises the contract's worst-case buffer sizing.
 
 ### Companion audit — v2.60.3: SEQ entropy decoder safe-zone (no defect)
 
@@ -148,6 +148,67 @@ frame and decodes correctly. `tests/test_safezone_adversarial.c` now includes a
 20 MB single-frame roundtrip (`test_safezone_fastpath_engaged`) that exercises
 the fast path, ASan+UBSan-clean (58/58). Stale comments in that file (the floor
 is 1<<24 = 16 MB since Sprint 46, not the 1 MB they stated) were corrected.
+
+### Advisory — v2.60.4: AVX2 decode wide-store over-write on an exactly-content-sized buffer
+
+**Severity:** high (out-of-bounds heap write, up to 31 bytes, reachable through
+the public API on a **valid** stream). **Affected:** the AVX2 token decode path
+(`decode_block_tokens_impl`, both the phase-1 warmup and phase-2 hot loops) in
+all releases that shipped the `match_copy_32_hot` fast path. Non-AVX2 builds
+(general/tail path only) are unaffected.
+
+**Cause:** `match_copy_32_hot` performs an *unconditional* 32-byte AVX2 store
+(the lz4 decode trick) that over-writes up to `32 - mlen` bytes past the match.
+Its safety contract is a 72-byte writable margin, but the margin is only checked
+at loop *entry* (`op < op_safe = op_end - 72`). Within an iteration `op` first
+advances by the literal length (`op += ll`); a literal run long enough to push
+`op` within 32 bytes of `op_end`, followed by a fast-path (offset ≥ 32) match
+that lands at the end of the stream, makes the wide store write past `op_end`.
+The match-length output bound added in v2.60.2 (`op_end - op < mlen`) guards the
+*match length* but not the *fixed 32-byte store width*. The over-write is
+reachable on a valid stream whenever the caller sizes the output buffer to
+exactly `content_size` — which `vv_decompress`'s contract permits.
+
+This is **the case the v2.60.3 companion audit did not cover.** That audit
+reasoned about `mlen` bounds and the SEQ safe-zone tautologies; it did not
+consider the unconditional 32-byte store *width* against a tight (exact-sized)
+output buffer. The v2.60.3 "decode path fully audited" conclusion was therefore
+incomplete, and this advisory corrects the record: the raw-token AVX2 fast path
+carried a wide-store overshoot independent of the v2.60.2 corrupt-`mlen` class.
+
+**Fix:** `match_copy_32_hot` over-writes in two places, both closed. (1) Its
+`n <= 32` path does a single unconditional 32-byte store, so both fast-path
+call sites now gate it on `(op_end - op) >= 32` and fall back to the exact-tail
+`match_copy_32` otherwise. (2) Its `n > 32` branch previously ended with a
+final 32-byte store for the `n % 32` remainder — needing `((n+31)&~31)` bytes
+of room, which the `>= 32` call-site guard does not guarantee — so that tail is
+now exact (16-byte store then `memcpy`), matching `match_copy_32`. On a valid
+stream all variants copy the same `mlen` bytes, so decode output is
+**byte-identical** to all prior releases (ratio gate ± 0; differential
+5576/5576; Silesia 12/12 roundtrip); only the trailing over-write near `op_end`
+is removed. The common case (~99% of matches, with >= 32 bytes of trailing
+room) keeps the branch-free wide store, so decode throughput is unchanged. The
+call-site guard alone was insufficient — the C++ binding test reproduced the
+`n > 32` tail over-store after it was added — which is why the fix also lands in
+the function body.
+
+**Detection:** surfaced while wiring libvaptvupt's binding tests, which allocate
+decode buffers at exactly `content_size`; `make test-c` aborted with a heap
+error at `-O3 -flto`, and an ASan harness localized it to a "WRITE of size 32"
+in `decode_block_tokens_w16` reproducible standalone in the codec. The fuzzers
+allocate decode buffers with slack and so never exercised the exact-size case.
+
+**Regression:** `tests/test_exact_buffer_decode.c` (TEST22, in `make test`)
+compresses a size sweep + repetitive data + long-match (n > 32) sweeps + the
+original 122-byte trigger fixture across all three modes and decompresses each
+into an exactly-content-sized buffer. Post-fix **20136/20136 under ASan+UBSan**;
+reverting *either* fix layer makes the same test reproduce the OOB ("WRITE of
+size 32") — proven coverage for both the `n <= 32` single-store and `n > 32`
+tail-store variants. Lesson recorded: a decode-safety audit must consider the
+SIMD store *width* (including any rounded-up tail store) against the tightest
+legal output buffer, not only the decoded match/literal *lengths*; and the
+first regression test (which covered only short matches) missed the `n > 32`
+variant that a downstream consumer's test caught.
 
 ---
 

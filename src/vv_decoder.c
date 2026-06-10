@@ -82,9 +82,19 @@ static inline void match_copy_32_hot(uint8_t *d, const uint8_t *s, size_t n) {
     if (VV_LIKELY(n <= 32)) {
         wcopy32(d, s);            /* single 32-byte store covers all n <= 32 */
     } else {
+        /* n > 32 (rare: ~1% of matches). The 32-byte chunk loop is followed
+         * by an EXACT tail (16-byte then memcpy) rather than a final 32-byte
+         * over-store: the caller's room guarantee is only >= 32 bytes (the
+         * single-store case), not the rounded-up >= ((n+31)&~31) the old
+         * unconditional tail store needed. An over-store here writes up to
+         * 32 - (n & 31) bytes past op_end on an exactly-content-sized output
+         * buffer (heap-buffer-overflow WRITE). Exact tail keeps it in bounds;
+         * for n > 32 the per-store cost is already amortized so this is not a
+         * hot-path regression. */
         wcopy32(d, s); d += 32; s += 32; n -= 32;
         while (n >= 32) { wcopy32(d, s); d += 32; s += 32; n -= 32; }
-        if (n > 0) wcopy32(d, s); /* safe over-copy in safe zone */
+        if (n >= 16) { wcopy16(d, s); d += 16; s += 16; n -= 16; }
+        if (n > 0) memcpy(d, s, n);
     }
 }
 
@@ -218,8 +228,21 @@ decode_block_tokens_impl(
         if (VV_UNLIKELY((size_t)(op_end - op) < mlen))
             return VV_ERR_OVERFLOW;
 
+        /* match_copy_32_hot does an unconditional 32-byte store (lz4 trick)
+         * and so requires >= 32 bytes of writable room past op. The op_safe
+         * loop guard reserves 72 bytes at loop *entry*, but op advances by ll
+         * (which can be large via a literal-length extension) before this
+         * copy, so op can land within 32 bytes of op_end mid-iteration. When
+         * the remaining room is < 32, use the exact-tail match_copy_32 to
+         * avoid an over-write past op_end (heap-buffer-overflow WRITE on an
+         * exactly-content-sized output buffer; the wide-store overshoot is
+         * up to 32 - mlen bytes). Byte-identical: both copy the same mlen
+         * bytes; only the harmless trailing over-write differs. */
         if (VV_LIKELY(offset >= 32)) {
-            match_copy_32_hot(op, op - offset, mlen);
+            if (VV_LIKELY((size_t)(op_end - op) >= 32))
+                match_copy_32_hot(op, op - offset, mlen);
+            else
+                match_copy_32(op, op - offset, mlen);
         } else if (offset >= 16) {
             match_copy_16(op, op - offset, mlen);
         } else if (offset >= 8) {
@@ -291,8 +314,16 @@ decode_block_tokens_impl(
         if (VV_UNLIKELY((size_t)(op_end - op) < mlen))
             return VV_ERR_OVERFLOW;
 
+        /* See phase-1: match_copy_32_hot over-writes a full 32 bytes, so it
+         * needs >= 32 bytes of room past op. op advances by ll within the
+         * iteration, so guard against the exact buffer end and fall back to
+         * the exact-tail match_copy_32 when room < 32. Byte-identical output;
+         * prevents an OOB write on an exactly-content-sized buffer. */
         if (VV_LIKELY(offset >= 32)) {
-            match_copy_32_hot(op, op - offset, mlen);
+            if (VV_LIKELY((size_t)(op_end - op) >= 32))
+                match_copy_32_hot(op, op - offset, mlen);
+            else
+                match_copy_32(op, op - offset, mlen);
         } else if (offset >= 16) {
             match_copy_16(op, op - offset, mlen);
         } else if (offset >= 8) {

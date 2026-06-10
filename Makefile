@@ -103,6 +103,9 @@ TEST20_BIN = test_bcj
 TEST21_SRC = tests/test_phase1_overflow.c $(CORE_SRC)
 TEST21_BIN = test_phase1_overflow
 
+TEST22_SRC = tests/test_exact_buffer_decode.c $(CORE_SRC)
+TEST22_BIN = test_exact_buffer_decode
+
 .PHONY: all clean test python-test fuzz fuzz-libfuzzer test-fuzz fuzz-clean bench-update speed-update speed-baseline speed-profile run_roundtrip run_huffman bench check-debug perf pgo
 
 all: $(TARGET)
@@ -267,7 +270,13 @@ $(TEST21_BIN): $(TEST21_SRC)
 	$(CC) $(CFLAGS) $(SIMD_FLAGS) -c tests/test_phase1_overflow.c -o build_obj/test_phase1_overflow.o
 	$(CC) $(CFLAGS) build_obj/test_phase1_overflow.o $(filter-out src/vv_simd.c src/vv_decoder.c tests/test_phase1_overflow.c, $(TEST21_SRC)) build_obj/vv_simd_t21.o $(LDFLAGS) -o $(TEST21_BIN)
 
-test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TARGET)
+$(TEST22_BIN): $(TEST22_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t22.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t22.o
+	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST22_SRC)) build_obj/vv_simd_t22.o build_obj/vv_decoder_t22.o $(LDFLAGS) -o $(TEST22_BIN)
+
+test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TARGET)
 	./$(TEST1_BIN)
 	./$(TEST2_BIN)
 	./$(TEST3_BIN)
@@ -289,6 +298,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST19_BIN)
 	./$(TEST20_BIN)
 	./$(TEST21_BIN)
+	./$(TEST22_BIN)
 	@echo ""
 	@echo "OOM-robustness sweep (no crash on any single allocation failure):"
 	@VV_BIN=./$(TARGET) CC="$(CC)" sh tests/oom_sweep.sh
@@ -516,7 +526,7 @@ bench: $(TARGET)
 	fi
 
 clean:
-	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) *.vv *.zupt *.orig
+	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) *.vv *.zupt *.orig
 	rm -rf tests/corpus_bad
 
 amalg:

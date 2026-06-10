@@ -2,6 +2,88 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.60.4 — Security fix: AVX2 decode wide-store over-write on an exactly-content-sized output buffer
+
+**High-severity decode-safety fix (OOB write).** A valid stream decoded into
+an output buffer sized to *exactly* `content_size` (no slack) could write up
+to 31 bytes past the end of the buffer. `vv_decompress`'s contract allows
+`dst_cap == content_size`, so this is reachable through the public API; it was
+found while wiring libvaptvupt's binding tests, which allocate decode buffers
+at exactly `content_size`, and reproduces standalone in the codec under ASan
+("WRITE of size 32" in `decode_block_tokens_w16`).
+
+### Root cause
+
+The AVX2 fast-path match copy `match_copy_32_hot` performs an **unconditional
+32-byte store** (the lz4 decode trick) that over-writes up to `32 - mlen`
+bytes past the match. Its safety contract is a 72-byte writable margin, but
+that margin is only checked at loop *entry* (`op < op_safe = op_end - 72`).
+Within an iteration `op` advances by the literal length first (`op += ll`),
+and a literal run long enough to push `op` within 32 bytes of `op_end` — followed
+by a fast-path (offset >= 32) match that lands at the very end of the stream —
+makes the wide store write past `op_end`. The existing match-length bound
+(`op_end - op < mlen`, added in v2.60.2) guards the *match length* but not the
+fixed 32-byte store width.
+
+This is the wide-store overshoot the v2.60.3 audit did **not** cover: that
+audit verified the corrupt-`mlen` bounds and the SEQ safe-zone path, but
+reasoned about `mlen`, not the unconditional 32-byte store width on a tight
+output buffer. The v2.60.3 "decode fully audited" conclusion was therefore
+incomplete; this release corrects it.
+
+### Fix
+
+`match_copy_32_hot` over-writes in two places, both addressed:
+
+1. The `n <= 32` path does a single unconditional 32-byte store, so it needs
+   32 bytes of writable room. Both AVX2 fast-path call sites (phase-1 warmup
+   and phase-2 hot loop in `decode_block_tokens_impl`) now gate it on room and
+   fall back to the exact-tail `match_copy_32` otherwise:
+
+   ```c
+   if (VV_LIKELY(offset >= 32)) {
+       if (VV_LIKELY((size_t)(op_end - op) >= 32))
+           match_copy_32_hot(op, op - offset, mlen);   /* over-copying fast path */
+       else
+           match_copy_32(op, op - offset, mlen);        /* exact-tail copy */
+   }
+   ```
+
+2. The `n > 32` branch *inside* `match_copy_32_hot` previously finished with a
+   final unconditional 32-byte store for the `n % 32` remainder — needing
+   `((n + 31) & ~31)` bytes of room, which the >= 32 call-site guard does not
+   guarantee. That tail is now exact (16-byte store then `memcpy`), identical
+   to `match_copy_32`'s tail, so the only remaining over-store is the `n <= 32`
+   single store the call-site guard covers. For `n > 32` (~1% of matches) the
+   per-store cost is already amortized, so this is not a hot-path regression.
+
+`match_copy_32` already existed (exact 32→16→memcpy tail). On a valid stream
+all variants copy the same `mlen` bytes, so **output is byte-identical** to all
+prior releases; only the trailing over-write near `op_end` is removed. The
+common case (matches with >= 32 bytes of trailing room, ~99% of matches) keeps
+the branch-free wide store.
+
+The first (call-site) layer alone was insufficient: the C++ binding test
+(`vaptvupt::decompress` into an exact-sized buffer) reproduced the `n > 32`
+tail over-store after the call-site guard was added, which is why the fix lands
+in the function body as well.
+
+### Validation
+
+- New regression `tests/test_exact_buffer_decode.c` (TEST22): compresses a
+  size sweep + repetitive data + long-match (n > 32) sweeps + the original
+  122-byte trigger fixture across all three modes and decompresses each into an
+  **exactly-content-sized** buffer. Post-fix **20136/20136 under ASan**;
+  reverting either fix layer makes the same test reproduce the OOB ("WRITE of
+  size 32") — a proven regression for both over-write variants.
+- Compressed output byte-identical to the v2.52.1 reference (6 files × 2 modes).
+- All 12 Silesia files roundtrip OK; **ratio gate ± 0 bytes** on all 10 fixtures.
+- Full suite green: 22 test binaries, differential 5576/5576, fuzz 5200/5200,
+  OOM sweep PASS. `make verify` 5/5 CBMC/Eva proofs SUCCESSFUL.
+- ASan + UBSan clean.
+
+Build: `make` — clean, `-Wall -Wextra -Werror`. No API or wire-format change.
+
 ## v2.60.3 — Decode-safety audit of the SEQ entropy decoder (no defect) + safe-zone coverage
 
 **No codec code change; binary byte-identical to v2.60.2** (md5 985efefe).
