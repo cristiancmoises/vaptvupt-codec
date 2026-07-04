@@ -2,6 +2,64 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.61.0 — Sprint 124: encoder speed/ratio program + two latent-corruption fixes
+
+Head-to-head-driven optimization pass against zstd and lz4 (10-file corpus:
+text/source/json/logs/csv/xml/ELF/sensor-floats/record-structs/random,
+single-thread, best-of-3). All 22 test suites pass, ratio gate passes with
+zero regressions, 5,200 differential fuzz cases consistent.
+
+### Correctness (latent bugs, exposed by the new entropy-gate policy)
+
+- **SEQ encoder emitted no LL bitstream for zero-match blocks.** The whole
+  sequence-bitstream write (including LL codes) lived inside
+  `if (match_count > 0)`; a pure-literal-run block wrote the LL table header
+  but no bitstream, while the decoder unconditionally decodes an LL code per
+  sequence — corrupt decode. Unreachable before (csz >= braw always went
+  RAW); reachable and fixed now (`vv_ans.c`).
+- **Path B could clobber Path A's output before selection.** `ent_buf` was
+  split in half with SEQ writing up to `vva_bound(braw)` at the front —
+  overlapping Path B's half exactly when SEQ was weak (the only case Path B
+  runs). `ent_buf` is now 2 × `vva_bound`; the streaming context's
+  `stripped` buffer is likewise sized to `tcap`.
+
+### Encoder speed (balanced typically +30-100%, incompressible ~4-6x)
+
+- Skip acceleration on by default (`opts->accel == 0` now means auto:
+  fast=2, balanced/extreme=1 with stride cap 8) plus an early-RAW bail after
+  128 KB with zero matches: random data encodes at 120-190 MB/s vs 31.
+- Path B demoted to a true fallback (runs only when SEQ is weak) and the CTX
+  order-1 coder removed from it — it burned up to 50% of encode wall on
+  low-redundancy binary and never won a block.
+- Literal-format race rewritten: one histogram + analytic size estimates
+  (exact-given-lengths Huffman, table-quantized ANS) gate at most TWO real
+  encodes (ANS4 + best-Huffman) instead of four; estimates are provably
+  optimistic, so `est >= raw` safely short-circuits incompressible literal
+  blocks straight to raw.
+- O(1) tANS symbol encode (`enc_sym`): direct window computation replaces a
+  linear scan that averaged f/2 iterations (up to ~2048 for dominant symbols).
+- 8-byte xor/ctz stride in `extend_match` past the first 8 bytes (the
+  encoder TU builds without AVX2; extension was 1 byte/iteration).
+- Secure-zero scrub bounded by per-buffer write watermarks (was up to 14% of
+  encode wall on fast inputs); duplicate lazy-probe hash insert eliminated;
+  chain-walk prefetch priming gated to depth >= 8; trial matchers use accel.
+- Huffman decode: bulk 8-byte bit-reader refill (was byte-at-a-time, up to 7
+  dependent iterations every 3-4 symbols).
+
+### Ratio
+
+- Adaptive format v2: min_match=3 auto-enables on binary-detected input
+  (suppressed by `compat_v246_5_decoder`; explicit `format_v2` still forces).
+  sensors-class float records: ratio 1.18 -> 1.40 (zstd-3: 1.18); record
+  structs: 1.52 -> 1.72 (zstd-3: 1.60).
+- Offset-cost-aware match acceptance in the hash5/hash4 chain walks: a
+  farther candidate must pay for its extra offset bits (~6 bits/extra byte),
+  protecting rep-offset streaks and OF-code entropy under larger windows.
+- Extreme mode routes v2 (binary) input to the deep greedy/lazy parser: the
+  optimal DP has no rep-offset model and lost 15-20% there; the extreme
+  large-window scaling is skipped for v2 input for the same reason.
+  Extreme on sensors: 1,110,027 -> 927,147 bytes; structs: -20%.
+
 ## v2.60.4 — Security fix: AVX2 decode wide-store over-write on an exactly-content-sized output buffer
 
 **High-severity decode-safety fix (OOB write).** A valid stream decoded into

@@ -85,8 +85,23 @@ static inline void br_init(br_t *r, const uint8_t *src, size_t len) {
     r->bits = 0; r->nbits = 0; r->src = src; r->pos = 0; r->len = len;
 }
 
-/* Refill: load bytes until accumulator is full (≥56 bits) */
+/* Refill: load bytes until accumulator is full (≥56 bits).
+ * SPRINT 124: bulk 8-byte fast path. The byte-at-a-time loop was up
+ * to 7 dependent load-shift-or iterations firing every 3-4 symbols
+ * per stream — measured as the top cost of Huffman literal decode.
+ * One unaligned 8-byte load + mask absorbs the same bytes; the tail
+ * (<8 bytes left) keeps the exact byte loop. */
 static inline void br_refill(br_t *r) {
+    if (r->pos + 8 <= r->len) {
+        unsigned absorbed = (63u - (unsigned)r->nbits) >> 3;   /* 0..7 */
+        uint64_t chunk;
+        memcpy(&chunk, r->src + r->pos, 8);
+        chunk &= ((uint64_t)1 << (absorbed * 8)) - 1;
+        r->bits |= chunk << r->nbits;
+        r->pos += absorbed;
+        r->nbits += (int)(absorbed * 8);
+        return;
+    }
     while (r->nbits <= 56 && r->pos < r->len) {
         r->bits |= (uint64_t)r->src[r->pos++] << r->nbits;
         r->nbits += 8;

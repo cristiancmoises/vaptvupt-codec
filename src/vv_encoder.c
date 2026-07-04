@@ -159,8 +159,26 @@ static inline int32_t extend_match(const uint8_t *a, const uint8_t *b,
         len += 32;
     }
 #endif
+    /* SPRINT 124: 8-byte xor/ctz stride for the post-8 region. This TU
+     * is deliberately built without -mavx2 (baseline portability), so
+     * before this loop existed every match longer than 8 bytes extended
+     * one byte per iteration — measured at 7-8% of encode wall on
+     * long-match corpora. Same technique as the fast path above. */
+    while (len + 8 <= max_len) {
+        uint64_t va, vb;
+        memcpy(&va, a + len, 8);
+        memcpy(&vb, b + len, 8);
+        uint64_t x = va ^ vb;
+        if (x) return len + (__builtin_ctzll(x) >> 3);
+        len += 8;
+    }
     while (len < max_len && a[len] == b[len]) len++;
     return len;
+}
+
+/* Branch-free floor(log2(v)); v=0 maps to 0. */
+static inline int enc_ilog2(uint32_t v) {
+    return 31 - __builtin_clz(v | 1);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -512,8 +530,11 @@ chain_match_ex(const matcher_t *m, const uint8_t *data,
 
     /* Pipeline priming: look 4 chain entries ahead. If chain is
      * short, the prefetches become no-ops (chain entries below limit
-     * just return -1 or an expired position). */
-    if (ref >= limit && ref < pos) {
+     * just return -1 or an expired position).
+     * SPRINT 124: only prime for deep walks. At depth 4 (fast mode,
+     * window trial) the priming loads cost more than the misses they
+     * hide — measured 5-8% of fast-mode encode wall. */
+    if (depth >= 8 && ref >= limit && ref < pos) {
         __builtin_prefetch(data + ref, 0, 0);
         int32_t r1 = chain_arr[ref & chain_mask];
         if (r1 >= limit && r1 < pos) {
@@ -562,6 +583,22 @@ chain_match_ex(const matcher_t *m, const uint8_t *data,
             if (max > (int32_t)m->max_match) max = (int32_t)m->max_match;
             int32_t len = 4 + extend_match(data + pos + 4, data + ref + 4, max - 4);
             if (len > best_len) {
+                /* SPRINT 124: offset-cost-aware acceptance. The walk
+                 * goes newest→oldest, so a later candidate always has
+                 * a larger offset. SEQ codes offsets as log2 buckets +
+                 * extra bits, so the farther match costs ~dbits more;
+                 * each extra matched byte saves ~6 bits of literals.
+                 * Without this check a barely-longer match at 512 KB
+                 * displaces a same-ish match at 200 B, and the diverse
+                 * offsets also break rep-offset streaks downstream.
+                 * Only affects greedy/lazy paths — the optimal parser
+                 * collects candidates via opt_collect and prices
+                 * offsets itself. */
+                if (best_len >= 4) {
+                    int dbits = enc_ilog2((uint32_t)(pos - ref))
+                              - enc_ilog2((uint32_t)*best_off);
+                    if ((len - best_len) * 6 < dbits) { ref = next_ref; continue; }
+                }
                 best_len = len;
                 *best_off = pos - ref;
                 if (len >= 256) return best_len;
@@ -604,6 +641,12 @@ chain_match_ex(const matcher_t *m, const uint8_t *data,
                 if (max > (int32_t)m->max_match) max = (int32_t)m->max_match;
                 int32_t len = 4 + extend_match(data + pos + 4, data + ref4 + 4, max - 4);
                 if (len > best_len) {
+                    /* Same offset-cost-aware acceptance as the hash5 walk. */
+                    if (best_len >= 4) {
+                        int dbits = enc_ilog2((uint32_t)(pos - ref4))
+                                  - enc_ilog2((uint32_t)*best_off);
+                        if ((len - best_len) * 6 < dbits) { ref4 = next_ref4; continue; }
+                    }
                     best_len = len;
                     *best_off = pos - ref4;
                     if (len >= 256) return best_len;
@@ -1062,10 +1105,12 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
     int32_t end = (int32_t)(start_pos + block_len);
     const uint8_t *lit_start = src + start_pos;
     int off_bytes = (m->wlog > 16) ? 3 : 2;
-    uint32_t failures = 0; /* consecutive no-match positions (for --accel skip) */
+    uint32_t failures = 0; /* consecutive no-match positions (for accel skip) */
+    uint32_t nmatch = 0;   /* matches found in this block (early-RAW bail) */
 
     while (pos < end - min_match) {
         int32_t mlen = 0, moff = 0;
+        int pos_inserted = 0;
 
         /* ─── Step 1: Try rep-match (free, no hash lookup) ─── */
         int32_t rep_idx = -1;
@@ -1133,6 +1178,7 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
             pos + 1 < end - min_match) {
             /* Check pos+1 */
             matcher_insert(m, src, pos, end);
+            pos_inserted = 1;
             int32_t noff = 0;
             int32_t nlen = chain_match(m, src, pos + 1, end, &noff);
 
@@ -1191,6 +1237,7 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
                 int rhs = moff_bits * (nlen + 1);
                 if (lhs < rhs) {
                     pos++;
+                    pos_inserted = 0;  /* the inserted position is now pos-1 */
                     mlen = nlen; moff = noff;
                     rep_idx = nri;  /* may have shifted from explicit→rep or vice versa */
 
@@ -1237,17 +1284,22 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
              *
              * Saves ~3 instructions per insert. Measured +4% encode
              * speedup on Silesia fast mode (Sprint 29). */
+            /* SPRINT 124: when the lazy probe already inserted pos and
+             * we did not shift, start at pos+1 — re-inserting pos would
+             * put a self-duplicate link in the chain, lengthening every
+             * future walk through that bucket. */
+            int32_t ins_first = pos + (pos_inserted ? 1 : 0);
             if (mlen >= 16) {
                 /* Long match: only insert boundary positions */
                 int32_t end5 = end - 5;
-                for (int32_t j = pos; j < pos + 3 && j <= end5; j++)
+                for (int32_t j = ins_first; j < pos + 3 && j <= end5; j++)
                     matcher_insert_fast(m, src, j);
                 for (int32_t j = pos + mlen - 3; j < pos + mlen && j <= end5; j++)
                     matcher_insert_fast(m, src, j);
             } else {
                 /* Short match: insert all positions */
                 int32_t end5 = end - 5;
-                for (int32_t j = pos; j < pos + mlen && j <= end5; j++)
+                for (int32_t j = ins_first; j < pos + mlen && j <= end5; j++)
                     matcher_insert_fast(m, src, j);
             }
 
@@ -1255,14 +1307,28 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
             pos += mlen;
             lit_start = src + pos;
             failures = 0; /* matched: reset the no-match run */
+            nmatch++;
         } else {
-            matcher_insert(m, src, pos, end);
-            /* --accel: skip ahead over unmatchable regions. accel==0 keeps
-             * the byte-identical default (advance 1). The skipped positions
-             * are not hashed/inserted and simply become literals. */
+            if (!pos_inserted) matcher_insert(m, src, pos, end);
+            /* Accel: skip ahead over unmatchable regions. accel==0 keeps
+             * the byte-identical old default (advance 1). The skipped
+             * positions are not hashed/inserted and simply become
+             * literals. SPRINT 124: balanced/extreme cap the stride at 8
+             * — on sparse-match data (struct-of-floats) an unbounded
+             * ramp skips over match starts and costs double-digit ratio;
+             * fast mode keeps the full lz4-style ramp. */
             if (m->accel) {
-                pos += 1 + (int32_t)(((uint32_t)failures * m->accel) >> 6);
+                uint32_t step = 1 + (((uint32_t)failures * m->accel) >> 6);
+                if (mode >= VV_MODE_BALANCED && step > 8) step = 8;
+                pos += (int32_t)step;
                 failures++;
+                /* Early RAW bail: 128 KB into the block with zero
+                 * matches means this block is going raw anyway (csz
+                 * would exceed braw). Returning 0 makes the caller
+                 * emit a RAW block without paying for the rest of the
+                 * parse or the literal memcpys. */
+                if (nmatch == 0 && pos - (int32_t)start_pos >= (1 << 17))
+                    return 0;
             } else {
                 pos++;
             }
@@ -1375,25 +1441,55 @@ static size_t extract_literals(
  *   - dst/dst_cap:  output buffer
  *
  * Returns bytes written to dst on success, or 0 on overflow. */
+/* SPRINT 124: high-watermark tracking for the secure-zero scrub.
+ * Scrubbing full buffer capacities (~4 MB) per vv_compress call cost
+ * up to 14% of encode wall on fast inputs; only bytes actually written
+ * can hold plaintext, so tracking write watermarks preserves the
+ * Sprint 117 security property at a fraction of the cost. */
+typedef struct {
+    size_t tmp, lit, stripped, ent_front, ent_back;
+} scrub_wm_t;
+
+static inline void wm_max(size_t *wm, size_t used) {
+    if (used > *wm) *wm = used;
+}
+
 static size_t emit_block(const uint8_t *src, size_t block_start, size_t braw,
                          int last, matcher_t *m, vv_mode_t mode, uint8_t wlog,
                          uint8_t *tmp, size_t tcap,
                          uint8_t *lit_buf, size_t lit_cap,
                          uint8_t *stripped, uint8_t *ent_buf, size_t ent_cap,
                          uint8_t *dst, size_t dst_cap, int min_match,
-                         int compat_v246_5) {
+                         int compat_v246_5, scrub_wm_t *wm) {
     uint8_t *op = dst;
 
     /* SPRINT 42/43 RATIO PROGRAM: extreme mode uses the whole-block optimal
      * parser; balanced/fast keep greedy/lazy. csz==0 (overflow/alloc) flows
-     * into the raw-store branch below. */
+     * into the raw-store branch below.
+     *
+     * SPRINT 124: on format-v2 (binary-detected) input, extreme uses the
+     * deep greedy/lazy parser instead. The optimal DP prices every match
+     * at full log2(offset) cost — it has no rep-offset model — so on
+     * rep-heavy record data (struct-of-floats, sensor logs) it loses
+     * 15-20% ratio to the rep-aware greedy path, and on incompressible
+     * binary it pays a full O(N·depth) DP just to store raw (the greedy
+     * path has skip acceleration and an early-RAW bail). Text-like input
+     * keeps the optimal parser, where it wins 3-11% over greedy. */
     size_t csz;
-    if (mode >= VV_MODE_EXTREME)
+    int v2_block = (min_match < (int)VV_MIN_MATCH);
+    if (mode >= VV_MODE_EXTREME && !v2_block)
         csz = compress_block_optimal(src, block_start, braw, tmp, tcap, m, min_match);
     else
         csz = compress_block(src, block_start, braw, tmp, tcap, m, mode, min_match);
+    if (wm) wm_max(&wm->tmp, csz);
 
-    if (csz == 0 || csz >= braw) {
+    /* SPRINT 124: in balanced/extreme, a token stream slightly larger
+     * than raw can still win AFTER entropy coding — on low-match data
+     * (struct-of-floats, sensor logs) nearly all the compression comes
+     * from the entropy stage over literals, not from matches. Only the
+     * entropy-less fast path must reject csz >= braw outright. */
+    size_t raw_gate = (mode >= VV_MODE_BALANCED) ? braw + braw / 8 : braw;
+    if (csz == 0 || csz >= raw_gate) {
         /* Incompressible: store raw */
         if ((size_t)(op - dst) + 4 + braw > dst_cap) return 0;
         uint32_t bh = vv_bh_pack(VV_BLOCK_RAW, last, (uint32_t)braw);
@@ -1423,8 +1519,9 @@ static size_t emit_block(const uint8_t *src, size_t block_start, size_t braw,
             seq_block_sz = 4 + 3 + 1 + seq_len;
             seq_valid = 1;
         }
+        if (wm) wm_max(&wm->ent_front, seq_len);
 
-        /* Path B: literal-only entropy ('I' or 'C') */
+        /* Path B: literal-only entropy ('I' or 'A') */
         size_t stripped_len = 0;
         size_t lit_count = 0;
         uint8_t *ent_buf2 = ent_buf + ent_cap / 2;
@@ -1433,97 +1530,49 @@ static size_t emit_block(const uint8_t *src, size_t block_start, size_t braw,
         uint8_t ent_tag = 0;
         size_t ent_block_sz = (size_t)-1;
 
-        int try_path_b = 1;
-        /* PERF / dead-code prune (v2.53.3): Path B (literal-only 'I'/'C'
-         * entropy) has a measured 0% win rate against Path A (SEQ) across
-         * all real inputs tested (text, binary, logs, CSV) — SEQ always
-         * codes the same literals at least as small while also coding the
-         * matches. Path B can only conceivably win on a block where SEQ
-         * failed to find structure (its compressed size approaches raw).
-         * So skip Path B's extract_literals + redundant ANS encodes
-         * whenever SEQ is valid and already beats raw by a clear margin
-         * (seq_block_sz < braw*7/8). On blocks where SEQ does not compress
-         * (>= braw*7/8) Path B still runs, preserving the only case it
-         * could win. Verified byte-identical on all 12 Silesia (balanced +
-         * extreme) and on binary/log/CSV; the ratio gate guards against any
-         * regression. This removes redundant per-block work; it is a
-         * code-cleanliness change, not a measurable speedup (Path B was not
-         * the encode bottleneck — that is the depth-24 chain walk). */
-        if (seq_valid && seq_block_sz < (braw * 7 / 8))
-            try_path_b = 0;
-        if (mode == VV_MODE_BALANCED && seq_valid && seq_block_sz < (braw / 3)) {
-            /* SPRINT 29 (revised in v2.15): always try Path B in BALANCED
-             * mode, comparing both costs and picking the smaller. The
-             * earlier "skip Path B if seq compressed >3:1" heuristic
-             * (added in Sprint 28 for speed) saved ~30% encode time but
-             * hurt ratio on text-heavy data — Silesia dickens/reymont
-             * showed Path B's 'C' tag would have produced 5-10% smaller
-             * output but never got the chance.
-             *
-             * v2.15 trade-off: encoder is ~25% slower in BALANCED mode
-             * but ratio improves measurably on text. Decode speed is
-             * unaffected (decoder doesn't care which tag was chosen).
-             *
-             * In ULTRA_FAST/FAST modes the original skip remains in
-             * effect because those modes are throughput-priority. */
-            (void)try_path_b;
-        }
+        /* Path B gate (v2.53.3, revised SPRINT 124): Path B has a
+         * measured 0% win rate against Path A (SEQ) on real inputs —
+         * SEQ codes the same literals at least as small while also
+         * coding the matches. Run it only when SEQ failed or produced
+         * weak output (>= 7/8 of raw). Path B is v1-only (its stripped
+         * tokens carry v1 matchlen bias), so on the v2 path skip the
+         * work entirely — the result could never be emitted.
+         *
+         * SPRINT 124: the CTX (order-1) coder is gone from this path.
+         * It ran exactly when SEQ was weak — low-redundancy binary —
+         * where it burned 50% of encode wall (sensors-class inputs)
+         * and, per the Sprint 53 measurements, never won a block. */
+        int try_path_b = !use_v2 && (!seq_valid ||
+                                     seq_block_sz >= (braw * 7 / 8));
 
         if (try_path_b) {
             lit_count = extract_literals(tmp, csz, lit_buf, lit_cap,
                                          stripped, &stripped_len, off_bytes);
+            if (wm) {
+                wm_max(&wm->lit, lit_count);
+                wm_max(&wm->stripped, stripped_len);
+            }
             if (lit_count > 0) {
-                /* SPRINT 53: skip the expensive CTX (order-1 context)
-                 * path when sequence coding is already winning by a
-                 * big margin. Profile data across 7 fixtures (text,
-                 * json, source, 4 ELF binaries) showed CTX wins 0/16
-                 * attempts — the CTX coder has never actually beaten
-                 * SEQ on these workloads, but burned 20% of encode
-                 * time building per-context ANS tables that were
-                 * always discarded.
-                 *
-                 * Heuristic: skip CTX when seq_block_sz already does
-                 * better than 2:1 compression (seq_block_sz < braw/2).
-                 * Path A (SEQ) essentially never loses to Path B (CTX)
-                 * when the LZ matcher found strong matches. CTX only
-                 * matters for low-redundancy data where SEQ produces
-                 * close-to-raw output — exactly the case where
-                 * seq_block_sz ≥ braw/2.
-                 *
-                 * Falls back to ANS4 / ANS as literal coders in the
-                 * unchanged code below. These are ~10× cheaper than
-                 * CTX to build. Net encode-time savings measured in
-                 * SPRINT 53 CHANGELOG entry.
-                 *
-                 * Security/correctness: this is purely an encoder
-                 * heuristic. Decoder is unchanged. Output wire format
-                 * still meets spec. Worst case on a pathological
-                 * input where CTX would have won: we produce slightly
-                 * larger output via ANS4 or ANS. Ratio gate guards
-                 * against any real regression. */
-                int skip_ctx = seq_valid && seq_block_sz < (braw * 4 / 5);
-                if (!skip_ctx && mode >= VV_MODE_BALANCED && lit_count >= 4096) {
-                    vva_error_t aerr = vva_encode_ctx(lit_buf, lit_count,
-                                                       ent_buf2, ent_cap2, &ent_len);
-                    if (aerr == VVA_OK) ent_tag = VV_ENTROPY_CTX;
-                }
+                vva_error_t aerr = vva_encode4(lit_buf, lit_count,
+                                                ent_buf2, ent_cap2, &ent_len);
+                if (aerr == VVA_OK) ent_tag = VV_ENTROPY_ANS4;
                 if (!ent_tag) {
-                    vva_error_t aerr = vva_encode4(lit_buf, lit_count,
-                                                    ent_buf2, ent_cap2, &ent_len);
-                    if (aerr == VVA_OK) ent_tag = VV_ENTROPY_ANS4;
-                }
-                if (!ent_tag) {
-                    vva_error_t aerr = vva_encode(lit_buf, lit_count,
-                                                   ent_buf2, ent_cap2, &ent_len);
+                    aerr = vva_encode(lit_buf, lit_count,
+                                      ent_buf2, ent_cap2, &ent_len);
                     if (aerr == VVA_OK) ent_tag = VV_ENTROPY_ANS;
                 }
                 if (ent_tag) {
                     ent_block_sz = 4 + 3 + 1 + 2 + 2 + ent_len + stripped_len;
                 }
+                if (wm) wm_max(&wm->ent_back, ent_len);
             }
         }
 
         size_t raw_block_sz = 4 + 3 + csz;
+        /* Raw-store block size: with the relaxed raw_gate above, csz may
+         * exceed braw, so every candidate must also beat plain storage. */
+        size_t store_sz = 4 + braw;
+        if (raw_block_sz > store_sz) raw_block_sz = store_sz;
 
         if (seq_valid && seq_block_sz <= ent_block_sz && seq_block_sz < raw_block_sz) {
             if ((size_t)(op - dst) + seq_block_sz > dst_cap) return 0;
@@ -1554,21 +1603,20 @@ static size_t emit_block(const uint8_t *src, size_t block_start, size_t braw,
             op[0] = (uint8_t)(ent_len); op[1] = (uint8_t)(ent_len >> 8); op += 2;
             memcpy(op, ent_buf2, ent_len); op += ent_len;
             memcpy(op, stripped, stripped_len); op += stripped_len;
-        } else if (!use_v2) {
+        } else if (!use_v2 && csz < braw) {
             /* Plain VV_BLOCK_COMPRESSED carries raw v1-format tokens.
              * For v2, we must not emit these — the decoder would
-             * reconstruct matchlen with +4 instead of +3. Fall to RAW
-             * block instead (handled below via "else" when raw_block_sz
-             * is smaller). We reach this branch only when the previous
-             * conditions all failed AND we're NOT v2. */
-            if ((size_t)(op - dst) + raw_block_sz > dst_cap) return 0;
+             * reconstruct matchlen with +4 instead of +3. Guarded on
+             * csz < braw because the relaxed raw_gate can let a token
+             * stream slightly larger than raw reach this point. */
+            if ((size_t)(op - dst) + 4 + 3 + csz > dst_cap) return 0;
             uint32_t bh = vv_bh_pack(VV_BLOCK_COMPRESSED, last, (uint32_t)braw);
             memcpy(op, &bh, 4); op += 4;
             op[0] = (uint8_t)(csz); op[1] = (uint8_t)(csz >> 8); op[2] = (uint8_t)(csz >> 16);
             op += 3;
             memcpy(op, tmp, csz); op += csz;
         } else {
-            /* v2 path, sequence coding didn't fit/help: emit RAW. */
+            /* Nothing beat plain storage: emit RAW. */
             if ((size_t)(op - dst) + 4 + braw > dst_cap) return 0;
             uint32_t bh = vv_bh_pack(VV_BLOCK_RAW, last, (uint32_t)braw);
             memcpy(op, &bh, 4); op += 4;
@@ -1696,32 +1744,55 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
             size_t sz16 = 0, sz20 = 0;
             /* SPRINT 93 audit: matcher_init can fail; if it does, skip
              * the trial (this path is a perf-tuning probe — falling
-             * back to default wlog is safe). */
+             * back to default wlog is safe).
+             * SPRINT 124: trials run with accel=2 so incompressible
+             * inputs no longer pay two full 128 KB parses just to
+             * decide "store raw". Both trials use the same accel, so
+             * the 16-vs-20 comparison stays apples-to-apples. */
             if (matcher_init(&m16, 16, 4)) {
+                m16.accel = 2;
                 sz16 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m16, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
                 matcher_free(&m16);
             }
 
             matcher_t m20;
             if (matcher_init(&m20, 20, 4)) {
+                m20.accel = 2;
                 sz20 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m20, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
                 matcher_free(&m20);
             }
 
             free(trial_buf);
             if (sz20 > 0 && sz16 > 0 && sz20 < (sz16 * 97 / 100)) wlog = 20;
-            /* Binary-like detection: best trial ratio < 2:1 */
+            /* Binary-like detection: best trial ratio < 2:1. A zero
+             * size means the early-RAW bail fired — maximally
+             * incompressible, so binary-like by definition. */
             size_t best_sz = (sz20 > 0 && sz20 < sz16) ? sz20 : sz16;
-            if (best_sz > 0 && best_sz * 2 > trial_len) enable_hash4 = 1;
+            if (best_sz == 0 || best_sz * 2 > trial_len) enable_hash4 = 1;
         }
     }
+
+    /* SPRINT 124: adaptive format v2 (decided here because the window
+     * overrides below must not fire for v2-routed input). min_match=3
+     * ('T' blocks) is a measured 14%+ ratio win on struct-of-floats/
+     * record binary and 2-3% on ELF, while slightly HURTING text/JSON
+     * ratio and decode speed (more, shorter sequences). Auto-enable
+     * exactly where it wins: binary-detected inputs. Suppressed by
+     * the compat flag because 'T' blocks require a v2.33.0+ decoder.
+     * Explicit opts->format_v2 still forces it for any input. */
+    int use_v2_fmt = opts->format_v2 ||
+                     (enable_hash4 && opts->mode >= VV_MODE_BALANCED &&
+                      !opts->compat_v246_5_decoder);
 
     /* SPRINT 67: size-based wlog override. The trial above often
      * misses wins that only become visible past the 128 KB trial
      * boundary (long-range refs in multi-MB files). Override to
-     * wlog=18 for files ≥ 3 MB when the trial left wlog at 16. */
+     * wlog=18 for files ≥ 3 MB when the trial left wlog at 16.
+     * SPRINT 124: not for v2-routed (binary) input — the greedy
+     * parser regresses badly on rep-heavy data with large windows
+     * (diverse far offsets break rep streaks and bloat OF codes). */
     if (opts->window_log == 0 && opts->mode >= VV_MODE_BALANCED &&
-        wlog == 16 && src_len >= 3145728) {
+        !use_v2_fmt && wlog == 16 && src_len >= 3145728) {
         wlog = 18;
     }
 
@@ -1747,7 +1818,11 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
      * Memory at wlog=24: chain[wsz]+hash4_chain[wsz] = 2*4*16M = 128 MB
      * matcher. Acceptable for extreme ("max ratio, will wait"). */
     if (opts->window_log == 0 && opts->mode >= VV_MODE_EXTREME &&
-        src_len > (1u << 20)) {
+        !use_v2_fmt && src_len > (1u << 20)) {
+        /* SPRINT 124: v2-routed (binary) extreme input uses the greedy
+         * parser (no rep model in the optimal DP), and greedy + large
+         * window is a measured 15-30% ratio LOSS on rep-heavy data —
+         * keep the trial-chosen window there. */
         uint8_t want = 20;
         uint64_t s = src_len;
         while ((1ull << want) < s && want < 24) want++;
@@ -1781,18 +1856,29 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
      * by the balanced/extreme window-selection trial above stay at
      * single_probe==0 and produce bit-identical trial sizes. */
     m.single_probe = (opts->mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
-    m.accel = opts->accel > 64 ? 64 : opts->accel;
+    /* SPRINT 124: accel defaults ON. opts->accel == 0 now means "auto":
+     * fast mode gets the lz4-style ramp (2 → step 1 + failures/32),
+     * balanced/extreme a gentle one (1 → step 1 + failures/64, capped
+     * at 8 inside compress_block). This is what turns 1 MB of random
+     * bytes from a 24 ns/byte full-parse crawl into a near-memcpy RAW
+     * store. Explicit --accel values are honored unchanged. */
+    {
+        uint32_t eff_accel = opts->accel;
+        if (eff_accel == 0)
+            eff_accel = (opts->mode >= VV_MODE_BALANCED) ? 1 : 2;
+        m.accel = eff_accel > 64 ? 64 : eff_accel;
+    }
     m.no_rep = opts->no_rep ? 1 : 0;
     /* Format v2 cap applies to EVERY match emitted from this matcher,
      * not just those produced via hash3. Set unconditionally when
-     * opts.format_v2 is active. */
-    if (opts->format_v2) {
+     * the v2 format is active. */
+    if (use_v2_fmt) {
         matcher_set_format_v2(&m);
     }
     /* Hash3 enablement is a separate, adaptive decision. Only fires
      * on binary-like data (enable_hash4) where length-3 matches
      * actually help. On text/JSON it stays off to avoid regressions. */
-    if (opts->format_v2 && enable_hash4) {
+    if (use_v2_fmt && enable_hash4) {
         if (!matcher_enable_hash3(&m)) {
             matcher_free(&m);
             return VV_ERR_NOMEM;
@@ -1817,7 +1903,14 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
          * output. For small one-shot calls this avoids ~3 MB of wasted
          * allocation and page-faulting every call. */
         lit_cap = block_bound;
-        ent_cap = vva_bound(block_bound);
+        /* SPRINT 124 (latent-corruption fix): ent_buf is shared by Path A
+         * (SEQ, writes at ent_buf[0..]) and Path B (literal entropy,
+         * writes at ent_buf + ent_cap/2). SEQ output on weak blocks can
+         * reach vva_bound(braw) — with ent_cap == vva_bound the halves
+         * OVERLAP and Path B silently clobbers SEQ's tail before the
+         * winner is chosen. Size the buffer so each half holds a full
+         * vva_bound worth of output. */
+        ent_cap = 2 * vva_bound(block_bound);
         lit_buf = (uint8_t *)malloc(lit_cap);
         stripped = (uint8_t *)malloc(tcap);
         ent_buf = (uint8_t *)malloc(ent_cap);
@@ -1836,10 +1929,12 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
         memcpy(op, &bh, 4); op += 4;
     }
 
-    /* Format v2: when opts->format_v2 is set, encode with min_match=3.
+    /* Format v2 (explicit or adaptive): encode with min_match=3.
      * Produces 'T'-tagged ENTROPY blocks which only v2.33.0+ decoders
      * can read. Closes the real-binary compression gap vs gzip-9. */
-    int min_match = opts->format_v2 ? 3 : (int)VV_MIN_MATCH;
+    int min_match = use_v2_fmt ? 3 : (int)VV_MIN_MATCH;
+
+    scrub_wm_t wm = {0, 0, 0, 0, 0};
 
     while (remaining > 0) {
         size_t braw = remaining > VV_MAX_BLOCK_SIZE ? VV_MAX_BLOCK_SIZE : remaining;
@@ -1850,7 +1945,7 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
                                     tmp, tcap, lit_buf, lit_cap,
                                     stripped, ent_buf, ent_cap,
                                     op, dst_cap - (size_t)(op - dst), min_match,
-                                    opts->compat_v246_5_decoder);
+                                    opts->compat_v246_5_decoder, &wm);
         if (written == 0) {
             free(lit_buf); free(stripped); free(ent_buf);
             free(tmp); matcher_free(&m);
@@ -1861,11 +1956,19 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
     }
 
     /* Sprint 117: scrub plaintext-derived working buffers before free
-     * to prevent heap-residue leak (defense in depth). */
-    vv_secure_zero(tmp, tcap);
-    if (lit_buf)  vv_secure_zero(lit_buf, lit_cap);
-    if (stripped) vv_secure_zero(stripped, tcap);
-    if (ent_buf)  vv_secure_zero(ent_buf, ent_cap);
+     * to prevent heap-residue leak (defense in depth).
+     * SPRINT 124: scrub only up to each buffer's write watermark —
+     * bytes beyond it were never written and cannot hold plaintext. */
+    vv_secure_zero(tmp, wm.tmp < tcap ? wm.tmp : tcap);
+    if (lit_buf)  vv_secure_zero(lit_buf, wm.lit < lit_cap ? wm.lit : lit_cap);
+    if (stripped) vv_secure_zero(stripped, wm.stripped < tcap ? wm.stripped : tcap);
+    if (ent_buf) {
+        vv_secure_zero(ent_buf, wm.ent_front < ent_cap ? wm.ent_front : ent_cap);
+        size_t back_cap = ent_cap - ent_cap / 2;
+        if (wm.ent_back)
+            vv_secure_zero(ent_buf + ent_cap / 2,
+                           wm.ent_back < back_cap ? wm.ent_back : back_cap);
+    }
     free(lit_buf); free(stripped); free(ent_buf);
     free(tmp);
 
@@ -1986,8 +2089,13 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
     ctx->tmp     = (uint8_t *)malloc(ctx->tcap);
     ctx->lit_cap = VV_MAX_BLOCK_SIZE;
     ctx->lit_buf = (uint8_t *)malloc(ctx->lit_cap);
-    ctx->stripped = (uint8_t *)malloc(ctx->lit_cap);
-    ctx->ent_cap = vva_bound(VV_MAX_BLOCK_SIZE);
+    /* SPRINT 124: stripped tokens can slightly exceed the raw block
+     * size now that emit_block lets csz ∈ [braw, braw*9/8) reach the
+     * entropy stage — size like tmp, not like lit_buf. */
+    ctx->stripped = (uint8_t *)malloc(ctx->tcap);
+    /* SPRINT 124: 2× so Path A (front half) and Path B (back half)
+     * can never overlap — see the matching fix in vv_compress_inner. */
+    ctx->ent_cap = 2 * vva_bound(VV_MAX_BLOCK_SIZE);
     ctx->ent_buf = (uint8_t *)malloc(ctx->ent_cap);
 
     /* Source window = 2 × window_size so a full block of input can
@@ -2014,7 +2122,7 @@ void vv_cstream_destroy(vv_cstream_t *ctx) {
      * encrypted output. All are scrubbed to prevent heap-residue leak. */
     if (ctx->tmp)      vv_secure_zero(ctx->tmp, ctx->tcap);
     if (ctx->lit_buf)  vv_secure_zero(ctx->lit_buf, ctx->lit_cap);
-    if (ctx->stripped) vv_secure_zero(ctx->stripped, ctx->lit_cap);
+    if (ctx->stripped) vv_secure_zero(ctx->stripped, ctx->tcap);
     if (ctx->ent_buf)  vv_secure_zero(ctx->ent_buf, ctx->ent_cap);
     if (ctx->src_buf)  vv_secure_zero(ctx->src_buf, ctx->src_cap);
     free(ctx->tmp); free(ctx->lit_buf); free(ctx->stripped); free(ctx->ent_buf);
@@ -2168,7 +2276,8 @@ int vv_cstream_compress_chunk(vv_cstream_t *ctx,
                                      ctx->lit_buf, ctx->lit_cap,
                                      ctx->stripped, ctx->ent_buf, ctx->ent_cap,
                                      op, cap_left, stream_min_match,
-                                     ctx->opts.compat_v246_5_decoder);
+                                     ctx->opts.compat_v246_5_decoder,
+                                     NULL /* stream scrubs full caps at destroy */);
         if (block_sz == 0) return VV_ERR_OVERFLOW;
         op += block_sz; cap_left -= block_sz;
     }
