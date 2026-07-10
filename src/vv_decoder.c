@@ -195,8 +195,18 @@ decode_block_tokens_impl(
                 VV_PREFETCH(op + ll - off_raw);
         }
 
-        if (ll > 0)
+        /* SPRINT 125: wildcopy for the dominant ll <= 14 case. The loop
+         * guards reserve 48 bytes of readable input (ip < ip_safe; ip has
+         * advanced by only the 1 token byte since, as ll <= 14 implies no
+         * extension bytes) and 72 bytes of writable output (op < op_safe;
+         * op unchanged since entry), so one unconditional 16-byte copy is
+         * in-bounds and replaces memcpy's branchy variable-size dispatch.
+         * The extra bytes past ll are overwritten by the next copy. */
+        if (VV_LIKELY(ll <= 14)) {
+            memcpy(op, ip, 16);
+        } else {
             memcpy(op, ip, ll);
+        }
         ip += ll;
         op += ll;
 
@@ -278,8 +288,18 @@ decode_block_tokens_impl(
                 VV_PREFETCH(op + ll - off_raw);
         }
 
-        if (ll > 0)
+        /* SPRINT 125: wildcopy for the dominant ll <= 14 case. The loop
+         * guards reserve 48 bytes of readable input (ip < ip_safe; ip has
+         * advanced by only the 1 token byte since, as ll <= 14 implies no
+         * extension bytes) and 72 bytes of writable output (op < op_safe;
+         * op unchanged since entry), so one unconditional 16-byte copy is
+         * in-bounds and replaces memcpy's branchy variable-size dispatch.
+         * The extra bytes past ll are overwritten by the next copy. */
+        if (VV_LIKELY(ll <= 14)) {
+            memcpy(op, ip, 16);
+        } else {
             memcpy(op, ip, ll);
+        }
         ip += ll;
         op += ll;
 
