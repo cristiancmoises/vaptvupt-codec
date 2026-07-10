@@ -2,6 +2,60 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.61.1 — Sprint 125: fast-mode decode +55%, SEQ-decode hardening
+
+Decode-side performance and robustness. **Valid-stream output is
+byte-identical to v2.61.0** — the wire format is unchanged (version 1),
+and the changes rejected zero valid streams across the full validation
+sweep. This is an output-compatible, decoder-and-encoder-internal release.
+
+### Performance
+
+- **Fast-mode token loop: +55% decode.** The dominant `ll <= 14`
+  literal case now does one unconditional 16-byte wildcopy instead of
+  `memcpy`'s branchy variable-size dispatch. The loop's existing
+  safe-zone margins (48 bytes readable input, 72 bytes writable output)
+  already cover the 16-byte write. Measured 1540 → 2430 MB/s in-process
+  on a 13 MB mixed buffer, byte-identical output.
+- **tANS table build (encode + decode): hoisted per-symbol `nb_max` /
+  `low_count`** out of the 4096-slot fill loop into a 256-entry
+  precompute — ~16× fewer `ilog2` evaluations per table build (3–4
+  builds per block on each side). Baseline math unchanged.
+- **SEQ decode: fewer allocations and one less hot-loop branch.** The 4
+  per-block decode-table allocations are fused into 1; when a block has
+  no matches the ML/OF tables alias LL instead of being built and
+  zeroed (drops two 16 KB sentinel `memset`s). The per-sequence
+  symbol-range check is hoisted out of the critical path (see below).
+- **Encoder scratch:** the sequence buffer bound drops from 16 bytes
+  per token to a tight per-sequence bound (~3× less scratch per 1 MB
+  block), byte-identical output.
+
+### Security / robustness
+
+- **Stricter table validation, earlier.** Per-block table validation now
+  also verifies each ANS table's frequencies sum to `ANS_L` (4096),
+  rejecting structurally-invalid tANS tables up front rather than only
+  when a decode path happens to land on a bad slot. A corrupt underfull
+  header previously left stale scratch bytes in unfilled spread slots
+  whose "symbols" bypassed the old per-sequence bound check (found by
+  UBSan during this change: OOB index into `ll_extra[36]`); now closed.
+  `normalize_freq` produces `sum == ANS_L` on every valid stream, so no
+  valid input is rejected. The hoist makes the old per-sequence
+  `code >= VVA_*_CODES` branch tautological — same guarantee, one fewer
+  branch per sequence.
+- **Encoder fails closed on a truncated parse.** `parse_sequences` now
+  rejects a parse that exhausts its sequence capacity with tokens
+  remaining, and re-checks the cap after oversize-literal-run splits —
+  defense in depth against emitting a silently-truncated block.
+
+### Validation
+
+22/22 test suites under both `-O3 -flto` and
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; ratio gate
+zero regressions; 5,200 differential fuzz cases consistent (C vs Python
+reference); 27/27 negative-corpus cases; and an ASan+UBSan+LeakSanitizer
+sweep clean across 11 corpus files × 3 modes with byte-exact roundtrips.
+
 ## v2.61.0 — Sprint 124: encoder speed/ratio program + two latent-corruption fixes
 
 Head-to-head-driven optimization pass against zstd and lz4 (10-file corpus:

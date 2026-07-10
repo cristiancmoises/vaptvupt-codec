@@ -7,6 +7,13 @@ stands, per the project's "honesty over hype" rule.
 
 ## v2.61.0 head-to-head (measured 2026-07)
 
+> **v2.61.1 update (2026-07):** fast-mode (token-block) decode improved
+> ~55% — 1,540 → 2,430 MB/s in-process on a 13 MB mixed buffer — from a
+> 16-byte literal wildcopy in the token loop, with byte-identical output
+> and unchanged ratios. Balanced/extreme decode goes through the SEQ
+> path, which v2.61.1 does not measurably change, so the tables below
+> remain valid; only the `vv-fast` *decode* columns are now conservative.
+
 A second, independent measurement set for the v2.61.0 release (Sprint 124),
 taken with a different harness than the Silesia tables below: full
 head-to-head against zstd and lz4 including **decode** throughput, on an

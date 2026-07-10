@@ -1,7 +1,7 @@
 # VaptVupt Security Posture
 
-**Document version**: 1.9 (v2.61.0)
-**Codebase audited**: v2.61.0
+**Document version**: 2.0 (v2.61.1)
+**Codebase audited**: v2.61.1
 **License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
@@ -80,10 +80,11 @@ All three surfaces are covered by the audit campaign described below.
 | 11 | libFuzzer (differential decoder) | Sprint 111 | 0 (clean) |
 | 12 | Manual decode-path audit + ASan repro | v2.60.2 | 1 (phase-1 match-length OOB write — see advisory below) |
 
-**Total: 17 defects fixed, 14 distinct tools/techniques applied** (the
+**Total: 17 defects fixed, 15 distinct tools/techniques applied** (the
 v2.60.4 advisory added #13, downstream integration testing with exact-size
 buffers; the v2.61.0 advisory added #14, encoder-path exposure testing via
-policy widening — see below).
+policy widening; the v2.61.1 hardening note added #15, sanitizer-gated
+hot-path refactoring — see below).
 
 ### Advisory — v2.60.2: heap-buffer-overflow (OOB write) in AVX2 decode warmup
 
@@ -266,6 +267,53 @@ runs clean. Consumers should upgrade for reliability; no action is needed
 for existing archives (streams produced by prior default configurations are
 unaffected and decode unchanged).
 
+### Hardening — v2.61.1: earlier ANS-table validation + encoder fail-closed parse (no shipped defect)
+
+Two defense-in-depth changes to the untrusted-input decode surface and the
+encoder, both **logic hardening — not a memory-safety CVE in any prior
+release**:
+
+**1 — ANS table validation moved from per-sequence to per-block, and made
+stricter.** The SEQ decoder previously bounds-checked each decoded
+`ll_code`/`of_code`/`ml_code` against its table size once per sequence
+(the Sprint 109 fix, folded to one branch in Sprint 27). v2.61.1 replaces
+that with a single per-block validation at table-parse time that enforces
+two invariants: (a) no out-of-range symbol has nonzero frequency, and
+(b) each table's frequencies sum to exactly `ANS_L` (4096). Invariant (b)
+is new and closes an edge the per-sequence check reached only lazily: a
+corrupt *underfull* header (sum < 4096) leaves `spread_symbols`' unfilled
+slots holding stale scratch bytes, so the decode table can carry
+out-of-range "symbols" that invariant (a) alone cannot see. In all shipped
+releases the per-sequence branch still bounded every actual table access
+at decode time — the underfull-table case produced a clean
+`VVA_ERR_CORRUPT` when (and only when) a decode path landed on a bad slot.
+v2.61.1 rejects such tables up front, unconditionally, and removes the
+now-tautological per-sequence branch from the hot loop.
+`normalize_freq` guarantees `sum == ANS_L` on every valid stream, so no
+valid input is rejected (verified: ratio gate ± 0, 5,200/5,200
+differential, 27/27 negative corpus, byte-exact roundtrips).
+
+**Detection — technique #15, sanitizer-gated hot-path refactoring:** the
+underfull-table edge was caught by UBSan (`index 190 out of bounds for
+type 'uint8_t [36]'` in `test_dos_hang`) during validation of an
+intermediate version of this very change that had hoisted invariant (a)
+without invariant (b). The lesson is recorded as campaign technique #15:
+every hot-path refactor runs the full 22-suite under
+`-fsanitize=address,undefined -fno-sanitize-recover=all` *before* landing;
+the sanitizer gate converted a would-be OOB-read regression into a
+pre-commit finding and a stronger final check.
+
+**2 — encoder fails closed on truncated sequence parses.**
+`parse_sequences` now rejects a parse that exhausts its sequence-array
+capacity with tokens remaining (previously it silently truncated — benign
+only because the old capacity bound made truncation unreachable), and
+re-checks the capacity after oversize-literal-run splits. Paired with a
+~3× tighter scratch bound, the invariant is now enforced rather than
+assumed. Encoder-side, trusted input per Section 1; hardening only.
+
+Neither change alters the wire format; valid-stream decode output is
+byte-identical to v2.61.0.
+
 ---
 
 ## 4. Permanent Audit Infrastructure
@@ -369,7 +417,7 @@ The decoder is hardened against:
 - **Match-count overflow**: SPRINT 90 fix bounds `match_count` against `dst_cap / min_match`. Fixed before this would have been exploitable.
 - **Infinite loop on degenerate ANS state**: SPRINT 89 fix adds bounded iteration counter (`max_iters = total_lits + match_count + 16`). Returns `VVA_ERR_CORRUPT` instead of hanging.
 - **Huge literal-run extension lengths**: SPRINT 109 fix bounds-checks LL extension before memcpy.
-- **OOB symbol codes**: SPRINT 109 fix bounds-checks `ll_code`, `of_code`, `ml_code` against their respective tables.
+- **OOB symbol codes**: SPRINT 109 fix bounds-checked `ll_code`, `of_code`, `ml_code` per sequence; since v2.61.1 the same guarantee is enforced once per block at table-parse time (symbol range + frequency sum == 4096), which also rejects underfull tables outright (see the v2.61.1 hardening note).
 - **NULL deref on edge-case sequences**: SPRINT 109 fix always allocates all 3 ANS decode tables.
 - **4-stream Huffman crafted attacks**: Sprint 105 hardened `vvh_decode4` against 6 distinct DoS patterns.
 

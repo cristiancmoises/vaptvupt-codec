@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.61.0. License: this repository (the vaptvupt-codec library and
+Version 2.61.1. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
@@ -56,6 +56,12 @@ Where each side wins — stated plainly:
 v2.61.0 also fixed two latent encoder bugs (zero-match SEQ blocks emitted no
 LL bitstream; a Path A/B scratch-buffer overlap could corrupt block output
 before winner selection) — see [CHANGELOG.md](CHANGELOG.md).
+
+v2.61.1 raises fast-mode decode ~55% (1540 → 2430 MB/s in-process on a
+13 MB mixed buffer) via a 16-byte literal wildcopy in the token loop, with
+byte-identical output; balanced/extreme decode is unchanged. It also
+hardens the SEQ decoder's table validation — see
+[CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
 
 ### v2.52-era Silesia measurement
 
@@ -274,8 +280,11 @@ bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
 
 Corrupt-input handling is checked under AddressSanitizer and
 UndefinedBehaviorSanitizer; releases that touch the decoder run a
-corrupt-input sweep (12,000+ cases) clean under both. The build is
-`-Wall -Wextra -Werror`.
+corrupt-input sweep (12,000+ cases) clean under both. The v2.61.1 release
+was additionally validated with the full 22-suite run under
+`-fsanitize=address,undefined -fno-sanitize-recover=all` and an
+ASan+UBSan+LeakSanitizer roundtrip sweep (11 corpus files × 3 modes,
+byte-exact, no leaks). The build is `-Wall -Wextra -Werror`.
 
 Selected code is additionally formally verified with CBMC (`make verify`, or
 `sh verification/verify.sh`): for all inputs up to a bounded size, the x86 and
