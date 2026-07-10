@@ -5,7 +5,218 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
-## Method
+## v2.61.0 head-to-head (measured 2026-07)
+
+A second, independent measurement set for the v2.61.0 release (Sprint 124),
+taken with a different harness than the Silesia tables below: full
+head-to-head against zstd and lz4 including **decode** throughput, on an
+11-file mixed corpus.
+
+### Method
+
+- Corpus: deterministic seeded generators plus real repo docs/source —
+  `access.log` (Apache-style, 1.9 MB), `data.json` (API records, 2.7 MB),
+  `table.csv` (1.4 MB), `catalog.xml` (1.3 MB), `text.md` (concatenated
+  project docs, 408 KB), `source.c` (concatenated C sources, 333 KB),
+  `program.bin` (ELF, 94 KB), `sensors.bin` (float sensor records, 1.28 MB),
+  `structs.bin` (24-byte packed records, 1.2 MB), `random.bin` (1 MiB
+  urandom-like), `repeat.txt` (1 MiB repeated sentence).
+- Timing: CLI-subprocess wall clock, best of 3 runs per cell (so small files
+  carry process-start overhead **for every codec equally**). Every cell's
+  roundtrip was verified byte-exact.
+- **Environment:** single-core x86-64 with AVX2, gcc 13 `-O3 -flto`;
+  zstd 1.5.6 (`--single-thread`), lz4 1.10.0; VaptVupt v2.61.0 default
+  builds. Ratios are raw / compressed; higher is better.
+
+### Results (size in bytes; ratio; compress MB/s; decompress MB/s)
+
+```
+access.log (1,891,394)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        434,321     4.355    173.8    374.8
+  vv-balanced    299,185     6.322     72.4    441.8
+  vv-extreme     242,132     7.811      1.1    534.6
+  zstd-1         286,944     6.592    123.1    222.2
+  zstd-3         291,162     6.496    118.6    310.0
+  zstd-9         229,599     8.238     48.8    480.2
+  zstd-19        187,973    10.062      3.6    444.2
+  lz4-1          464,689     4.070    260.2    432.2
+  lz4-9          304,586     6.210     49.8    424.0
+
+catalog.xml (1,267,065)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        238,497     5.313    177.8    404.0
+  vv-balanced    113,183    11.195     65.0    260.0
+  vv-extreme     111,940    11.319      1.3    488.8
+  zstd-1         111,036    11.411    367.3    376.3
+  zstd-3         106,500    11.897    123.3    203.0
+  zstd-9         100,858    12.563     59.4    355.6
+  zstd-19         83,742    15.131      2.4    380.5
+  lz4-1          219,179     5.781    354.6    509.4
+  lz4-9          188,030     6.739     76.8    377.5
+
+data.json (2,745,922)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        863,744     3.179    160.1    684.0
+  vv-balanced    505,274     5.435     70.3    509.2
+  vv-extreme     495,058     5.547      1.3    550.4
+  zstd-1         500,966     5.481    243.3    284.0
+  zstd-3         523,890     5.241    209.2    663.7
+  zstd-9         473,364     5.801     62.7    521.6
+  zstd-19        414,384     6.627      2.6    611.5
+  lz4-1          950,614     2.889    437.4    475.3
+  lz4-9          673,569     4.077     48.7    524.5
+
+program.bin (93,832)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast         44,224     2.122     34.7    101.6
+  vv-balanced     30,884     3.038     13.8     40.4
+  vv-extreme      31,242     3.003      3.9     84.0
+  zstd-1          34,203     2.743     65.8     72.2
+  zstd-3          30,701     3.056     40.2     39.2
+  zstd-9          26,957     3.481     18.5     55.6
+  zstd-19         24,377     3.849      3.1     73.1
+  lz4-1           44,782     2.095     76.4     46.7
+  lz4-9           38,634     2.429     18.5     34.9
+
+random.bin (1,048,576)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,048,608     1.000    188.2    253.7
+  vv-balanced  1,048,608     1.000    128.8    228.8
+  vv-extreme   1,048,608     1.000    121.2    240.1
+  zstd-1       1,048,614     1.000    196.3    225.6
+  zstd-3       1,048,613     1.000    223.2    480.7
+  zstd-9       1,048,613     1.000    147.9    220.8
+  zstd-19      1,048,613     1.000     19.7    487.0
+  lz4-1        1,048,595     1.000    438.0    257.8
+  lz4-9        1,048,595     1.000     46.4    294.6
+
+repeat.txt (1,048,576)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast          4,243   247.131    460.5    337.5
+  vv-balanced        165  6355.006    179.5    299.8
+  vv-extreme         567  1849.340    109.0    268.9
+  zstd-1             156  6721.641    242.7    186.2
+  zstd-3             155  6765.006    153.0    202.0
+  zstd-9             155  6765.006     74.3    219.8
+  zstd-19            150  6990.507     47.9    263.3
+  lz4-1            4,185   250.556    254.7    318.7
+  lz4-9            4,185   250.556    419.4    180.5
+
+sensors.bin (1,280,000)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,280,036     1.000    164.3    274.9
+  vv-balanced    915,831     1.398     14.5    193.0
+  vv-extreme     927,147     1.381     13.4    167.3
+  zstd-1       1,087,992     1.176    262.4    417.3
+  zstd-3       1,087,991     1.176    304.3    325.9
+  zstd-9       1,087,619     1.177    103.2    317.8
+  zstd-19        871,309     1.469      8.2    217.2
+  lz4-1        1,280,019     1.000    294.6    244.1
+  lz4-9        1,250,875     1.023     46.9    327.3
+
+source.c (333,472)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        109,425     3.047     62.8    115.1
+  vv-balanced     84,455     3.949     27.9    121.1
+  vv-extreme      80,456     4.145      2.9    186.8
+  zstd-1          90,903     3.668    114.7    139.6
+  zstd-3          82,841     4.025     51.1     75.1
+  zstd-9          74,615     4.469     24.7    120.7
+  zstd-19         68,946     4.837      3.6    144.8
+  lz4-1          127,171     2.622    153.6    139.7
+  lz4-9           94,159     3.542     26.5     86.6
+
+structs.bin (1,200,000)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,057,946     1.134     71.5    416.8
+  vv-balanced    697,961     1.719     16.1    294.6
+  vv-extreme     697,961     1.719     16.1    256.6
+  zstd-1       1,003,532     1.196    198.5    222.8
+  zstd-3         752,116     1.595     78.8    190.4
+  zstd-9         749,835     1.600     42.2    150.0
+  zstd-19        630,874     1.902      6.9    272.6
+  lz4-1        1,200,019     1.000    384.0    236.8
+  lz4-9        1,052,443     1.140     50.0    355.1
+
+table.csv (1,368,615)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        619,489     2.209     96.7    303.4
+  vv-balanced    426,402     3.210     29.6    343.0
+  vv-extreme     377,650     3.624      1.3    297.3
+  zstd-1         420,084     3.258    168.5    177.7
+  zstd-3         429,180     3.189     89.4    426.8
+  zstd-9         359,076     3.811     41.1    369.1
+  zstd-19        339,121     4.036      2.6    278.5
+  lz4-1          666,555     2.053    203.3    331.0
+  lz4-9          471,686     2.902     25.0    367.0
+
+text.md (408,090)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        185,033     2.205     57.5    137.9
+  vv-balanced    146,800     2.780     24.1    155.2
+  vv-extreme     140,837     2.898      4.2    220.2
+  zstd-1         163,197     2.501    102.8    137.9
+  zstd-3         142,357     2.867     81.8    159.7
+  zstd-9         130,767     3.121     28.3    121.0
+  zstd-19        122,958     3.319      5.2    170.6
+  lz4-1          227,798     1.791    181.0    236.2
+  lz4-9          164,865     2.475     39.1    120.2
+```
+
+### Reading the table
+
+Where VaptVupt wins:
+
+- **Balanced beats zstd-3 on ratio** on JSON (5.435 vs 5.241), CSV (3.210 vs
+  3.189), sensor floats (1.398 vs 1.176) and packed record structs (1.719 vs
+  1.595), and effectively ties it on logs (6.322 vs 6.496, −2.7%). The
+  sensors/structs wins come from v2.61.0's adaptive format-v2 (min_match=3
+  auto-enabled on binary-detected input).
+- **Extreme beats zstd-3 on ratio broadly** — logs 7.811 vs 6.496, CSV 3.624
+  vs 3.189, JSON 5.547 vs 5.241, sensors 1.381 vs 1.176, structs 1.719 vs
+  1.595 — and lands between zstd-3 and zstd-9 on text/source.
+- **vv-fast beats lz4-1 on ratio nearly everywhere** (logs 4.355 vs 4.070,
+  JSON 3.179 vs 2.889, text 2.205 vs 1.791, source 3.047 vs 2.622, CSV 2.209
+  vs 2.053, structs 1.134 vs 1.000; xml is the exception, 5.313 vs 5.781).
+- **Decode is competitive and often faster than zstd at equal ratio** —
+  e.g. data.json vv-fast decodes at 684 MB/s; access.log vv-extreme at
+  535 MB/s vs zstd-9's 480 at a nearby ratio.
+- **The old incompressible-input collapse is fixed**: random.bin encoded at
+  ~31 MB/s in balanced mode before v2.61.0; it is now 120–190 MB/s across
+  all modes (default-on skip acceleration + early raw-store bail).
+
+Where VaptVupt loses — stated plainly:
+
+- **zstd-3 still wins ratio on xml/text/source by 2–6%**, and wins text-class
+  compress speed by 1.5–4×. zstd-1's compress speed is out of reach for the
+  entropy-coding modes.
+- **zstd-9 and zstd-19 win the max-ratio tier** on nearly every file; that
+  remains a different operating point.
+- **lz4 wins raw encode speed**, as designed; vv-fast trades that for ratio.
+- **vv-extreme's 1–4 MB/s text-class encode** is the price of its whole-block
+  optimal parse. On binary-detected input, v2.61.0 routes extreme to the
+  rep-aware deep greedy parser instead (the optimal DP has no rep-offset
+  model), which is why extreme's sensors/structs cells show greedy-class
+  speeds (13–16 MB/s).
+- **repeat.txt extreme (567 B) is worse than balanced (165 B)** — a known
+  optimal-parser quirk on trivial repetition, part of the documented
+  extreme-vs-balanced contract-violation class tracked by the ratio gate.
+
+Per-mode behavior changes in v2.61.0 (auto-accel defaults, adaptive
+format-v2, extreme's binary routing) are described in `CHANGELOG.md`.
+
+## Silesia-era measurement set (v2.52.4, measured 2026-05)
+
+The sections from here down are the earlier, wider measurement set (Silesia
+plus real logs/CSV/binaries, including gzip and xz). They are retained
+unchanged: the corpus is different from the v2.61.0 set above, so the two are
+not directly comparable, but the qualitative picture (strong on
+text/structured, weak on the max-ratio tier, encode speed the weak axis)
+still holds — with the v2.61.0 exceptions noted above (binary record data
+now wins vs zstd-3; incompressible-input encode speed fixed).
+
+### Method
 
 - Tool: `bench/competitive.py FILE...` (compress ratio = raw / compressed).
 - Each codec compresses the same bytes; the CLI is invoked the same way per
@@ -13,7 +224,9 @@ stands, per the project's "honesty over hype" rule.
   suite (`make test`), not here.
 - Ratios are `raw / compressed_size`; **higher is better**.
 - `vv-*-v2` is VaptVupt with `--format-v2` (min_match=3, hash3 path); it is
-  byte-compatible only with v2.33.0+ decoders.
+  byte-compatible only with v2.33.0+ decoders. (Since v2.61.0 this format is
+  also auto-enabled on binary-detected input; these v2.52.4 tables predate
+  that.)
 
 **Environment:** single-core Intel Xeon @ 2.80 GHz, gcc 13, AVX2; gzip 1.12,
 zstd 1.5.5, lz4 1.9.4, xz 5.4.5. VaptVupt v2.52.4 (`make` build, md5
@@ -191,6 +404,11 @@ the full extreme optimal-parse cost.
 
 ## Position-skip acceleration (`-A` / `--accel`)
 
+*(Update, v2.61.0: `-A 0` now means **auto** — fast mode gets accel 2,
+balanced/extreme get accel 1 with the stride capped at 8, plus an early
+raw-store bail on matchless blocks. The paragraph below describes the
+pre-v2.61.0 opt-in behavior; explicit `-A N` values are honored unchanged.)*
+
 `-A N` (0..64; 0 = off, the default) enables lz4-style position skipping: after
 a run of consecutive no-match positions the parser advances by more than one
 byte, skipping the per-position hash/insert work on unmatchable regions. It is
@@ -245,6 +463,13 @@ measured on a non-representative file subset. Fuller measurement on the full
 Silesia corpus shows it is net-negative there. See CHANGELOG v2.60.1.)
 
 ## Encode-speed frontier (measured; why "superfast" is not a tuning win)
+
+*(Update, v2.61.0: much of this frontier moved. Default-on skip acceleration,
+the early raw-store bail, the two-finalist literal race, the O(1) tANS symbol
+encoder, and the 8-byte match-extension stride together raised balanced
+encode 30–100% on compressible input and 4–6× on incompressible input — see
+the v2.61.0 table at the top. The analysis below is retained as the v2.52.4
+baseline that motivated that work.)*
 
 Encode speed is the codec's weak axis. Two levers were measured directly, and
 both fail to close the gap to zstd-1 (130 MB/s) / lz4 (247 MB/s):

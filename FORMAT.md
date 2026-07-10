@@ -182,6 +182,19 @@ and the non-entropy block types for full compatibility with current
 encoder output, leaving the legacy tags as a "decode-old-files"
 extension.
 
+**Adaptive `'T'` selection (encoder policy, v2.61.0+)**: Since
+v2.61.0 the reference encoder *auto-selects* `'T'` (SEQ_V2,
+min_match=3) for binary-detected input in balanced and extreme
+modes — previously `'T'` was emitted only under the explicit
+`format_v2` option. Consequence for implementers: a decoder MUST
+support `'T'` to decode default v2.61.0+ output; supporting only
+`'S'` is no longer sufficient for current-encoder compatibility.
+Encoders needing output readable by pre-v2.33.0 decoders set
+`vv_options_t::compat_v246_5_decoder`, which restricts selection to
+`'S'` (and also suppresses `lit_fmt = 4`, see §3.4.1). This is an
+encoder *policy* change only — the wire format is unchanged and the
+frame `version` field remains 1.
+
 Tags `H`, `A`, `I`, `C` all share a common framing:
 
 ```

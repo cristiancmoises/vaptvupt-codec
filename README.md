@@ -5,16 +5,63 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.60.3. License: GPL-3.0-or-later (commercial license available:
-sac@securityops.co).
+Version 2.61.0. License: this repository (the vaptvupt-codec library and
+CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
+dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
 ## Where it stands
 
-Numbers are measured on a single-core Intel Xeon @ 2.80 GHz (gcc 13, AVX2)
-against gzip 1.12, zstd 1.5.5, lz4 1.9.4, xz 5.4.5. Full data and the
-reproduction command are in [bench/COMPARISON.md](bench/COMPARISON.md).
+### v2.61.0 head-to-head (measured 2026-07)
 
-Ratio (raw / compressed, higher is better):
+Single-core AVX2 x86-64, gcc 13 `-O3 -flto`, zstd 1.5.6 `--single-thread`,
+lz4 1.10.0. CLI subprocess timing, best of 3, 11-file mixed corpus
+(logs/JSON/CSV/XML/markdown/source/ELF/float-records/struct-records plus
+random and pure-repetition controls).
+Full data and methodology in [bench/COMPARISON.md](bench/COMPARISON.md).
+Cells are `ratio @ encode/decode MB/s`; ratio = raw / compressed, higher is
+better.
+
+| file | vv-balanced | vv-extreme | zstd-3 | zstd-9 | lz4-1 |
+|---|---|---|---|---|---|
+| access.log | 6.322 @72/442 | 7.811 @1.1/535 | 6.496 @119/310 | 8.238 @49/480 | 4.070 @260/432 |
+| data.json | **5.435** @70/509 | 5.547 @1.3/550 | 5.241 @209/664 | 5.801 @63/522 | 2.889 @437/475 |
+| table.csv | **3.210** @30/343 | 3.624 @1.3/297 | 3.189 @89/427 | 3.811 @41/369 | 2.053 @203/331 |
+| catalog.xml | 11.195 @65/260 | — | 11.897 @123/203 | — | — |
+| text.md | 2.780 @24/155 | 2.898 @4.2/220 | 2.867 @82/160 | — | — |
+| sensors.bin (float records) | **1.398** @15/193 | — | 1.176 @304/326 | — | — |
+| structs.bin (24-B records) | **1.719** @16/295 | — | 1.595 @79/190 | 1.600 @42/150 | — |
+
+Where each side wins — stated plainly:
+
+- `balanced` beats zstd-3 on ratio for JSON, CSV, and record-style binary
+  (sensors 1.398 vs 1.176, +19%; structs 1.719 vs 1.595, +8%; structs even
+  beats zstd-9's 1.600) and roughly ties it on logs.
+- zstd-3 still wins xml/text/source ratio by 2–6%, and remains 1.5–4×
+  faster at *compressing* text-family input.
+- zstd-19 keeps the maximum-ratio crown on record binary (sensors 1.469,
+  structs 1.902) at single-digit MB/s — `balanced` gets most of the way
+  there at 2× its speed.
+- `extreme` beats zstd-3 broadly but does not catch zstd-9/zstd-19 on text;
+  it targets ratio, not speed (≈1 MB/s on its optimal-parse path).
+- `fast` beats lz4-1 on ratio on 7 of the 11 corpus files (e.g. access.log
+  4.355 @174/375 vs 4.070 @260/432), ties the two incompressible controls,
+  and loses on xml and pure repetition — while lz4 remains 1.5–4× faster
+  at compressing.
+- Decode is competitive across the board and often faster than zstd at the
+  same ratio.
+- Incompressible input now encodes at 120–190+ MB/s (was ~31 before
+  v2.61.0's default skip acceleration and early-RAW bail); zstd-1 does 196,
+  lz4-1 438 on the same 1 MiB random file.
+
+v2.61.0 also fixed two latent encoder bugs (zero-match SEQ blocks emitted no
+LL bitstream; a Path A/B scratch-buffer overlap could corrupt block output
+before winner selection) — see [CHANGELOG.md](CHANGELOG.md).
+
+### v2.52-era Silesia measurement
+
+Earlier numbers on the Silesia corpus, measured on a single-core Intel Xeon
+@ 2.80 GHz (gcc 13, AVX2) against gzip 1.12, zstd 1.5.5, lz4 1.9.4, xz 5.4.5
+(kept for continuity; see [bench/COMPARISON.md](bench/COMPARISON.md)):
 
 | file | gzip-9 | zstd-3 | zstd-19 | xz-9 | vv-extreme |
 |---|---|---|---|---|---|
@@ -34,7 +81,8 @@ Ratio (raw / compressed, higher is better):
   so the binary-ratio wins above need no manual architecture flag.
 - zstd-19 and xz-9 win on binary ratio overall; vv does not target that tier.
 
-Throughput, dickens, in-process best-of-7 (MB/s):
+Throughput, dickens, in-process best-of-7 (MB/s, v2.52-era — predates the
+v2.61.0 encoder speed work):
 
 | codec | ratio | encode | decode |
 |---|---|---|---|
@@ -45,11 +93,11 @@ Throughput, dickens, in-process best-of-7 (MB/s):
 | vv-balanced | 2.647 | 10 | 410 |
 | vv-extreme | 2.992 | 0.3 | 470 |
 
-Decode is competitive: `extreme` decode (~470 MB/s) is on par with zstd-1
-while compressing better. Encode is the weak axis — `balanced` encodes
-roughly 14x slower than zstd-1 because it walks a depth-24 match chain to buy
-the ratio above; that tradeoff is documented and is not a free lever to
-recover (CHANGELOG v2.53.3).
+Decode is competitive: `extreme` decode is on par with zstd-1 while
+compressing better. Encode remains the weaker axis — `balanced` is typically
+1.5–4× slower than zstd-3 on text because it walks a depth-24 match chain to
+buy the ratio above — but since v2.61.0 it is no longer pathological on
+incompressible or record-style input (see the head-to-head table above).
 
 ## Build
 
@@ -109,27 +157,43 @@ any decoder; `-D 0` is byte-identical to the mode default. Measured on dickens
 | 48 | 2.665 | 7.7 |
 | 128 | 2.670 | 5.4 |
 
-Returns diminish past `-D 48`. Note the honest limit: encode speed is the
-codec's weak axis and is bound by per-position overhead, not chain depth —
-even `-m fast -D 1` reaches only ~79 MB/s (vs zstd-1 at ~130 and lz4 at ~247).
-Decode is competitive (vv-extreme ≈ zstd-1). See `bench/COMPARISON.md`.
+Returns diminish past `-D 48`. Note the honest limit (v2.60-era numbers,
+before the v2.61.0 speed work): encode speed is bound by per-position
+overhead, not chain depth — `-m fast -D 1` reached ~79 MB/s (vs zstd-1 at
+~130 and lz4 at ~247). v2.61.0 narrows but does not close that gap on
+compressible text. Decode is competitive (vv-extreme ≈ zstd-1). See
+`bench/COMPARISON.md`.
 
-`-A N` / `--accel N` (0..64; 0 = off, the default) enables lz4-style
-position-skip acceleration: after a run of consecutive no-match positions the
-parser advances by more than one byte, skipping the hash/insert work on
-unmatchable regions. It is opt-in (default `0` is byte-identical to prior
-releases), most useful with `-m fast`, and its output is decodable by any
-decoder. On incompressible or already-compressed input the speedup is large;
-on compressible input the cost is a small ratio loss. Measured (fast mode):
+`-A N` / `--accel N` (0..64) controls lz4-style position-skip acceleration:
+after a run of consecutive no-match positions the parser advances by more
+than one byte, skipping the hash/insert work on unmatchable regions.
+**Since v2.61.0 the default `0` means auto**: fast mode uses ramp factor 2,
+balanced/extreme use 1 with the stride capped at 8; the ramp resets on every
+match, so compressible regions are parsed exactly as before. An explicit
+`-A` value is honored unchanged. The encoder also stores a block raw
+immediately when 128 KB pass without a single match (early-RAW bail),
+instead of finishing a doomed parse. Output remains decodable by any
+decoder. On incompressible or already-compressed input the speedup is large
+(~31 → 120–190+ MB/s); on compressible input the auto setting's ratio cost
+is negligible-to-zero (the ratio gate holds at ±0 bytes). Measured before
+the new default, in fast mode (`-A 0` here is the old hard-off):
 
-| input | `-A 0` | `-A 8` | `-A 32` |
+| input | `-A 0` (old off) | `-A 8` | `-A 32` |
 |---|---|---|---|
 | random 8 MiB | 1.000 @ 60 MB/s | 1.000 @ 547 MB/s | 1.000 @ 569 MB/s |
 | gzip'd text | 1.000 @ 53 MB/s | 1.000 @ 500 MB/s | 1.000 @ 516 MB/s |
 | dickens (text) | 1.992 @ 69 MB/s | 1.988 @ 68 MB/s | 1.930 @ 72 MB/s |
 
-Use a moderate `-A 8` for mixed/already-compressed data; leave it off (`0`) for
-normal compressible input where the default parse already skips via matches.
+A larger explicit value (e.g. `-A 8`+) remains useful with `-m fast` on
+mixed/already-compressed data where maximum skip throughput matters.
+
+Format v2 is now adaptive: since v2.61.0, balanced and extreme auto-enable
+`--format-v2` (min_match=3, `'T'` entropy blocks) when the input is detected
+as binary — measured +19% ratio on float-record data and +8% on struct
+records. Output produced this way requires a v2.33.0+ decoder; library users
+who must stay readable by older decoders can set
+`vv_options_t::compat_v246_5_decoder`, which suppresses the auto-enable (and
+lit_fmt=4). Explicit `--format-v2` still forces min_match=3 for any input.
 
 `--no-rep` disables rep-match probing in the parser. In fast mode (which has no
 entropy stage, so a rep match's short-offset code is not actually cheaper) the
@@ -248,5 +312,7 @@ verification/ CBMC formal-verification harnesses for the BCJ filters
 
 ## License
 
-GPL-3.0-or-later. A commercial license is available for use the GPL does not
+This repository — the vaptvupt-codec library and CLI — is licensed
+GPL-3.0-or-later. The VaptVupt tool built on this codec (formerly Zupt) is
+dual-licensed: AGPL-3.0 or a commercial license for uses the AGPL does not
 permit; contact sac@securityops.co. "In Code We Trust."

@@ -1,8 +1,8 @@
 # VaptVupt Security Posture
 
-**Document version**: 1.8 (v2.60.4)
-**Codebase audited**: v2.60.4
-**License**: GPL-3.0-or-later
+**Document version**: 1.9 (v2.61.0)
+**Codebase audited**: v2.61.0
+**License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
 
@@ -80,7 +80,10 @@ All three surfaces are covered by the audit campaign described below.
 | 11 | libFuzzer (differential decoder) | Sprint 111 | 0 (clean) |
 | 12 | Manual decode-path audit + ASan repro | v2.60.2 | 1 (phase-1 match-length OOB write — see advisory below) |
 
-**Total: 15 defects fixed, 13 distinct tools/techniques applied.**
+**Total: 17 defects fixed, 14 distinct tools/techniques applied** (the
+v2.60.4 advisory added #13, downstream integration testing with exact-size
+buffers; the v2.61.0 advisory added #14, encoder-path exposure testing via
+policy widening — see below).
 
 ### Advisory — v2.60.2: heap-buffer-overflow (OOB write) in AVX2 decode warmup
 
@@ -209,6 +212,59 @@ SIMD store *width* (including any rounded-up tail store) against the tightest
 legal output buffer, not only the decoded match/literal *lengths*; and the
 first regression test (which covered only short matches) missed the `n > 32`
 variant that a downstream consumer's test caught.
+
+### Advisory — v2.61.0: two latent encoder-side correctness defects (no memory-unsafety)
+
+**Severity:** moderate (data integrity — encoder could emit streams that fail
+to decode or carry corrupted block payloads). **Not** attacker-exploitable
+memory-unsafety: both defects are encoder logic operating on the caller's own
+input; the decoder's bounds checks reject the malformed output cleanly
+(`VVA_ERR_CORRUPT`). **Affected:** all releases carrying the SEQ entropy path,
+in configurations that could reach the trigger conditions (see below —
+default configurations of prior releases could not).
+
+**Defect 1 — zero-match SEQ blocks omitted the LL bitstream.** In
+`vva_encode_sequences_impl` the entire sequence-bitstream write — including
+the LL (literal-run-length) codes — sat inside `if (match_count > 0)`. A
+block whose token stream contains no matches at all (a single pure literal
+run) wrote the LL table header but **no bitstream**, while the decoder
+unconditionally decodes one LL code per sequence: it read from an empty
+stream and failed (or, for other state values, could have produced short
+output). In prior releases the case was unreachable *by construction* —
+`emit_block` sent every token stream with `csz >= braw` straight to RAW
+storage, and a zero-match stream always satisfies that — so no shipped
+stream is affected. Sprint 124's relaxed entropy gate (which lets
+low-match blocks reach the entropy stage, where the ratio win on
+struct-of-floats data lives) made it reachable and immediately visible: the
+BCJ roundtrip suite failed 190/5576 cases. The LL bitstream is now written
+whenever `nseq > 0`, with ML/OF work still gated per-sequence.
+
+**Defect 2 — Path B could clobber Path A's output before winner selection.**
+`emit_block` hands both candidate encoders one shared scratch buffer:
+Path A (SEQ) writes at `ent_buf[0..]`, Path B (literal-only entropy) at
+`ent_buf + ent_cap/2`. SEQ output on weak blocks can legitimately reach
+`vva_bound(braw)` — but `ent_cap` *was* `vva_bound(braw)`, so the two halves
+overlapped exactly when SEQ was weak, which is the only condition under
+which Path B runs. If selection then chose SEQ, the emitted block carried
+bytes Path B had overwritten. Reachability in prior releases required a
+block where SEQ output exceeded `ent_cap/2` *and* still won selection —
+rare but not excluded. `ent_cap` is now `2 × vva_bound`; the streaming
+context's `stripped` buffer was likewise resized (`lit_cap` → `tcap`) to
+cover token streams that may now slightly exceed the raw block size.
+
+**Detection:** the Sprint 124 benchmark-driven encoder changes made defect 1
+deterministic in `tests/test_bcj.c` (190 failing roundtrips); a minimal
+repro harness and an instrumented-decoder bisection localized both. This is
+technique #14 in the campaign: policy changes that widen an encoder path's
+input domain double as *exposure testing* for latent bugs in that path.
+
+**Regression:** the BCJ suite (5,576/5,576), the full 22-suite `make test`,
+the ratio gate (± 0), and the 5,200-case differential fuzzer all pass
+post-fix; a 20,000-iteration randomized roundtrip sweep over the trigger
+class (mostly-incompressible 8-16 KiB inputs with sprinkled opcode words)
+runs clean. Consumers should upgrade for reliability; no action is needed
+for existing archives (streams produced by prior default configurations are
+unaffected and decode unchanged).
 
 ---
 

@@ -7,7 +7,8 @@ construction). It covers the API, the build, the flags that matter, and the
 threat-model boundary. Numbers here point to measured data, not headline
 claims — see `bench/COMPARISON.md` for the current full-Silesia measurement.
 
-License: GPL-3.0-or-later (commercial option: sac@securityops.co).
+License: this codec library is GPL-3.0-or-later; the VaptVupt tool (formerly
+Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
 
 ---
 
@@ -29,10 +30,12 @@ License: GPL-3.0-or-later (commercial option: sac@securityops.co).
    `VV_DECOMPRESS_SKIP_CHECKSUM` on decode for the full saving. Only do this
    when an outer AEAD provides integrity — see the threat model below.
 
-4. **Consider `opts.format_v2 = 1` for binary-heavy data.** It improves binary
-   ratio with no format-compatibility risk (v2-aware decoders read v2 frames
-   transparently). It is not a universal win — on some text it is slightly
-   worse. Measure per data class and enable it only where it helps.
+4. **Binary-heavy data gets `format_v2` automatically since v2.61.0.** The
+   encoder auto-enables min_match=3 ('T' blocks) for binary-detected input in
+   balanced/extreme, where it is a measured ratio win; text keeps 'S'. You
+   only need `opts.format_v2 = 1` to *force* it for data the detector
+   misses, and `opts.compat_v246_5_decoder = 1` to *suppress* it when your
+   decode side may be older than v2.33.0. Measure per data class.
 
 5. **Treat any non-OK decode return as a frame-level reject.** Do not attempt
    recovery inside the codec boundary. Propagate the error to the host's
@@ -50,7 +53,7 @@ vv_options_t opts;
 vv_default_options(&opts);
 opts.mode     = VV_MODE_BALANCED;   /* ULTRA_FAST | BALANCED | EXTREME      */
 opts.checksum = 0;                  /* outer AEAD authenticates the bytes   */
-/* opts.format_v2  = 1; */          /* optional: binary-heavy data          */
+/* opts.format_v2  = 1; */          /* force v2; auto for binary since v2.61 */
 /* opts.filter_auto = 1; */         /* optional: auto x86/ARM64 BCJ on ELF  */
 
 int64_t n = vv_compress(src, src_len, dst, dst_cap, &opts);
