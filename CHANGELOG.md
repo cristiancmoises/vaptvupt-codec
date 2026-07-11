@@ -2,6 +2,57 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.63.0 — Sprint 128: repeat-offset pricing in the optimal parser
+
+Extreme-mode ratio release. Balanced/fast output is unchanged; the wire
+format stays version 1 and every stream remains decodable by v2.33.0+
+decoders.
+
+The optimal parser's repeat-offset handling was dead code: its rep
+probes and rep pricing read the matcher's rep state, which only the
+greedy parser updates — in an all-extreme frame it stayed {0,0,0}
+forever. It was also the wrong state to consult: the wire's rep history
+is per-block and path-dependent (the SEQ encoder and decoder both reset
+it at each block and update it per emitted sequence).
+
+The DP now threads the wire-exact rep state through the parse:
+
+- Each position stores the rep history of the best path reaching it
+  (the zstd-btopt approximation), starting from {0,0,0} at every block
+  boundary and updated with the encoder's exact push rule.
+- Candidate collection probes the path's reps at every position, and
+  match pricing charges a rep hit a flat VV_OPT_REP_BITS = 10 instead
+  of 14 + log2(offset).
+- The rep price models only the saved offset-extra bits, not the
+  per-sequence LL/OF/ML overhead: pricing reps near-free (the old dead
+  constant, 2) makes the DP shred long matches into chains of short rep
+  matches and measured -15% ratio on logs. The constant was swept over
+  {8,10,11,12,13} on the 11-file corpus; 10 minimizes total size.
+
+Measured, extreme mode (CLI head-to-head, corpus rev 2, zero roundtrip
+mismatches; full tables in bench/COMPARISON.md): xml 111,940 -> 97,818
+(-12.6%, now smaller than zstd-9), csv -2.1%, logs -1.0%,
+json/text/source -0.2..-0.3%, ELF 31,242 -> 29,800 (extreme now beats
+balanced there), pure-repetition control 567 -> 165 bytes (closing the
+optimal-parser quirk documented since Sprint 124). Encode speed is
+unchanged (~1 MB/s optimal path); memory adds 12 bytes/position of DP
+state (~12 MB per 1 MB block, extreme only).
+
+Ratio-gate baseline regenerated per the documented --update flow. The
+diff captures this sprint's extreme improvements (csv fixture -25%;
+the binary-pattern extreme-worse-than-balanced contract violation is
+gone), balanced improvements accumulated since Sprint 124 that the
+regression-only gate never recorded, and three small synthetic-text
+extreme regressions accepted knowingly: text-simple +10 B, text-varied
++35 B, text-large +94 B (+0.1-0.5% on lorem-style fixtures; real text
+in the corpus improved).
+
+Validation: 22/22 test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; 5,200
+differential fuzz cases consistent; 27/27 negative-corpus cases;
+ASan+UBSan+LeakSanitizer roundtrip sweep clean (11 corpus files x 3
+modes, byte-exact).
+
 ## v2.62.0 — Sprint 127: Huffman4 decode refill hoist (+13-15% balanced decode)
 
 Decode-side performance release. Output bytes are unchanged since

@@ -900,20 +900,52 @@ typedef struct { uint32_t off; int32_t len; } opt_cand_t;
  * lever has been measured (matters more for nci-class fixtures). */
 static inline int32_t opt_lit_price(void) { return 8; }
 
-/* match bit price: cost_const(14) + log2(off) + ml_extra; rep ~2 bits */
-static inline int32_t opt_match_price(const matcher_t *m, uint32_t off, int32_t len) {
-    int is_rep = (off == m->rep[0] || off == m->rep[1] || off == m->rep[2]);
+/* match bit price: cost_const(14) + log2(off) + ml_extra; rep ~2 bits.
+ *
+ * SPRINT 128: priced against a caller-supplied rep set instead of
+ * m->rep. The matcher's rep state is a greedy-parser search heuristic
+ * that nothing updates during an optimal parse (it stayed {0,0,0} for
+ * every all-extreme frame, so rep pricing here was dead code), and the
+ * wire's rep state is PER-BLOCK and PATH-DEPENDENT: the SEQ encoder
+ * and decoder both start each block at {0,0,0} and evolve it per
+ * emitted sequence. The DP now threads that exact state through
+ * per-position rep histories (see compress_block_optimal). */
+/* A rep match saves the offset EXTRA bits, not the per-sequence
+ * overhead: it still spends full LL/OF/ML code symbols (~10 bits).
+ * The explicit-match constant 14 approximates that overhead plus
+ * slack, so the rep price must stay close beneath it — pricing reps
+ * near-free makes the DP shred long matches into chains of short rep
+ * matches, each paying the un-modeled sequence overhead (measured:
+ * -15% ratio on logs at rep=2). Constant swept on the 11-file corpus. */
+#ifndef VV_OPT_REP_BITS
+#define VV_OPT_REP_BITS 10
+#endif
+static inline int32_t opt_match_price(const uint32_t reps[3], uint32_t off, int32_t len) {
+    int is_rep = (off == reps[0] || off == reps[1] || off == reps[2]);
     int32_t log2_off = 0; uint32_t o = off;
     while (o > 1) { o >>= 1; log2_off++; }
-    int32_t off_bits = is_rep ? 2 : (14 + log2_off);
+    int32_t off_bits = is_rep ? VV_OPT_REP_BITS : (14 + log2_off);
     int32_t ml_extra = 0, v = len - VV_MIN_MATCH;
     if (v >= 15) ml_extra = 8 * (v / 255 + 1);
     return off_bits + ml_extra;
 }
 
-/* Collect match candidates at pos (longest per distinct offset). */
+/* Wire rep-history update rule — must mirror vva_encode_sequences'
+ * enc_rep update (and the decoder's dec_rep) exactly: push only when
+ * the offset differs from rep[0]. */
+static inline void opt_rep_push(uint32_t dst[3], const uint32_t src3[3], uint32_t off) {
+    if (off == src3[0]) {
+        dst[0] = src3[0]; dst[1] = src3[1]; dst[2] = src3[2];
+    } else {
+        dst[0] = off; dst[1] = src3[0]; dst[2] = src3[1];
+    }
+}
+
+/* Collect match candidates at pos (longest per distinct offset).
+ * SPRINT 128: rep candidates come from the DP path's rep history. */
 static int opt_collect(const matcher_t *m, const uint8_t *data,
-                       int32_t pos, int32_t end, opt_cand_t *cands) {
+                       int32_t pos, int32_t end, opt_cand_t *cands,
+                       const uint32_t reps[3]) {
     int n = 0;
     int32_t max_dist = (int32_t)((1u << m->wlog) - 1);
     int32_t limit = pos - max_dist; if (limit < 0) limit = 0;
@@ -923,7 +955,7 @@ static int opt_collect(const matcher_t *m, const uint8_t *data,
     uint32_t pos4; memcpy(&pos4, data + pos, 4);
 
     for (int r = 0; r < 3; r++) {
-        uint32_t roff = m->rep[r];
+        uint32_t roff = reps[r];
         if (roff == 0 || (int32_t)roff > pos) continue;
         const uint8_t *a = data + pos, *b = data + pos - roff;
         int32_t l = 0; while (l < max && a[l] == b[l]) l++;
@@ -956,15 +988,22 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
     int off_bytes = (m->wlog > 16) ? 3 : 2;
     int32_t N = (int32_t)block_len;
 
-    /* DP arrays indexed by offset-from-base [0..N]. */
+    /* DP arrays indexed by offset-from-base [0..N].
+     * SPRINT 128: prep[i] is the wire rep-offset history of the best
+     * path reaching position i (zstd-btopt-style approximation: paths
+     * that lose on price but would carry better reps are dropped).
+     * prep[0] = {0,0,0} because the SEQ encoder and decoder both reset
+     * their rep state at every block boundary. */
     int32_t  *price = (int32_t *)malloc(sizeof(int32_t) * (N + 1));
     int32_t  *plen  = (int32_t *)malloc(sizeof(int32_t) * (N + 1));
     uint32_t *poff  = (uint32_t *)malloc(sizeof(uint32_t) * (N + 1));
+    uint32_t (*prep)[3] = (uint32_t (*)[3])malloc(sizeof(uint32_t[3]) * (N + 1));
     opt_cand_t *cands = (opt_cand_t *)malloc(sizeof(opt_cand_t) * VV_OPT_MAX_CAND);
-    if (!price || !plen || !poff || !cands) { free(price); free(plen); free(poff); free(cands); return 0; }
+    if (!price || !plen || !poff || !prep || !cands) { free(price); free(plen); free(poff); free(prep); free(cands); return 0; }
 
     for (int32_t i = 0; i <= N; i++) { price[i] = VV_OPT_PRICE_INF; plen[i] = 0; poff[i] = 0; }
     price[0] = 0;
+    prep[0][0] = prep[0][1] = prep[0][2] = 0;
 
     /* Forward DP. We also must keep the matcher hash chains populated as we
      * advance, so matches reference earlier positions correctly. We insert
@@ -987,13 +1026,16 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
         }
         int32_t ip = base + i;
 
-        /* literal edge */
+        /* literal edge (literals leave the rep history unchanged) */
         int32_t lp = price[i] + opt_lit_price();
-        if (lp < price[i + 1]) { price[i + 1] = lp; plen[i + 1] = 1; poff[i + 1] = 0; }
+        if (lp < price[i + 1]) {
+            price[i + 1] = lp; plen[i + 1] = 1; poff[i + 1] = 0;
+            prep[i + 1][0] = prep[i][0]; prep[i + 1][1] = prep[i][1]; prep[i + 1][2] = prep[i][2];
+        }
 
         /* match edges */
         if (ip + min_match <= end) {
-            int nc = opt_collect(m, src, ip, end, cands);
+            int nc = opt_collect(m, src, ip, end, cands, prep[i]);
             /* Find the longest candidate. */
             int32_t best_len = 0; uint32_t best_off = 0;
             for (int c = 0; c < nc; c++) {
@@ -1009,9 +1051,12 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
                  * the whole match. */
                 int32_t use = best_len;
                 if (i + use > N) use = N - i;
-                int32_t np = price[i] + opt_match_price(m, best_off, use);
+                int32_t np = price[i] + opt_match_price(prep[i], best_off, use);
                 int32_t j = i + use;
-                if (np < price[j]) { price[j] = np; plen[j] = use; poff[j] = best_off; }
+                if (np < price[j]) {
+                    price[j] = np; plen[j] = use; poff[j] = best_off;
+                    opt_rep_push(prep[j], prep[i], best_off);
+                }
                 /* Insert boundary positions only (match-skip heuristic),
                  * then jump the DP cursor to the match end. */
                 int32_t end5 = end - 5;
@@ -1028,9 +1073,12 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
                 if (i + mlen > N) mlen = N - i;
                 if (mlen < min_match) continue;
                 for (int32_t L = mlen; L >= min_match; L--) {
-                    int32_t np = price[i] + opt_match_price(m, moff, L);
+                    int32_t np = price[i] + opt_match_price(prep[i], moff, L);
                     int32_t j = i + L;
-                    if (np < price[j]) { price[j] = np; plen[j] = L; poff[j] = moff; }
+                    if (np < price[j]) {
+                        price[j] = np; plen[j] = L; poff[j] = moff;
+                        opt_rep_push(prep[j], prep[i], moff);
+                    }
                     if (L > min_match + 8 && L < mlen) L = min_match + 9;
                 }
             }
@@ -1043,7 +1091,7 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
     /* Worst case every position is a literal: N entries. */
     int32_t *seq_len = (int32_t *)malloc(sizeof(int32_t) * (N + 1));
     uint32_t *seq_off = (uint32_t *)malloc(sizeof(uint32_t) * (N + 1));
-    if (!seq_len || !seq_off) { free(price); free(plen); free(poff); free(cands); free(seq_len); free(seq_off); return 0; }
+    if (!seq_len || !seq_off) { free(price); free(plen); free(poff); free(prep); free(cands); free(seq_len); free(seq_off); return 0; }
     int32_t ns = 0, cur = N;
     while (cur > 0) {
         int32_t L = plen[cur];
@@ -1064,7 +1112,7 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
             size_t ll = (size_t)(src + pos - lit_start);
             size_t needed = 1 + (ll >= 15 ? ll / 255 + 2 : 0) + ll + 2 + ((size_t)L / 255 + 2);
             if ((size_t)(op - dst) + needed > dst_cap) {
-                free(price); free(plen); free(poff); free(cands); free(seq_len); free(seq_off);
+                free(price); free(plen); free(poff); free(prep); free(cands); free(seq_len); free(seq_off);
                 return 0;
             }
             op += emit_seq(op, lit_start, ll, (size_t)L, O, off_bytes, min_match);
@@ -1078,13 +1126,13 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
         size_t ll = (size_t)(src + end - lit_start);
         size_t needed = 1 + (ll >= 15 ? ll / 255 + 2 : 0) + ll;
         if ((size_t)(op - dst) + needed > dst_cap) {
-            free(price); free(plen); free(poff); free(cands); free(seq_len); free(seq_off);
+            free(price); free(plen); free(poff); free(prep); free(cands); free(seq_len); free(seq_off);
             return 0;
         }
         op += emit_seq(op, lit_start, ll, 0, 0, off_bytes, min_match);
     }
 
-    free(price); free(plen); free(poff); free(cands); free(seq_len); free(seq_off);
+    free(price); free(plen); free(poff); free(prep); free(cands); free(seq_len); free(seq_off);
     return (size_t)(op - dst);
 }
 
