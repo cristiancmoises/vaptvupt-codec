@@ -193,7 +193,7 @@ Where VaptVupt wins:
   ~31 MB/s in balanced mode before v2.61.0; it is now 120–190 MB/s across
   all modes (default-on skip acceleration + early raw-store bail).
 
-Where VaptVupt loses — stated plainly:
+Where VaptVupt loses:
 
 - **zstd-3 still wins ratio on xml/text/source by 2–6%**, and wins text-class
   compress speed by 1.5–4×. zstd-1's compress speed is out of reach for the

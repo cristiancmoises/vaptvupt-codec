@@ -2,6 +2,34 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.61.2 — Sprint 126: block-scratch consolidation + release-notes cleanup
+
+Maintenance release. Valid-stream output is byte-identical to v2.61.0/1
+(ratio gate ±0 bytes); throughput is unchanged within measurement noise
+on the bench machine — the value here is allocation-graph simplification
+and API hardening, not speed.
+
+- **Encoder**: the six per-block scratch allocations that followed
+  sequence parsing (literal-encode buffer, code-memoization arrays, LL
+  build tables, ML/OF build tables, bitpair staging, sequence bitstream)
+  are one arena allocation with computed offsets. Two mallocs per block
+  instead of seven; every error path frees exactly one arena pointer.
+- **Decoder**: the literal buffer and the decode-table section share one
+  allocation (was two; the table section itself was fused from four in
+  v2.61.1).
+- **API hardening**: `vva_encode_sequences*` rejects token streams over
+  1 GiB up front so scratch-size arithmetic cannot wrap on direct-API
+  misuse (internal callers pass ≤ ~1.13 MB per block).
+- Repository cleanup: per-release `RELEASE_*.md` files removed — release
+  notes live in this changelog and on the forge release pages; DEPLOY.md
+  now extracts notes from the changelog.
+
+Validation: 22/22 test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; ratio gate
+zero regressions; 5,200 differential fuzz cases consistent; 27/27
+negative-corpus cases; ASan+UBSan+LeakSanitizer roundtrip sweep clean
+(11 corpus files × 3 modes, byte-exact).
+
 ## v2.61.1 — Sprint 125: fast-mode decode +55%, SEQ-decode hardening
 
 Decode-side performance and robustness. **Valid-stream output is

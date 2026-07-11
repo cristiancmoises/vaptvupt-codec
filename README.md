@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.61.1. License: this repository (the vaptvupt-codec library and
+Version 2.61.2. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
@@ -31,16 +31,16 @@ better.
 | sensors.bin (float records) | **1.398** @15/193 | — | 1.176 @304/326 | — | — |
 | structs.bin (24-B records) | **1.719** @16/295 | — | 1.595 @79/190 | 1.600 @42/150 | — |
 
-Where each side wins — stated plainly:
+Where each side wins:
 
 - `balanced` beats zstd-3 on ratio for JSON, CSV, and record-style binary
   (sensors 1.398 vs 1.176, +19%; structs 1.719 vs 1.595, +8%; structs even
   beats zstd-9's 1.600) and roughly ties it on logs.
 - zstd-3 still wins xml/text/source ratio by 2–6%, and remains 1.5–4×
   faster at *compressing* text-family input.
-- zstd-19 keeps the maximum-ratio crown on record binary (sensors 1.469,
-  structs 1.902) at single-digit MB/s — `balanced` gets most of the way
-  there at 2× its speed.
+- zstd-19 still wins maximum ratio on record binary (sensors 1.469,
+  structs 1.902) at single-digit MB/s; `balanced` gets most of the way
+  there at about twice that speed.
 - `extreme` beats zstd-3 broadly but does not catch zstd-9/zstd-19 on text;
   it targets ratio, not speed (≈1 MB/s on its optimal-parse path).
 - `fast` beats lz4-1 on ratio on 7 of the 11 corpus files (e.g. access.log
@@ -62,6 +62,9 @@ v2.61.1 raises fast-mode decode ~55% (1540 → 2430 MB/s in-process on a
 byte-identical output; balanced/extreme decode is unchanged. It also
 hardens the SEQ decoder's table validation — see
 [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
+v2.61.2 consolidates per-block scratch allocations (encoder 7→2 mallocs
+per block, decoder 2→1) with byte-identical output and unchanged
+throughput; the tables above remain current.
 
 ### v2.52-era Silesia measurement
 

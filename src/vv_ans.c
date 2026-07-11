@@ -1646,6 +1646,12 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
                                               const uint32_t *ml_base_tab,
                                               int disable_huf4) {
     if (!tok_len) { *dst_len = 0; return VVA_OK; }
+    /* SPRINT 126: API-misuse guard. Every internal caller passes one
+     * block's tokens (<= ~1.13 MB), but this entry point is public;
+     * bound tok_len so the arena size arithmetic below cannot wrap on
+     * absurd direct-API inputs. 1 GiB is orders of magnitude above any
+     * legal block token stream. */
+    if (tok_len > ((size_t)1 << 30)) return VVA_ERR_PARAM;
 
     /* Parse into sequences.
      * PERF: one combined alloc for seqs + lit_buf. The sizeof(seq_t)
@@ -1675,10 +1681,35 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
     size_t nseq = parse_sequences(tokens, tok_len, lit_buf, tok_len, seqs, max_seqs, &total_lits, off_bytes, min_match);
     if (nseq == 0) { free(base_scratch); return VVA_ERR_CORRUPT; }
 
-    /* ─── Encode literals with 4-way ANS ─── */
+    /* ─── SPRINT 126: one block-scratch arena ───
+     *
+     * After parse_sequences, nseq and total_lits pin every remaining
+     * scratch size, so the 6 per-block mallocs that used to follow
+     * (lit_enc, seq_scratch memoization arrays, LL build tables, ML/OF
+     * build tables, the bitpair staging array, and the sequence
+     * bitstream) collapse into ONE allocation with computed offsets —
+     * one malloc/free pair per block instead of six, and one cleanup
+     * pointer on every error path. Layout keeps 4/8-byte-aligned
+     * sections first; sizes are the exact bounds the individual
+     * allocations used. ML/OF tables are reserved unconditionally
+     * (40 KB) even when match_count == 0 — a bound, not a leak. */
     size_t lit_cap = vva_bound(total_lits);
-    uint8_t *lit_enc = (uint8_t *)malloc(lit_cap);
-    if (!lit_enc) { free(base_scratch); return VVA_ERR_NOMEM; }
+    size_t a_codes_sz = (nseq * sizeof(uint8_t) + 3) & ~(size_t)3;
+    size_t a_stream_sz = a_codes_sz + nseq * sizeof(uint32_t) + nseq * sizeof(int);
+    size_t tab_one_sz = ANS_L + ANS_L * sizeof(vva_dec_entry_t);
+#define VVA_A8(x) (((x) + 7) & ~(size_t)7)
+    size_t off_pairs   = 0;
+    size_t off_scratch = off_pairs + VVA_A8(nseq * 6 * sizeof(bitpair_t));
+    size_t off_lltab   = off_scratch + VVA_A8(3 * a_stream_sz);
+    size_t off_mloftab = off_lltab + VVA_A8(tab_one_sz);
+    size_t off_lit     = off_mloftab + VVA_A8(2 * tab_one_sz);
+    size_t off_bs      = off_lit + VVA_A8(lit_cap);
+    size_t arena_sz    = off_bs + VVA_A8(nseq * 6 * 4 + 16);
+    uint8_t *arena = (uint8_t *)malloc(arena_sz);
+    if (!arena) { free(base_scratch); return VVA_ERR_NOMEM; }
+
+    /* ─── Encode literals with 4-way ANS ─── */
+    uint8_t *lit_enc = arena + off_lit;
 
     size_t lit_enc_len = 0;
     uint8_t lit_fmt = 0; /* 0=raw, 1=ANS4, 2=ANS1, 3=Huffman, 4=Huffman4 (Sprint 104) */
@@ -1906,16 +1937,11 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
      * Net cost: 1 extra malloc region (~14 × nseq bytes), 0 extra
      * malloc calls. Net saving: the backward pass becomes lookups
      * instead of re-computation. */
-    size_t codes_sz = (nseq * sizeof(uint8_t) + 3) & ~(size_t)3;
+    size_t codes_sz = a_codes_sz;
     size_t extra_sz = nseq * sizeof(uint32_t);
-    size_t nbits_sz = nseq * sizeof(int);
-    /* 3 streams × (codes + extra + nbits) */
-    uint8_t *seq_scratch = (uint8_t *)malloc(3 * (codes_sz + extra_sz + nbits_sz));
-    if (!seq_scratch) {
-        free(base_scratch); free(lit_enc);
-        return VVA_ERR_NOMEM;
-    }
-    size_t stream_sz = codes_sz + extra_sz + nbits_sz;
+    /* 3 streams × (codes + extra + nbits) — carved from the arena. */
+    uint8_t *seq_scratch = arena + off_scratch;
+    size_t stream_sz = a_stream_sz;
     uint8_t  *seq_of_code  = seq_scratch;
     uint32_t *seq_of_extra = (uint32_t *)(seq_scratch + codes_sz);
     int      *seq_of_nbits = (int *)(seq_scratch + codes_sz + extra_sz);
@@ -2018,20 +2044,15 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
         ll_hdr_sz = write_hdr_v2(norm_ll, ll_hdr_buf, 600);
         if (!ll_hdr_sz) goto seq_fail;
 
-        /* PERF: one combined alloc for sp_ll + dec_ll. sp_ll lives in
-         * the first ANS_L bytes, dec_ll follows with alignment (16-byte
-         * aligned vs 8-byte reads is satisfied since ANS_L=4096 is
-         * already 4KB-aligned). Saves 1 malloc/free pair. */
+        /* sp_ll lives in the first ANS_L bytes of the arena's LL-table
+         * section, dec_ll follows (ANS_L=4096 keeps dec_ll aligned). */
         size_t sp_sz = ANS_L;
-        size_t dec_sz = ANS_L * sizeof(vva_dec_entry_t);
-        uint8_t *ll_tables = (uint8_t *)malloc(sp_sz + dec_sz);
-        if (!ll_tables) goto seq_fail;
+        uint8_t *ll_tables = arena + off_lltab;
         uint8_t *sp_ll = ll_tables;
         vva_dec_entry_t *dec_ll = (vva_dec_entry_t *)(ll_tables + sp_sz);
         spread_symbols(norm_ll, sp_ll);
         build_dec(norm_ll, sp_ll, dec_ll);
         enc_ll_ctx = build_enc(norm_ll, sp_ll, dec_ll);
-        free(ll_tables);
         if (!enc_ll_ctx) goto seq_fail;
     }
 
@@ -2055,14 +2076,10 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
 
 
 
-        /* ─── Build encode tables ───
-         * PERF: one combined alloc for sp_ml + dec_ml + sp_of + dec_of
-         * (4 fixed-size ANS_L-based buffers). Saves 3 malloc/free pairs. */
+        /* ─── Build encode tables (in the arena's ML/OF section) ─── */
         size_t sp_sz = ANS_L;
         size_t dec_sz = ANS_L * sizeof(vva_dec_entry_t);
-        size_t combo_sz = (sp_sz + dec_sz) * 2;
-        uint8_t *ml_of_tables = (uint8_t *)malloc(combo_sz);
-        if (!ml_of_tables) goto seq_fail;
+        uint8_t *ml_of_tables = arena + off_mloftab;
         uint8_t *sp_ml = ml_of_tables;
         vva_dec_entry_t *dec_ml = (vva_dec_entry_t *)(ml_of_tables + sp_sz);
         uint8_t *sp_of = ml_of_tables + sp_sz + dec_sz;
@@ -2076,7 +2093,6 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
         build_dec(norm_of, sp_of, dec_of);
         enc_of_ctx = build_enc(norm_of, sp_of, dec_of);
 
-        free(ml_of_tables);
         if (!enc_ml_ctx || !enc_of_ctx) {
             free_enc(enc_ml_ctx); free_enc(enc_of_ctx);
             enc_ml_ctx = enc_of_ctx = NULL;
@@ -2098,10 +2114,9 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
      * bitstream must be written whenever nseq > 0, with ML/OF work
      * still gated per-sequence on matchlen > 0. */
     {
-        /* Collect bitpairs for ANS-coded symbols + raw extra bits */
-        size_t pair_cap = nseq * 6; /* 3 ANS + 3 extra max per seq */
-        bitpair_t *pairs = (bitpair_t *)malloc(pair_cap * sizeof(bitpair_t));
-        if (!pairs) { free_enc(enc_ml_ctx); free_enc(enc_of_ctx); goto seq_fail; }
+        /* Collect bitpairs for ANS-coded symbols + raw extra bits
+         * (arena section; capacity nseq * 6 = 3 ANS + 3 extra per seq). */
+        bitpair_t *pairs = (bitpair_t *)(arena + off_pairs);
 
         state_ml = 0; state_of = 0; state_ll = 0;
         size_t npairs = 0;
@@ -2140,7 +2155,7 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
                     uint32_t bv; int bn;
                     int slot = enc_sym(enc_ml_ctx, state_ml, mc, &bv, &bn);
                     if (slot < 0) {
-                        free(pairs); free_enc(enc_ml_ctx); free_enc(enc_of_ctx);
+                        free_enc(enc_ml_ctx); free_enc(enc_of_ctx);
                         goto seq_fail;
                     }
                     pairs[npairs].val = (uint32_t)bv;
@@ -2161,7 +2176,7 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
                     uint32_t bv; int bn;
                     int slot = enc_sym(enc_of_ctx, state_of, oc, &bv, &bn);
                     if (slot < 0) {
-                        free(pairs); free_enc(enc_ml_ctx); free_enc(enc_of_ctx);
+                        free_enc(enc_ml_ctx); free_enc(enc_of_ctx);
                         goto seq_fail;
                     }
                     pairs[npairs].val = (uint32_t)bv;
@@ -2186,7 +2201,7 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
                     uint32_t bv; int bn;
                     int slot = enc_sym(enc_ll_ctx, state_ll, lc, &bv, &bn);
                     if (slot < 0) {
-                        free(pairs); free_enc(enc_ml_ctx); free_enc(enc_of_ctx);
+                        free_enc(enc_ml_ctx); free_enc(enc_of_ctx);
                         goto seq_fail;
                     }
                     pairs[npairs].val = (uint32_t)bv;
@@ -2203,15 +2218,13 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
          * Each pair is up to 32 bits (ANS slot = 14 bits + extra up to 18).
          * Allocate 4 bytes per pair + 16-byte safety margin. */
         size_t bs_cap = npairs * 4 + 16;
-        seq_bs = (uint8_t *)malloc(bs_cap);
-        if (!seq_bs) { free(pairs); goto seq_fail; }
+        seq_bs = arena + off_bs;   /* arena section, sized nseq*6*4 + 16 >= bs_cap */
 
         ans_bw_t w;
         ans_bw_init(&w, seq_bs, bs_cap);
         for (size_t i = npairs; i > 0; i--)
             ans_bw_add(&w, pairs[i - 1].val, pairs[i - 1].nb);
         seq_bs_len = ans_bw_flush(&w);
-        free(pairs);
     }
 
     /* Litlens are now ANS-coded in the sequence bitstream — no varints needed */
@@ -2269,17 +2282,15 @@ static vva_error_t vva_encode_sequences_impl(const uint8_t *tokens, size_t tok_l
         *dst_len = (size_t)(op - dst);
     }
 
-    free(base_scratch); free(lit_enc);
-    free(seq_scratch);
+    free(base_scratch);
+    free(arena);
     free_enc(enc_ll_ctx);
-    free(seq_bs);
     return VVA_OK;
 
 seq_fail:
-    free(base_scratch); free(lit_enc);
-    free(seq_scratch);
+    free(base_scratch);
+    free(arena);
     free_enc(enc_ll_ctx);
-    free(seq_bs);
     return VVA_ERR_OVERFLOW;
 }
 
@@ -2361,7 +2372,14 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     if (VV_UNLIKELY(total_lits > dst_cap)) return VVA_ERR_CORRUPT;
 
     /* Decode literals based on format byte */
-    uint8_t *lit_buf = (uint8_t *)malloc(total_lits + 16);
+    /* SPRINT 126: one allocation for the literal buffer AND the decode
+     * tables (previously 2 mallocs; the table section was itself fused
+     * from 4 in Sprint 125). The table space (52 KB) is reserved
+     * unconditionally up front so the whole block scratch is a single
+     * malloc/free — its exact use is decided at table-build below. */
+    size_t lit_sec = (total_lits + 16 + 7) & ~(size_t)7;
+    size_t tab_sec = ANS_L + 3 * (ANS_L * sizeof(vva_dec_entry_t));
+    uint8_t *lit_buf = (uint8_t *)malloc(lit_sec + tab_sec);
     if (!lit_buf) return VVA_ERR_NOMEM;
 
     if (total_lits > 0 && lit_enc_len > 0) {
@@ -2512,15 +2530,9 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
      * them to the LL table: valid, initialized memory, zero build and
      * zero memset cost (replaces two 16 KB sentinel memsets). */
     vva_dec_entry_t *dec_ml = NULL, *dec_of = NULL, *dec_ll = NULL;
-    uint8_t *seq_tables = NULL;
     {
         size_t dec_sz = ANS_L * sizeof(vva_dec_entry_t);
-        size_t n_tabs = (match_count > 0) ? 3 : 1;
-        seq_tables = (uint8_t *)malloc(ANS_L + n_tabs * dec_sz);
-        if (!seq_tables) {
-            free(lit_buf);
-            return VVA_ERR_NOMEM;
-        }
+        uint8_t *seq_tables = lit_buf + lit_sec;  /* reserved above */
         uint8_t *sp_tmp = seq_tables;
         dec_ll = (vva_dec_entry_t *)(seq_tables + ANS_L);
         spread_symbols(norm_ll, sp_tmp);
@@ -2635,7 +2647,7 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     size_t iter_count = 0;
     while (lit_pos < total_lits || matches_decoded < match_count) {
         if (VV_UNLIKELY(++iter_count > max_iters)) {
-            free(seq_tables); free(lit_buf);
+            free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
         /* PERF: issue all 3 ANS table lookups early so CPU can overlap
@@ -2682,11 +2694,11 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
         size_t litlen = ll_decode(ll_code, ll_extra_val);
 
         if (VV_UNLIKELY(lit_pos + litlen > total_lits)) {
-            free(seq_tables); free(lit_buf);
+            free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
         if (VV_UNLIKELY(!in_safe_zone && op + litlen > op_end)) {
-            free(seq_tables); free(lit_buf);
+            free(lit_buf);
             return VVA_ERR_OVERFLOW;
         }
         if (litlen > 0) {
@@ -2765,15 +2777,15 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
          * op_safe_end = op_end - SAFEZONE_MAX_MATCH, and matchlen is
          * always ≤ SAFEZONE_MAX_MATCH by wire format. */
         if (VV_UNLIKELY(offset == 0 || offset > SAFEZONE_MAX_OFFSET)) {
-            free(seq_tables); free(lit_buf);
+            free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
         if (VV_UNLIKELY(!in_safe_zone && offset > (uint32_t)(op - dst_base))) {
-            free(seq_tables); free(lit_buf);
+            free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
         if (VV_UNLIKELY(!in_safe_zone && op + matchlen > op_end)) {
-            free(seq_tables); free(lit_buf);
+            free(lit_buf);
             return VVA_ERR_OVERFLOW;
         }
 
@@ -2860,7 +2872,7 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     }
 
     *dst_len = (size_t)(op - dst);
-    free(seq_tables); free(lit_buf);
+    free(lit_buf);
     return VVA_OK;
 }
 
