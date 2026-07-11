@@ -5,6 +5,154 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
+## v2.64.0 head-to-head (measured 2026-07, corpus rev 2)
+
+Same harness, environment, and corpus as the v2.63.0 set below; every
+cell roundtrip-verified byte-exact, zero mismatches. v2.64.0 changes
+extreme mode only (entropy-aware literal pricing in the optimal
+parser); balanced/fast differences vs earlier tables are run noise.
+
+```
+access.log (1,891,394)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        434,321     4.355     184.2    726.3
+  vv-balanced    299,185     6.322      71.6    395.6
+  vv-extreme     235,564     8.029       1.0    425.1
+  zstd-1         286,944     6.592     291.6    430.4
+  zstd-3         291,162     6.496     230.9    412.6
+  zstd-9         229,599     8.238      57.1    435.2
+  zstd-19        187,973    10.062       3.2    473.1
+  lz4-1          464,689     4.070     310.8    269.4
+  lz4-9          304,586     6.210      45.1    474.7
+
+catalog.xml (1,267,065)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        238,497     5.313     183.0    488.2
+  vv-balanced    113,183    11.195     108.3    504.5
+  vv-extreme      95,246    13.303       1.1    462.1
+  zstd-1         111,036    11.411     274.8    255.3
+  zstd-3         106,500    11.897     253.9    242.6
+  zstd-9         100,858    12.563      65.8    437.0
+  zstd-19         83,742    15.131       2.4    392.5
+  lz4-1          219,179     5.781     414.6    395.8
+  lz4-9          188,030     6.739      72.4    448.6
+
+data.json (2,745,922)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        863,744     3.179     167.9    727.9
+  vv-balanced    505,274     5.435      66.8    527.9
+  vv-extreme     485,218     5.659       1.1    512.9
+  zstd-1         500,966     5.481     349.8    601.1
+  zstd-3         523,890     5.241     222.9    446.8
+  zstd-9         473,364     5.801      62.0    626.1
+  zstd-19        414,384     6.627       2.3    570.0
+  lz4-1          950,614     2.889     393.6    453.0
+  lz4-9          673,569     4.077      53.9    490.6
+
+program.bin (93,832)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast         44,224     2.122      25.6     78.3
+  vv-balanced     30,884     3.038      10.8     43.2
+  vv-extreme      29,729     3.156       3.3     78.9
+  zstd-1          34,203     2.743      46.0     60.9
+  zstd-3          30,701     3.056      40.7     74.9
+  zstd-9          26,957     3.481      27.2     75.2
+  zstd-19         24,377     3.849       4.0     51.2
+  lz4-1           44,782     2.095      73.8     55.2
+  lz4-9           38,634     2.429      15.9     28.9
+
+random.bin (1,048,576)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,048,608     1.000     211.3    249.3
+  vv-balanced  1,048,608     1.000     114.6    250.0
+  vv-extreme   1,048,608     1.000     123.3    280.7
+  zstd-1       1,048,614     1.000     199.0    202.5
+  zstd-3       1,048,613     1.000     150.5    209.8
+  zstd-9       1,048,613     1.000     101.8    453.8
+  zstd-19      1,048,613     1.000      17.3    441.7
+  lz4-1        1,048,595     1.000     500.7    268.8
+  lz4-9        1,048,595     1.000      46.7    303.1
+
+repeat.txt (1,048,576)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast          4,243   247.131     471.3    307.9
+  vv-balanced        165  6355.006     190.3    308.6
+  vv-extreme         165  6355.006      82.4    307.2
+  zstd-1             156  6721.641     257.6    240.4
+  zstd-3             155  6765.006     223.4    223.8
+  zstd-9             155  6765.006      82.3    211.6
+  zstd-19            150  6990.507      58.1    257.3
+  lz4-1            4,185   250.556     268.1    171.1
+  lz4-9            4,185   250.556     256.1    186.9
+
+sensors.bin (1,280,000)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,280,036     1.000     143.6    244.3
+  vv-balanced    915,831     1.398      14.5    204.0
+  vv-extreme     927,147     1.381      14.1    193.9
+  zstd-1       1,087,992     1.176     149.1    381.0
+  zstd-3       1,087,991     1.176     240.4    348.4
+  zstd-9       1,087,619     1.177     103.8    200.1
+  zstd-19        871,309     1.469       8.8    258.8
+  lz4-1        1,280,019     1.000     380.4    297.1
+  lz4-9        1,250,875     1.023      43.9    276.7
+
+source.c (415,305)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        143,622     2.892      60.0    255.8
+  vv-balanced    110,599     3.755      33.5    184.0
+  vv-extreme     105,487     3.937       2.6    231.3
+  zstd-1         119,846     3.465     116.0    184.3
+  zstd-3         108,018     3.845      99.6    180.7
+  zstd-9          97,362     4.266      31.3    115.6
+  zstd-19         89,982     4.615       3.7    182.5
+  lz4-1          167,140     2.485     177.7    199.0
+  lz4-9          123,461     3.364      31.4    102.1
+
+structs.bin (1,200,000)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,057,946     1.134      71.8    473.2
+  vv-balanced    697,961     1.719      15.8    278.6
+  vv-extreme     697,961     1.719      15.3    348.5
+  zstd-1       1,003,532     1.196     222.6    166.6
+  zstd-3         752,116     1.595      83.1    269.2
+  zstd-9         749,835     1.600      41.4    337.8
+  zstd-19        630,874     1.902       5.8    296.1
+  lz4-1        1,200,019     1.000     417.8    262.1
+  lz4-9        1,052,443     1.140      47.0    372.3
+
+table.csv (1,368,615)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        619,489     2.209      95.6    475.3
+  vv-balanced    426,402     3.210      31.9    375.8
+  vv-extreme     370,024     3.699       1.2    321.2
+  zstd-1         420,084     3.258     168.5    322.5
+  zstd-3         429,180     3.189      91.1    272.3
+  zstd-9         359,076     3.811      42.0    391.9
+  zstd-19        339,121     4.036       2.4    342.5
+  lz4-1          666,555     2.053     257.2    338.2
+  lz4-9          471,686     2.902      25.6    365.5
+
+text.md (596,979)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        270,746     2.205      69.9    163.3
+  vv-balanced    215,392     2.772      28.2    286.3
+  vv-extreme     209,034     2.856       3.7    216.8
+  zstd-1         239,268     2.495     115.7    243.2
+  zstd-3         207,860     2.872      95.0    218.8
+  zstd-9         189,752     3.146      35.9    130.5
+  zstd-19        177,708     3.359       4.6    201.1
+  lz4-1          334,396     1.785     159.6    128.0
+  lz4-9          241,454     2.472      41.1    120.6
+
+```
+
+Extreme movement vs v2.63.0: xml 97,818 -> 95,246 (-2.6%; now 5.6%
+smaller than zstd-9), json -1.8%, logs -1.8%, ELF/source -0.2-0.3%,
+csv ~level, text +1.3% (the histogram model over-buys literals on
+plain text; documented trade). zstd-9 keeps text/source/json/logs;
+zstd-19 keeps the maximum-ratio tier.
+
 ## v2.63.0 head-to-head (measured 2026-07, corpus rev 2)
 
 Same harness, environment, and corpus rev 2 as the v2.62.0 set below;

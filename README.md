@@ -5,13 +5,13 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.63.0. License: this repository (the vaptvupt-codec library and
+Version 2.64.0. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
 ## Where it stands
 
-### v2.63.0 head-to-head (measured 2026-07)
+### v2.64.0 head-to-head (measured 2026-07)
 
 Single-core AVX2 x86-64, gcc 13 `-O3 -flto`, zstd 1.5.6 `--single-thread`,
 lz4 1.10.0. CLI subprocess timing, best of 3, 11-file mixed corpus
@@ -23,13 +23,13 @@ better.
 
 | file | vv-balanced | vv-extreme | zstd-3 | zstd-9 | lz4-1 |
 |---|---|---|---|---|---|
-| access.log | 6.322 @72/464 | 7.887 @1/435 | 6.496 @137/204 | 8.238 @61/413 | 4.070 @222/244 |
-| data.json | **5.435 @76/567** | 5.559 @1/506 | 5.241 @141/317 | 5.801 @61/476 | 2.889 @251/247 |
-| table.csv | **3.210 @32/304** | 3.703 @1/362 | 3.189 @146/359 | 3.811 @44/307 | 2.053 @177/205 |
-| catalog.xml | 11.195 @80/414 | **12.953 @1/439** | 11.897 @120/223 | 12.563 @65/393 | — |
-| text.md | 2.772 @30/220 | 2.892 @4/220 | 2.872 @45/109 | 3.146 @34/216 | — |
-| sensors.bin (float records) | **1.398 @15/238** | — | 1.176 @126/175 | — | — |
-| structs.bin (24-B records) | **1.719 @17/229** | — | 1.595 @72/147 | 1.600 @55/292 | — |
+| access.log | 6.322 @72/396 | 8.029 @1/425 | 6.496 @231/413 | 8.238 @57/435 | 4.070 @311/269 |
+| data.json | **5.435 @67/528** | 5.659 @1/513 | 5.241 @223/447 | 5.801 @62/626 | 2.889 @394/453 |
+| table.csv | **3.210 @32/376** | 3.699 @1/321 | 3.189 @91/272 | 3.811 @42/392 | 2.053 @257/338 |
+| catalog.xml | 11.195 @108/505 | **13.303 @1/462** | 11.897 @254/243 | 12.563 @66/437 | — |
+| text.md | 2.772 @28/286 | 2.856 @4/217 | 2.872 @95/219 | 3.146 @36/130 | — |
+| sensors.bin (float records) | **1.398 @15/204** | — | 1.176 @240/348 | — | — |
+| structs.bin (24-B records) | **1.719 @16/279** | — | 1.595 @83/269 | 1.600 @41/338 | — |
 
 Where each side wins:
 
@@ -41,10 +41,10 @@ Where each side wins:
 - zstd-19 still wins maximum ratio on record binary (sensors 1.469,
   structs 1.902) at single-digit MB/s; `balanced` gets most of the way
   there at about twice that speed.
-- `extreme` beats zstd-3 broadly and, since v2.63.0's repeat-offset
-  pricing, takes xml from zstd-9 as well (12.953 vs 12.563); zstd-9 keeps
-  text/source/json/logs and zstd-19 keeps the maximum-ratio tier. Extreme
-  targets ratio, not speed (≈1 MB/s on its optimal-parse path).
+- `extreme` beats zstd-3 broadly and takes xml from zstd-9 (13.304 vs
+  12.563 in this run, a 5.6% size margin); zstd-9 keeps text/source/
+  json/logs and zstd-19 keeps the maximum-ratio tier. Extreme targets
+  ratio, not speed (≈1 MB/s on its optimal-parse path).
 - `fast` beats lz4-1 on ratio on 7 of the 11 corpus files (e.g. access.log
   4.355 @118/320 vs 4.070 @259/342), ties the two incompressible controls,
   and loses on xml and pure repetition — while lz4 remains 1.5–4× faster
@@ -68,6 +68,11 @@ hardens the SEQ decoder's table validation — see
 v2.61.2 consolidates per-block scratch allocations (encoder 7→2 mallocs
 per block, decoder 2→1) with byte-identical output and unchanged
 throughput.
+v2.64.0 adds entropy-aware literal pricing to the same parser (per-byte
+prices from the block histogram, blended 50/50 with the flat prior):
+extreme gains another 2.6% on xml, 1.8% on json and logs, and gives back
+1.3% on plain text — a measured, documented trade. The table above is a
+fresh v2.64.0 measurement.
 v2.63.0 gives the extreme-mode optimal parser real repeat-offset pricing
 (per-position rep histories matching the wire's per-block rep state):
 xml −12.6%, csv −2.1%, logs −1.0% at unchanged speed, and the

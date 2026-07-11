@@ -900,6 +900,50 @@ typedef struct { uint32_t off; int32_t len; } opt_cand_t;
  * lever has been measured (matters more for nci-class fixtures). */
 static inline int32_t opt_lit_price(void) { return 8; }
 
+/* SPRINT 129: per-byte literal prices from the block's byte histogram.
+ * The flat-8 model (Sprint 44) was chosen as the best single constant,
+ * but the real literal coder delivers ~4-6 bits/byte on text and 7-8
+ * on dense binary — the flat constant over-prices text literals, so
+ * the parser substitutes marginal matches where literals are cheaper
+ * in reality. This is the "two-pass repricing" refinement that Sprint
+ * 44's note deferred, using the raw block histogram as the literal-
+ * distribution estimate (the true literal stream excludes match-
+ * covered bytes, but the distributions track closely in practice).
+ * price[b] = round(log2(N / hist[b])) clamped to [VV_OPT_LIT_MIN, 14];
+ * unseen bytes cannot appear as literals and get the ceiling. The
+ * clamp floor guards degenerate blocks (a byte at ~100% frequency
+ * would price to 0 and make literal runs look free). Constants swept
+ * on the 11-file corpus — see CHANGELOG v2.64.0. */
+#ifndef VV_OPT_LIT_MIN
+#define VV_OPT_LIT_MIN 2
+#endif
+#ifndef VV_OPT_LIT_BLEND
+#define VV_OPT_LIT_BLEND 4
+#endif
+static void opt_build_lit_prices(const uint8_t *data, int32_t base, int32_t n,
+                                 int32_t lit_bits[256]) {
+    uint32_t hist[256];
+    memset(hist, 0, sizeof(hist));
+    for (int32_t i = 0; i < n; i++) hist[data[base + i]]++;
+    for (int s = 0; s < 256; s++) {
+        if (!hist[s]) { lit_bits[s] = 14; continue; }
+        /* ratio8 = (n / hist[s]) in 24.8 fixed point; log2(ratio8) =
+         * log2(n/hist) + 8. Round via the mantissa bit below the MSB. */
+        uint32_t ratio8 = (uint32_t)(((uint64_t)n << 8) / hist[s]);
+        int t = enc_ilog2(ratio8);
+        int bits = t - 8;
+        if (t >= 1 && ((ratio8 >> (t - 1)) & 1)) bits++;   /* round half up */
+        if (bits < VV_OPT_LIT_MIN) bits = VV_OPT_LIT_MIN;
+        if (bits > 14) bits = 14;
+        /* Blend toward the flat-8 prior: the raw-block histogram
+         * UNDERESTIMATES residual-literal entropy on plain text (the
+         * match-covered repetitive content inflates common-byte
+         * counts), so a pure per-byte price over-buys literals there.
+         * blend/8 parts per-byte estimate, rest flat 8. */
+        lit_bits[s] = (VV_OPT_LIT_BLEND * bits + (8 - VV_OPT_LIT_BLEND) * 8) / 8;
+    }
+}
+
 /* match bit price: cost_const(14) + log2(off) + ml_extra; rep ~2 bits.
  *
  * SPRINT 128: priced against a caller-supplied rep set instead of
@@ -1005,6 +1049,10 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
     price[0] = 0;
     prep[0][0] = prep[0][1] = prep[0][2] = 0;
 
+    /* SPRINT 129: entropy-aware per-byte literal prices for this block. */
+    int32_t lit_bits[256];
+    opt_build_lit_prices(src, base, N, lit_bits);
+
     /* Forward DP. We also must keep the matcher hash chains populated as we
      * advance, so matches reference earlier positions correctly. We insert
      * every position into the matcher as we visit it (DP order = position
@@ -1027,7 +1075,7 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
         int32_t ip = base + i;
 
         /* literal edge (literals leave the rep history unchanged) */
-        int32_t lp = price[i] + opt_lit_price();
+        int32_t lp = price[i] + lit_bits[src[ip]];
         if (lp < price[i + 1]) {
             price[i + 1] = lp; plen[i + 1] = 1; poff[i + 1] = 0;
             prep[i + 1][0] = prep[i][0]; prep[i + 1][1] = prep[i][1]; prep[i + 1][2] = prep[i][2];

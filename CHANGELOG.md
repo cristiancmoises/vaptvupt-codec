@@ -2,6 +2,46 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.64.0 — Sprint 129: entropy-aware literal pricing in the optimal parser
+
+Extreme-mode ratio release; balanced/fast output unchanged, wire format
+version 1 unchanged. This ships the "two-pass repricing" refinement the
+Sprint 44 note deferred, in its histogram form.
+
+The optimal parser priced every literal at a flat 8 bits (the best
+single constant per Sprint 44's sweep). The real literal coder delivers
+~4-6 bits/byte on text and 7-8 on dense binary, so the flat constant
+systematically over-priced text literals and bought marginal matches
+where literals were cheaper in reality. The parser now derives per-byte
+literal prices from the block's byte histogram
+(round(log2(N/freq)), clamped to [2,14]) and blends them 50/50 with the
+flat prior (VV_OPT_LIT_BLEND = 4/8). The blend matters: the raw-block
+histogram UNDERESTIMATES residual-literal entropy on plain text
+(match-covered repetitive content inflates common-byte counts), and the
+pure per-byte price measured +3.4% on text. Swept over blend
+{3,4,5,6,8}/8: 6 maximizes total corpus savings but pushes a synthetic
+lorem fixture's extreme output above balanced (a contract violation)
+and 5 leaves a 4-byte contract margin; 4 keeps every mode contract with
+headroom and every real-corpus file except plain text improving.
+
+Measured, extreme mode (corpus rev 2, zero roundtrip mismatches; full
+tables in bench/COMPARISON.md): xml 97,818 -> 95,246 (-2.6%; now 5.6%
+smaller than zstd-9), logs -1.8%, json -1.8%, source/ELF -0.2-0.3%,
+csv level, plain text +1.3% (documented trade; extreme still beats
+balanced there). Encode speed unchanged.
+
+Ratio-gate baseline regenerated (documented --update flow): captures
+the extreme improvements (json-mixed -1,182 B, csv -125 B) plus five
+small synthetic regressions accepted knowingly (text-simple +38 B,
+text-varied +27 B, text-large +49 B, json-small +6 B, source-like +3 B;
+real-corpus equivalents improved or held).
+
+Validation: 22/22 test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; 5,200
+differential fuzz cases consistent; 27/27 negative-corpus cases;
+ASan+UBSan+LeakSanitizer roundtrip sweep clean (11 corpus files x 3
+modes, byte-exact).
+
 ## v2.63.0 — Sprint 128: repeat-offset pricing in the optimal parser
 
 Extreme-mode ratio release. Balanced/fast output is unchanged; the wire
