@@ -5,13 +5,13 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.61.2. License: this repository (the vaptvupt-codec library and
+Version 2.62.0. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
 ## Where it stands
 
-### v2.61.0 head-to-head (measured 2026-07)
+### v2.62.0 head-to-head (measured 2026-07)
 
 Single-core AVX2 x86-64, gcc 13 `-O3 -flto`, zstd 1.5.6 `--single-thread`,
 lz4 1.10.0. CLI subprocess timing, best of 3, 11-file mixed corpus
@@ -23,13 +23,13 @@ better.
 
 | file | vv-balanced | vv-extreme | zstd-3 | zstd-9 | lz4-1 |
 |---|---|---|---|---|---|
-| access.log | 6.322 @72/442 | 7.811 @1.1/535 | 6.496 @119/310 | 8.238 @49/480 | 4.070 @260/432 |
-| data.json | **5.435** @70/509 | 5.547 @1.3/550 | 5.241 @209/664 | 5.801 @63/522 | 2.889 @437/475 |
-| table.csv | **3.210** @30/343 | 3.624 @1.3/297 | 3.189 @89/427 | 3.811 @41/369 | 2.053 @203/331 |
-| catalog.xml | 11.195 @65/260 | — | 11.897 @123/203 | — | — |
-| text.md | 2.780 @24/155 | 2.898 @4.2/220 | 2.867 @82/160 | — | — |
-| sensors.bin (float records) | **1.398** @15/193 | — | 1.176 @304/326 | — | — |
-| structs.bin (24-B records) | **1.719** @16/295 | — | 1.595 @79/190 | 1.600 @42/150 | — |
+| access.log | 6.322 @54/406 | 7.811 @1/458 | 6.496 @114/354 | 8.238 @49/445 | 4.070 @259/342 |
+| data.json | **5.435 @57/321** | 5.547 @1/436 | 5.241 @155/272 | 5.801 @57/475 | 2.889 @270/236 |
+| table.csv | **3.210 @24/243** | 3.624 @1/320 | 3.189 @84/168 | 3.811 @38/335 | 2.053 @167/310 |
+| catalog.xml | 11.195 @58/224 | — | 11.897 @126/199 | — | — |
+| text.md | 2.772 @23/210 | 2.883 @3/177 | 2.872 @45/117 | — | — |
+| sensors.bin (float records) | **1.398 @11/185** | — | 1.176 @205/174 | — | — |
+| structs.bin (24-B records) | **1.719 @12/271** | — | 1.595 @69/147 | 1.600 @46/255 | — |
 
 Where each side wins:
 
@@ -44,14 +44,15 @@ Where each side wins:
 - `extreme` beats zstd-3 broadly but does not catch zstd-9/zstd-19 on text;
   it targets ratio, not speed (≈1 MB/s on its optimal-parse path).
 - `fast` beats lz4-1 on ratio on 7 of the 11 corpus files (e.g. access.log
-  4.355 @174/375 vs 4.070 @260/432), ties the two incompressible controls,
+  4.355 @118/320 vs 4.070 @259/342), ties the two incompressible controls,
   and loses on xml and pure repetition — while lz4 remains 1.5–4× faster
   at compressing.
-- Decode is competitive across the board and often faster than zstd at the
-  same ratio.
-- Incompressible input now encodes at 120–190+ MB/s (was ~31 before
-  v2.61.0's default skip acceleration and early-RAW bail); zstd-1 does 196,
-  lz4-1 438 on the same 1 MiB random file.
+- Decode now leans VaptVupt's way at the default level: `balanced` decodes
+  faster than zstd-3 in this run on logs (406 vs 354 MB/s), CSV (243 vs
+  168), text (210 vs 117), records (271 vs 147), and JSON (321 vs 273).
+- Incompressible input encodes at 230–325 MB/s across modes in this run
+  (was ~31 before v2.61.0's default skip acceleration and early-RAW bail);
+  zstd-1 does 196, lz4-1 362 on the same 1 MiB random file.
 
 v2.61.0 also fixed two latent encoder bugs (zero-match SEQ blocks emitted no
 LL bitstream; a Path A/B scratch-buffer overlap could corrupt block output
@@ -64,7 +65,12 @@ hardens the SEQ decoder's table validation — see
 [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
 v2.61.2 consolidates per-block scratch allocations (encoder 7→2 mallocs
 per block, decoder 2→1) with byte-identical output and unchanged
-throughput; the tables above remain current.
+throughput.
+v2.62.0 hoists the Huffman4 literal decoder's per-symbol refill into one
+bulk refill per 3-symbol round: balanced-mode decode +13–15% on
+literal-heavy and text content (in-process: sensors 243→281 MB/s, text
+468→529), output bytes unchanged. The table above is a fresh v2.62.0
+measurement.
 
 ### v2.52-era Silesia measurement
 

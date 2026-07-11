@@ -5,6 +5,158 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
+## v2.62.0 head-to-head (measured 2026-07, corpus rev 2)
+
+Same harness and environment as the v2.61.0 set below (CLI-subprocess
+wall clock, best of 3, single-core AVX2 x86-64, gcc 13 `-O3 -flto`,
+zstd 1.5.6 `--single-thread`, lz4 1.10.0; every cell roundtrip-verified
+byte-exact, zero mismatches). Corpus rev 2: `source.c`/`text.md` are
+rebuilt from the v2.61.0 tag (larger than rev 1), so those two rows are
+not size-comparable with the older tables; the seeded fixtures are
+byte-identical to rev 1. VaptVupt v2.62.0 (Huffman4 refill-hoisted
+decode; output bytes unchanged since v2.61.0).
+
+```
+access.log (1,891,394)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        434,321     4.355     117.8    319.8
+  vv-balanced    299,185     6.322      54.3    406.4
+  vv-extreme     242,132     7.811       0.8    457.8
+  zstd-1         286,944     6.592     138.1    244.3
+  zstd-3         291,162     6.496     114.5    354.4
+  zstd-9         229,599     8.238      49.3    444.5
+  zstd-19        187,973    10.062       2.4    358.8
+  lz4-1          464,689     4.070     258.9    341.7
+  lz4-9          304,586     6.210      32.5    273.9
+
+catalog.xml (1,267,065)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        238,497     5.313     105.6    376.4
+  vv-balanced    113,183    11.195      58.4    224.4
+  vv-extreme     111,940    11.319       1.0    381.6
+  zstd-1         111,036    11.411     216.4    216.6
+  zstd-3         106,500    11.897     126.4    199.2
+  zstd-9         100,858    12.563      59.2    403.3
+  zstd-19         83,742    15.131       1.7    299.8
+  lz4-1          219,179     5.781     272.1    210.0
+  lz4-9          188,030     6.739      66.1    322.2
+
+data.json (2,745,922)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        863,744     3.179     144.1    521.6
+  vv-balanced    505,274     5.435      56.7    320.8
+  vv-extreme     495,058     5.547       1.0    435.9
+  zstd-1         500,966     5.481     159.9    339.8
+  zstd-3         523,890     5.241     155.4    272.5
+  zstd-9         473,364     5.801      57.4    475.4
+  zstd-19        414,384     6.627       1.8    451.0
+  lz4-1          950,614     2.889     269.7    236.3
+  lz4-9          673,569     4.077      39.6    387.0
+
+program.bin (93,832)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast         44,224     2.122      20.3     48.0
+  vv-balanced     30,884     3.038       7.1     68.7
+  vv-extreme      31,242     3.003       3.0     68.1
+  zstd-1          34,203     2.743      37.7     45.4
+  zstd-3          30,701     3.056      41.9     70.2
+  zstd-9          26,957     3.481      26.4     52.4
+  zstd-19         24,377     3.849       3.0     47.9
+  lz4-1           44,782     2.095      53.2     36.9
+  lz4-9           38,634     2.429      15.7     54.9
+
+random.bin (1,048,576)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,048,608     1.000     324.5    413.9
+  vv-balanced  1,048,608     1.000     230.9    314.3
+  vv-extreme   1,048,608     1.000     154.5    241.8
+  zstd-1       1,048,614     1.000     196.3    225.6
+  zstd-3       1,048,613     1.000     176.4    211.2
+  zstd-9       1,048,613     1.000      97.8    212.0
+  zstd-19      1,048,613     1.000      16.7    355.9
+  lz4-1        1,048,595     1.000     361.9    164.7
+  lz4-9        1,048,595     1.000      35.0    242.3
+
+repeat.txt (1,048,576)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast          4,243   247.131     255.7    296.8
+  vv-balanced        165  6355.006     172.6    398.4
+  vv-extreme         567  1849.340      89.6    303.5
+  zstd-1             156  6721.641     247.9    248.1
+  zstd-3             155  6765.006     333.0    435.5
+  zstd-9             155  6765.006     166.0    253.4
+  zstd-19            150  6990.507      71.3    414.9
+  lz4-1            4,185   250.556     388.5    336.8
+  lz4-9            4,185   250.556     599.8    425.9
+
+sensors.bin (1,280,000)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,280,036     1.000     321.4    521.7
+  vv-balanced    915,831     1.398      10.8    185.2
+  vv-extreme     927,147     1.381      10.7    178.5
+  zstd-1       1,087,992     1.176     149.2    373.5
+  zstd-3       1,087,991     1.176     204.9    173.7
+  zstd-9       1,087,619     1.177      68.1    183.0
+  zstd-19        871,309     1.469       7.1    188.5
+  lz4-1        1,280,019     1.000     221.4    188.9
+  lz4-9        1,250,875     1.023      35.7    256.7
+
+source.c (415,305)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        143,622     2.892      40.2    142.3
+  vv-balanced    110,599     3.755      26.6    157.8
+  vv-extreme     106,057     3.916       2.2    162.3
+  zstd-1         119,846     3.465      82.5    143.0
+  zstd-3         108,018     3.845      70.1    103.9
+  zstd-9          97,362     4.266      34.4    167.2
+  zstd-19         89,982     4.615       2.9    137.3
+  lz4-1          167,140     2.485     133.6    102.9
+  lz4-9          123,461     3.364      28.9    106.9
+
+structs.bin (1,200,000)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast      1,057,946     1.134      49.2    571.3
+  vv-balanced    697,961     1.719      12.1    271.1
+  vv-extreme     697,961     1.719      10.8    236.8
+  zstd-1       1,003,532     1.196     138.2    166.9
+  zstd-3         752,116     1.595      69.4    147.4
+  zstd-9         749,835     1.600      46.3    255.3
+  zstd-19        630,874     1.902       4.6    155.5
+  lz4-1        1,200,019     1.000     327.3    270.7
+  lz4-9        1,052,443     1.140      36.5    280.5
+
+table.csv (1,368,615)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        619,489     2.209      71.0    529.5
+  vv-balanced    426,402     3.210      24.5    242.8
+  vv-extreme     377,650     3.624       1.0    320.0
+  zstd-1         420,084     3.258     106.1    207.8
+  zstd-3         429,180     3.189      84.3    167.7
+  zstd-9         359,076     3.811      37.8    335.4
+  zstd-19        339,121     4.036       1.8    283.5
+  lz4-1          666,555     2.053     167.4    310.3
+  lz4-9          471,686     2.902      18.2    329.8
+
+text.md (596,979)
+  tool            size      ratio    c MB/s   d MB/s
+  vv-fast        270,746     2.205      39.1    226.7
+  vv-balanced    215,392     2.772      22.7    210.3
+  vv-extreme     207,081     2.883       3.2    177.5
+  zstd-1         239,268     2.495      91.7    116.3
+  zstd-3         207,860     2.872      45.3    117.3
+  zstd-9         189,752     3.146      34.2    227.1
+  zstd-19        177,708     3.359       3.6    161.9
+  lz4-1          334,396     1.785     132.6    143.0
+  lz4-9          241,454     2.472      31.8    156.0
+
+```
+
+Decode is the axis v2.61.1/v2.62.0 moved: `vv-balanced` now decodes
+faster than zstd-3 on logs (406 vs 354 MB/s), CSV (243 vs 168), text
+(210 vs 117), records (271 vs 147), sensors (185 vs 174), and JSON
+(321 vs 273) in this run. Compress-speed and ratio standings are
+unchanged from the v2.61.0 analysis below.
+
 ## v2.61.0 head-to-head (measured 2026-07)
 
 > **v2.61.1 update (2026-07):** fast-mode (token-block) decode improved

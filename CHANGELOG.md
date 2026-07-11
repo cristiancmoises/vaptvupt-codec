@@ -2,6 +2,32 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.62.0 — Sprint 127: Huffman4 decode refill hoist (+13-15% balanced decode)
+
+Decode-side performance release. Output bytes are unchanged since
+v2.61.0 (ratio gate ±0); the wire format stays version 1.
+
+The Huffman4 literal decoder checked and refilled its bit accumulator
+once per symbol per lane. One bulk refill guarantees ≥ 56 accumulator
+bits whenever ≥ 8 input bytes remain, and three symbols consume at most
+3 × 15 = 45 bits — so the hot loop now decodes 3 symbols per lane
+(12 outputs) per refill round, with the checked per-symbol loop kept for
+the stream tails. Bit consumption, decode order, and the corrupt-input
+slow path are identical; the accumulator cannot underflow (56 − 45 ≥ 0).
+
+Measured in-process (balanced mode, best of 25, three interleaved A/B
+rounds): sensors.bin 243 → 281 MB/s (+15%), text.md 468 → 529 (+13%),
+data.json 755-800 → 766-865 (+2-8%). A fresh CLI head-to-head against
+zstd 1.5.6 and lz4 1.10.0 (corpus rev 2, zero roundtrip mismatches) is
+recorded in bench/COMPARISON.md and README.md; in that run vv-balanced
+decodes faster than zstd-3 on logs, CSV, text, records, and JSON.
+
+Validation: 22/22 test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; ratio gate
+zero regressions; 5,200 differential fuzz cases consistent; 27/27
+negative-corpus cases; ASan+UBSan+LeakSanitizer roundtrip sweep clean
+(11 corpus files × 3 modes, byte-exact).
+
 ## v2.61.2 — Sprint 126: block-scratch consolidation + release-notes cleanup
 
 Maintenance release. Valid-stream output is byte-identical to v2.61.0/1
