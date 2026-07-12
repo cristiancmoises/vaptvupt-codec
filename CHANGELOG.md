@@ -2,6 +2,34 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.2 — Sprint 132: extreme-mode encode ~2x faster, byte-identical
+
+Pure speedup of the extreme-mode optimal parser; output is
+byte-identical to v2.65.0/1 (verified per file and by the ratio gate
+at ±0), wire format unchanged.
+
+Two changes in the candidate collector, both outcome-preserving:
+
+- Rep-offset probes now extend through `extend_match` (8-byte xor/ctz
+  stride) instead of a byte-at-a-time loop. The probe runs up to three
+  times at every DP position.
+- The hash-chain walk exits as soon as a LONG_MATCH-class candidate
+  (>= 512) appears. The DP takes such a candidate immediately and
+  ignores all others, so the remainder of the depth-256 walk — with an
+  extend per prefix hit — was pure waste on repetitive regions.
+
+Measured extreme encode (CLI, corpus rev 2): logs 1.1 -> 2.0 MB/s,
+json 1.2 -> 2.2, xml 1.2 -> 2.2, text 4.0 -> 5.2, source 2.9 -> 4.3,
+csv 1.3 -> 1.5. Lowering the LONG_MATCH threshold itself (256/128) was
+also swept: size-neutral within ±130 bytes and only marginally faster,
+so the threshold stays at 512 and the release stays byte-identical.
+
+Validation: 22/22 test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; ratio gate
+±0 bytes (output identity); 5,200 differential fuzz cases consistent;
+27/27 negative-corpus cases; ASan+UBSan+LeakSanitizer roundtrip sweep
+clean (11 corpus files x 3 modes, byte-exact).
+
 ## v2.65.1 — Sprint 131: OF-code price decomposition (measured negative result, default off)
 
 Maintenance release. Output is byte-identical to v2.65.0 across the

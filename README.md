@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.65.1. License: this repository (the vaptvupt-codec library and
+Version 2.65.2. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
@@ -44,7 +44,8 @@ Where each side wins:
 - `extreme` beats zstd-3 broadly and now takes xml AND json from zstd-9
   (xml 7.3% smaller, json 4.6% smaller in this run); zstd-9 keeps
   text/source/logs and zstd-19 keeps the maximum-ratio tier. Extreme
-  targets ratio, not speed (≈1 MB/s on its optimal-parse path).
+  targets ratio, not speed (~2 MB/s on its optimal-parse path since
+  v2.65.2's collector speedups; was ~1).
 - `fast` beats lz4-1 on ratio on 7 of the 11 corpus files (e.g. access.log
   4.355 @118/320 vs 4.070 @259/342), ties the two incompressible controls,
   and loses on xml and pure repetition — while lz4 remains 1.5–4× faster

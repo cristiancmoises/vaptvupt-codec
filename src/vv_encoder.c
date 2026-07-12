@@ -868,6 +868,9 @@ static size_t emit_seq(uint8_t *dst, const uint8_t *lits,
  * ═══════════════════════════════════════════════════════════════ */
 
 #define VV_OPT_MAX_CAND  16
+#ifndef VV_OPT_LONG_MATCH
+#define VV_OPT_LONG_MATCH 512   /* take immediately; skip interior DP */
+#endif
 #define VV_OPT_PRICE_INF 0x3FFFFFFF
 
 typedef struct { uint32_t off; int32_t len; } opt_cand_t;
@@ -1092,9 +1095,12 @@ static int opt_collect(const matcher_t *m, const uint8_t *data,
     for (int r = 0; r < 3; r++) {
         uint32_t roff = reps[r];
         if (roff == 0 || (int32_t)roff > pos) continue;
-        const uint8_t *a = data + pos, *b = data + pos - roff;
-        int32_t l = 0; while (l < max && a[l] == b[l]) l++;
+        /* SPRINT 132: extend_match (8-byte stride) instead of the
+         * byte-at-a-time loop — identical result, and this runs three
+         * times at every DP position. */
+        int32_t l = extend_match(data + pos, data + pos - roff, max);
         if (l >= VV_MIN_MATCH && n < VV_OPT_MAX_CAND) { cands[n].off = roff; cands[n].len = l; n++; }
+        if (l >= VV_OPT_LONG_MATCH) return n;   /* caller short-circuits on it */
     }
     uint32_t h = hash_safe(data + pos, end - pos);
     int32_t ref = m->table[h];
@@ -1108,6 +1114,10 @@ static int opt_collect(const matcher_t *m, const uint8_t *data,
             int dup = 0;
             for (int k = 0; k < n; k++) if (cands[k].off == off) { if (cands[k].len < l) cands[k].len = l; dup = 1; break; }
             if (!dup && l >= VV_MIN_MATCH) { cands[n].off = off; cands[n].len = l; n++; }
+            /* SPRINT 132: a LONG_MATCH-class hit makes the caller take
+             * it immediately and ignore other candidates — the rest of
+             * the walk (up to depth 256 with extends) is wasted work. */
+            if (l >= VV_OPT_LONG_MATCH) return n;
         }
         ref = chain_arr[ref & chain_mask];
     }
@@ -1194,7 +1204,7 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
      * via the raw-store path is NOT what we want — instead we cap by
      * short-circuiting long matches, which both bounds work AND is the
      * correct optimal choice (a very long match is never beaten). */
-    const int32_t LONG_MATCH = 512;   /* take immediately, skip interior DP */
+    const int32_t LONG_MATCH = VV_OPT_LONG_MATCH;
 
     for (int32_t i = 0; i < N; i++) {
         if (price[i] >= VV_OPT_PRICE_INF) {
