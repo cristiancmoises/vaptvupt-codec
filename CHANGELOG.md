@@ -2,6 +2,33 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.1 — Sprint 131: OF-code price decomposition (measured negative result, default off)
+
+Maintenance release. Output is byte-identical to v2.65.0 across the
+full corpus, the ratio gate (±0), and the fixture suite; the wire
+format is unchanged.
+
+The optimal parser's match price is refactored into an explicit
+decomposition — 8 (LL+ML sequence overhead) + OF-code bits + offset
+extra bits — with the previous constants preserved exactly as the
+prior (rep codes 2 bits, explicit codes 6 bits). The greedy prepass
+now also classifies each match's OF code with the wire's exact rep
+rules, producing a per-block OF-code histogram, and a new
+VV_OPT_OF_BLEND knob (default 0) can blend measured code costs into
+the price the way VV_OPT_LIT_BLEND does for literals.
+
+The measured result is negative and is recorded so it is not re-tried
+blind: blend 0 (the prior) beats every measured blend on the 11-file
+corpus total (blends 2/4/6/8 of 8 land 0.01-0.08% worse). Measured OF
+pricing helps plain text and source (~-1%) but hurts json and logs by
+more — per-block OF distributions on this corpus do not deviate from
+the prior enough to pay, unlike the literal distributions in v2.64.0/
+v2.65.0. Blend 0 was verified to reproduce v2.65.0 byte-for-byte
+before the sweep, so the refactor itself is exactly anchored.
+
+Validation: 22/22 test suites under `-O3 -flto`; ratio gate ±0 bytes
+(output identity); 5,200 differential fuzz cases consistent.
+
 ## v2.65.0 — Sprint 130: residual-literal pricing via greedy prepass
 
 Extreme-mode ratio release; balanced/fast output unchanged, wire format
