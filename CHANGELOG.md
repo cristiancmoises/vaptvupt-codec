@@ -2,6 +2,42 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.0 — Sprint 130: residual-literal pricing via greedy prepass
+
+Extreme-mode ratio release; balanced/fast output unchanged, wire format
+version 1 unchanged. Completes the literal-repricing arc: v2.64.0
+priced literals from the raw block histogram, which is dominated by
+exactly the repetitive content that matches remove — it underestimates
+the entropy of the RESIDUAL literal stream the coder actually sees.
+
+The optimal parser now runs a depth-4 greedy prepass on a private
+throwaway matcher (accel on, ~1% of the DP's runtime, no shared-state
+pollution), histograms the literal bytes of its token stream, and
+prices literals from that residual distribution (still blended with
+the flat prior; the blend re-swept to 6/8 — the honest histogram
+tolerates a stronger weight than the raw one did, and the mode
+contract now holds with 20 bytes of headroom on the tightest fixture
+instead of violating). Falls back to the raw histogram when the
+prepass cannot run.
+
+Measured, extreme mode (corpus rev 2, zero roundtrip mismatches; full
+tables in bench/COMPARISON.md): json 485,218 -> 451,744 (-6.9%; now
+4.6% smaller than zstd-9's 473,364), xml -1.9% (7.3% under zstd-9),
+csv -0.8%, logs -0.2%, plain text +1.6% and source +1.9% (both cells
+still beat balanced and were already zstd-9 losses). Extreme now takes
+two of the six text-family files from zstd-9 outright. Encode speed
+unchanged (prepass ~1%).
+
+Ratio-gate baseline regenerated (documented --update flow): json-mixed
+and csv improve again; text-simple/varied/large give back 28/80/128
+bytes; the known source-like contract violation narrows (849 -> 845).
+
+Validation: 22/22 test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; 5,200
+differential fuzz cases consistent; 27/27 negative-corpus cases;
+ASan+UBSan+LeakSanitizer roundtrip sweep clean (11 corpus files x 3
+modes, byte-exact).
+
 ## v2.64.0 — Sprint 129: entropy-aware literal pricing in the optimal parser
 
 Extreme-mode ratio release; balanced/fast output unchanged, wire format

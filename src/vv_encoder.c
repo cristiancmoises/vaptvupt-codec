@@ -918,15 +918,57 @@ static inline int32_t opt_lit_price(void) { return 8; }
 #define VV_OPT_LIT_MIN 2
 #endif
 #ifndef VV_OPT_LIT_BLEND
-#define VV_OPT_LIT_BLEND 4
+#define VV_OPT_LIT_BLEND 6
 #endif
-static void opt_build_lit_prices(const uint8_t *data, int32_t base, int32_t n,
-                                 int32_t lit_bits[256]) {
-    uint32_t hist[256];
-    memset(hist, 0, sizeof(hist));
-    for (int32_t i = 0; i < n; i++) hist[data[base + i]]++;
+/* fwd decl: the greedy parser (defined below) doubles as the residual-
+ * literal estimator for the optimal parser's pricing prepass. */
+static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_len,
+                             uint8_t *dst, size_t dst_cap,
+                             matcher_t *m, vv_mode_t mode, int min_match);
+
+/* SPRINT 130: histogram the literal bytes of an LZ token stream (the
+ * residual literals a parse actually leaves), walking the same wire
+ * layout extract_literals does but only counting. Returns total
+ * literal count, or 0 on a malformed stream (caller falls back to the
+ * raw-block histogram). */
+static size_t tok_lit_hist(const uint8_t *tokens, size_t tok_len,
+                           int off_bytes, uint32_t hist[256]) {
+    const uint8_t *tp = tokens, *tp_end = tokens + tok_len;
+    size_t total = 0;
+    while (tp < tp_end) {
+        uint8_t token = *tp++;
+        size_t ll = token >> 4;
+        size_t mc = token & 0x0F;
+        if (ll == 15) {
+            do {
+                if (tp >= tp_end) return 0;
+                uint8_t b = *tp++;
+                ll += b;
+                if (b < 255) break;
+            } while (tp < tp_end);
+        }
+        if ((size_t)(tp_end - tp) < ll) return 0;
+        for (size_t i = 0; i < ll; i++) hist[tp[i]]++;
+        total += ll;
+        tp += ll;
+        if (tp >= tp_end) break;
+        if ((size_t)(tp_end - tp) < (size_t)off_bytes) return 0;
+        tp += off_bytes;
+        if (mc == 15) {
+            do {
+                if (tp >= tp_end) return 0;
+                uint8_t b = *tp++;
+                if (b < 255) break;
+            } while (tp < tp_end);
+        }
+    }
+    return total;
+}
+
+static void opt_build_lit_prices_from_hist(const uint32_t hist[256], size_t n,
+                                           int32_t lit_bits[256]) {
     for (int s = 0; s < 256; s++) {
-        if (!hist[s]) { lit_bits[s] = 14; continue; }
+        if (!hist[s] || !n) { lit_bits[s] = 14; continue; }
         /* ratio8 = (n / hist[s]) in 24.8 fixed point; log2(ratio8) =
          * log2(n/hist) + 8. Round via the mantissa bit below the MSB. */
         uint32_t ratio8 = (uint32_t)(((uint64_t)n << 8) / hist[s]);
@@ -935,11 +977,10 @@ static void opt_build_lit_prices(const uint8_t *data, int32_t base, int32_t n,
         if (t >= 1 && ((ratio8 >> (t - 1)) & 1)) bits++;   /* round half up */
         if (bits < VV_OPT_LIT_MIN) bits = VV_OPT_LIT_MIN;
         if (bits > 14) bits = 14;
-        /* Blend toward the flat-8 prior: the raw-block histogram
-         * UNDERESTIMATES residual-literal entropy on plain text (the
-         * match-covered repetitive content inflates common-byte
-         * counts), so a pure per-byte price over-buys literals there.
-         * blend/8 parts per-byte estimate, rest flat 8. */
+        /* Blend toward the flat-8 prior: a histogram estimate is still
+         * an approximation of the coder's delivered cost, and pricing
+         * from it unblended over-buys literals (measured; see the
+         * v2.64.0 sweep). blend/8 parts per-byte estimate, rest flat. */
         lit_bits[s] = (VV_OPT_LIT_BLEND * bits + (8 - VV_OPT_LIT_BLEND) * 8) / 8;
     }
 }
@@ -1049,9 +1090,43 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
     price[0] = 0;
     prep[0][0] = prep[0][1] = prep[0][2] = 0;
 
-    /* SPRINT 129: entropy-aware per-byte literal prices for this block. */
+    /* SPRINT 129/130: entropy-aware per-byte literal prices for this
+     * block. The distribution that matters is the RESIDUAL literal
+     * stream (bytes a parse leaves uncovered), not the raw block — the
+     * raw histogram is dominated by exactly the repetitive content
+     * that matches will remove. A depth-4 greedy prepass on a private
+     * throwaway matcher (no shared-state pollution, ~1% of the DP's
+     * runtime) estimates that stream; its token output is histogrammed
+     * and discarded. Falls back to the raw-block histogram if the
+     * prepass cannot run. */
     int32_t lit_bits[256];
-    opt_build_lit_prices(src, base, N, lit_bits);
+    {
+        uint32_t hist[256];
+        memset(hist, 0, sizeof(hist));
+        size_t nlit = 0;
+        matcher_t mp;
+        if (matcher_init(&mp, m->wlog, 4)) {
+            mp.accel = 2;
+            mp.max_match = m->max_match;
+            size_t pcap = block_len + block_len / 255 + 1024;
+            uint8_t *ptok = (uint8_t *)malloc(pcap);
+            if (ptok) {
+                size_t pcsz = compress_block(src, start_pos, block_len, ptok,
+                                             pcap, &mp, VV_MODE_ULTRA_FAST, min_match);
+                if (pcsz > 0)
+                    nlit = tok_lit_hist(ptok, pcsz, off_bytes, hist);
+                free(ptok);
+            }
+            matcher_free(&mp);
+        }
+        if (nlit == 0) {
+            /* Prepass unavailable or block fully covered: raw fallback. */
+            memset(hist, 0, sizeof(hist));
+            for (int32_t i = 0; i < N; i++) hist[src[base + i]]++;
+            nlit = (size_t)N;
+        }
+        opt_build_lit_prices_from_hist(hist, nlit, lit_bits);
+    }
 
     /* Forward DP. We also must keep the matcher hash chains populated as we
      * advance, so matches reference earlier positions correctly. We insert

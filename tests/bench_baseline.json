@@ -8,21 +8,21 @@
   },
   "csv": {
     "balanced": 20384,
-    "extreme": 14673,
+    "extreme": 14064,
     "gzip9": 19359,
     "input_size": 67812,
     "ultra_fast": 20384
   },
   "json-mixed": {
     "balanced": 28581,
-    "extreme": 25157,
+    "extreme": 22493,
     "gzip9": 27990,
     "input_size": 118545,
     "ultra_fast": 28581
   },
   "json-small": {
     "balanced": 4153,
-    "extreme": 3304,
+    "extreme": 3257,
     "gzip9": 5426,
     "input_size": 49780,
     "ultra_fast": 4153
@@ -43,28 +43,28 @@
   },
   "source-like": {
     "balanced": 839,
-    "extreme": 849,
+    "extreme": 845,
     "gzip9": 976,
     "input_size": 38490,
     "ultra_fast": 839
   },
   "text-large": {
     "balanced": 17370,
-    "extreme": 17222,
+    "extreme": 17350,
     "gzip9": 14529,
     "input_size": 74307,
     "ultra_fast": 17370
   },
   "text-simple": {
     "balanced": 11381,
-    "extreme": 11234,
+    "extreme": 11262,
     "gzip9": 9116,
     "input_size": 58558,
     "ultra_fast": 11381
   },
   "text-varied": {
     "balanced": 9832,
-    "extreme": 9655,
+    "extreme": 9735,
     "gzip9": 7591,
     "input_size": 55798,
     "ultra_fast": 9832
