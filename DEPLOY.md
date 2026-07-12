@@ -1,6 +1,6 @@
 # VaptVupt — Release Procedure
 
-Release v2.65.3 (tag `v2.65.3`). GPL-3.0-or-later.
+Release v2.65.4 (tag `v2.65.4`). GPL-3.0-or-later.
 
 The build environment produces and verifies the artifacts. Steps that
 require GitHub or registry credentials are marked and run on a machine where
@@ -14,7 +14,7 @@ suite:
 
 ```sh
 git clone vaptvupt-2.61.1.bundle repo
-cd repo && git checkout v2.65.3
+cd repo && git checkout v2.65.4
 make
 make test     # 22 C suites + OOM sweep, differential 5576/5576, fuzz 5200/5200,
               # ratio gate +/- 0, safezone 58/58, exact-buffer 20136/20136,
@@ -41,15 +41,15 @@ git push origin master --tags
 ## 4. GitHub release (credentials)
 
 ```sh
-gh release create v2.65.3 \
+gh release create v2.65.4 \
   vaptvupt-2.61.1-src.tar.gz \
   SHA256SUMS \
   COMPARISON.md \
   vaptvupt-2.61.1-linux-x86_64 \
   vaptvupt-2.61.1-linux-x86_64-mt \
   vaptvupt-2.61.1-linux-x86_64-pgo \
-  --title "VaptVupt v2.65.3" \
-  --notes-file <(awk '/^## v2.65.3 /{f=1;next} /^## /{f=0} f' CHANGELOG.md)
+  --title "VaptVupt v2.65.4" \
+  --notes-file <(awk '/^## v2.65.4 /{f=1;next} /^## /{f=0} f' CHANGELOG.md)
 ```
 
 `COMPARISON.md` ships with the release; it carries the measured position
@@ -62,7 +62,7 @@ vcpkg uses SHA512, not SHA256:
 ```sh
 sha512sum vaptvupt-2.61.1-src.tar.gz
 # vcpkg.json: "version": "2.61.1"
-# portfile.cmake: REF v2.65.3, SHA512 <above>
+# portfile.cmake: REF v2.65.4, SHA512 <above>
 ```
 
 ## 6. Smoke test after install
@@ -78,7 +78,7 @@ vaptvupt -c -m extreme --bcj-arm64 -o code.zupt /path/to/arm64-bin  # AArch64 bi
 
 | File | Purpose |
 |---|---|
-| `vaptvupt-2.61.1-src.tar.gz` | Source (`git archive v2.65.3`) |
+| `vaptvupt-2.61.1-src.tar.gz` | Source (`git archive v2.65.4`) |
 | `vaptvupt-2.61.1.bundle` | Git history + tags (clone-able) |
 | `vaptvupt-2.61.1-linux-x86_64` | Default build |
 | `vaptvupt-2.61.1-linux-x86_64-mt` | Threaded build |

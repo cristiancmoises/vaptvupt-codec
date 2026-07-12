@@ -280,6 +280,92 @@ def vvh_decode(src: bytes, src_len: int, num_literals: int) -> tuple[bytes, int]
     return bytes(out), src_consumed
 
 
+def _decode_one(reader: BitReader, entries) -> int:
+    """Decode a single canonical-Huffman symbol from `reader`.
+
+    Shared by the 4-stream decoder. Same linear-scan logic as the body
+    of `vvh_decode` (canonical codes are uniquely decodable, so the
+    shortest-length-first scan's first match is correct).
+    """
+    if reader.nbits < VVH_MAX_CODE_LEN:
+        reader.refill()
+    for rev_code, ln, sym in entries:
+        if reader.nbits < ln:
+            if reader.pos >= reader.len:
+                raise HuffmanError("Huffman4: bitstream exhausted")
+            reader.refill()
+        if (reader.bits & ((1 << ln) - 1)) == rev_code:
+            reader.consume(ln)
+            return sym
+    raise HuffmanError("Huffman4: no canonical code matched")
+
+
+def vvh_decode4(src: bytes, src_len: int, num_literals: int) -> tuple[bytes, int]:
+    """Decode `num_literals` bytes from a 4-stream interleaved Huffman
+    block (lit_fmt=4, FORMAT.md §3.4.1). Mirrors `vvh_decode4` in
+    `src/vv_huffman.c`.
+
+    Layout: [code-length header] [9-byte s1/s2/s3 sizes]
+    [stream0][stream1][stream2][stream3]. One shared decode table; the
+    four streams are byte-aligned; symbols are round-robin
+    (stream s carries source indices s, s+4, s+8, …).
+
+    Returns (decoded_bytes, src_consumed). Raises HuffmanError on
+    malformed input.
+    """
+    if num_literals == 0:
+        return b"", 0
+
+    lengths, hdr_size = read_header(src, src_len)
+    if not any(ln > 0 for ln in lengths):
+        raise HuffmanError("Huffman4: empty code-length table")
+
+    # 9-byte stream-size header (s1, s2, s3; s0 is implicit).
+    if hdr_size + 9 > src_len:
+        raise HuffmanError("Huffman4: stream-size header truncated")
+    sh = src[hdr_size:hdr_size + 9]
+    s1 = sh[0] | (sh[1] << 8) | (sh[2] << 16)
+    s2 = sh[3] | (sh[4] << 8) | (sh[5] << 16)
+    s3 = sh[6] | (sh[7] << 8) | (sh[8] << 16)
+
+    streams_off = hdr_size + 9
+    streams_total = src_len - streams_off
+    if s1 > streams_total or s2 > streams_total - s1 or \
+       s3 > streams_total - s1 - s2:
+        raise HuffmanError("Huffman4: stream sizes exceed payload")
+    s0 = streams_total - s1 - s2 - s3
+    if num_literals >= 4 and (s0 == 0 or s1 == 0 or s2 == 0 or s3 == 0):
+        raise HuffmanError("Huffman4: zero-length stream with >=4 literals")
+
+    entries = build_decode_codes(lengths)
+
+    base = streams_off
+    readers = [
+        BitReader(src[base:base + s0], s0),
+        BitReader(src[base + s0:base + s0 + s1], s1),
+        BitReader(src[base + s0 + s1:base + s0 + s1 + s2], s2),
+        BitReader(src[base + s0 + s1 + s2:base + s0 + s1 + s2 + s3], s3),
+    ]
+    for r in readers:
+        r.refill()
+
+    out = bytearray(num_literals)
+    q = num_literals // 4
+    idx = 0
+    for _ in range(q):
+        for lane in range(4):
+            out[idx + lane] = _decode_one(readers[lane], entries)
+        idx += 4
+    # Tail: R = num_literals - 4q symbols from streams 0, 1, 2.
+    tail = num_literals - q * 4
+    for lane in range(tail):
+        out[idx] = _decode_one(readers[lane], entries)
+        idx += 1
+
+    src_consumed = streams_off + s0 + s1 + s2 + s3
+    return bytes(out), src_consumed
+
+
 # ─────────────────────────────────────────────────────────────────
 # Self-test
 # ─────────────────────────────────────────────────────────────────

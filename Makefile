@@ -533,13 +533,13 @@ amalg:
 	@mkdir -p build
 	@echo "/* VaptVupt amalgamation — single-file build for VaptVupt */" > build/vaptvupt.h
 	@echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> build/vaptvupt.h
-	@for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h; do \
+	@for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vv_bcj.h include/vaptvupt_api.h; do \
 		grep -v '#include "' $$f >> build/vaptvupt.h; \
 	done
 	@echo "/* VaptVupt amalgamation — single-file build */" > build/vaptvupt.c
 	@echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> build/vaptvupt.c
 	@echo '#include "vaptvupt.h"' >> build/vaptvupt.c
-	@for f in src/vv_xxh64.c src/vv_simd.c src/vv_huffman.c src/vv_ans.c src/vv_encoder.c src/vv_decoder.c src/vaptvupt_api.c; do \
+	@for f in src/vv_xxh64.c src/vv_simd.c src/vv_huffman.c src/vv_ans.c src/vv_bcj.c src/vv_encoder.c src/vv_decoder.c src/vaptvupt_api.c; do \
 		echo "" >> build/vaptvupt.c; \
 		echo "/* ── $$f ── */" >> build/vaptvupt.c; \
 		grep -v '#include "' $$f >> build/vaptvupt.c; \
@@ -562,13 +562,13 @@ amalg-verify:
 	mkdir -p $$tmpdir/build && \
 	echo "/* VaptVupt amalgamation — single-file build for VaptVupt */" > $$tmpdir/build/vaptvupt.h && \
 	echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> $$tmpdir/build/vaptvupt.h && \
-	for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vaptvupt_api.h; do \
+	for f in include/vv_platform.h include/vaptvupt.h include/vv_ans.h include/vv_huffman.h include/vv_bcj.h include/vaptvupt_api.h; do \
 		grep -v '#include "' $$f >> $$tmpdir/build/vaptvupt.h; \
 	done && \
 	echo "/* VaptVupt amalgamation — single-file build */" > $$tmpdir/build/vaptvupt.c && \
 	echo "/* SPDX-License-Identifier: GPL-3.0-or-later */" >> $$tmpdir/build/vaptvupt.c && \
 	echo '#include "vaptvupt.h"' >> $$tmpdir/build/vaptvupt.c && \
-	for f in src/vv_xxh64.c src/vv_simd.c src/vv_huffman.c src/vv_ans.c src/vv_encoder.c src/vv_decoder.c src/vaptvupt_api.c; do \
+	for f in src/vv_xxh64.c src/vv_simd.c src/vv_huffman.c src/vv_ans.c src/vv_bcj.c src/vv_encoder.c src/vv_decoder.c src/vaptvupt_api.c; do \
 		echo "" >> $$tmpdir/build/vaptvupt.c; \
 		echo "/* ── $$f ── */" >> $$tmpdir/build/vaptvupt.c; \
 		grep -v '#include "' $$f >> $$tmpdir/build/vaptvupt.c; \

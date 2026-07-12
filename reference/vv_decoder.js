@@ -733,6 +733,90 @@
         return [out, srcConsumed];
     }
 
+    // Decode one canonical-Huffman symbol from a reader using a shared
+    // entries table (shared by the 4-stream decoder).
+    function huffmanDecodeOne(reader, entries, ctx) {
+        if (reader.n < VVH_MAX_CODE_LEN) reader.refill();
+        for (const e of entries) {
+            if (reader.n < e.len) {
+                if (reader.p >= reader.s.length) {
+                    throw new CorruptError(`Huffman4: bitstream exhausted (${ctx})`);
+                }
+                reader.refill();
+            }
+            const mask = (1 << e.len) - 1;
+            if ((reader.peek(e.len) & mask) === e.rev) {
+                reader.consume(e.len);
+                return e.sym;
+            }
+        }
+        throw new CorruptError(`Huffman4: no canonical code matched (${ctx})`);
+    }
+
+    /**
+     * Decode `numLiterals` bytes from a 4-stream interleaved Huffman
+     * block (lit_fmt = 4, FORMAT.md §3.4.1). Mirrors `vvh_decode4` in
+     * `src/vv_huffman.c` and `reference/vv_huffman.py::vvh_decode4`.
+     * Returns [Uint8Array, srcConsumed].
+     */
+    function vvhDecode4(src, numLiterals) {
+        if (numLiterals === 0) return [new Uint8Array(0), 0];
+
+        const [lengths, hdrSize] = huffmanReadHeader(src);
+        let hasSym = false;
+        for (let i = 0; i < VVH_SYMBOLS; i++) {
+            if (lengths[i] > 0) { hasSym = true; break; }
+        }
+        if (!hasSym) throw new CorruptError('Huffman4: empty code-length table');
+
+        if (hdrSize + 9 > src.length) {
+            throw new CorruptError('Huffman4: stream-size header truncated');
+        }
+        const sh = hdrSize;
+        const s1 = (src[sh] | (src[sh + 1] << 8) | (src[sh + 2] << 16)) >>> 0;
+        const s2 = (src[sh + 3] | (src[sh + 4] << 8) | (src[sh + 5] << 16)) >>> 0;
+        const s3 = (src[sh + 6] | (src[sh + 7] << 8) | (src[sh + 8] << 16)) >>> 0;
+
+        const streamsOff = hdrSize + 9;
+        const streamsTotal = src.length - streamsOff;
+        if (s1 > streamsTotal || s2 > streamsTotal - s1 ||
+            s3 > streamsTotal - s1 - s2) {
+            throw new CorruptError('Huffman4: stream sizes exceed payload');
+        }
+        const s0 = streamsTotal - s1 - s2 - s3;
+        if (numLiterals >= 4 && (s0 === 0 || s1 === 0 || s2 === 0 || s3 === 0)) {
+            throw new CorruptError('Huffman4: zero-length stream with >=4 literals');
+        }
+
+        const entries = huffmanBuildEntries(lengths);
+
+        const b = streamsOff;
+        const readers = [
+            new HuffmanBitReader(src.subarray(b, b + s0)),
+            new HuffmanBitReader(src.subarray(b + s0, b + s0 + s1)),
+            new HuffmanBitReader(src.subarray(b + s0 + s1, b + s0 + s1 + s2)),
+            new HuffmanBitReader(src.subarray(b + s0 + s1 + s2, b + s0 + s1 + s2 + s3)),
+        ];
+        for (const r of readers) r.refill();
+
+        const out = new Uint8Array(numLiterals);
+        const q = Math.floor(numLiterals / 4);
+        let idx = 0;
+        for (let i = 0; i < q; i++) {
+            for (let lane = 0; lane < 4; lane++) {
+                out[idx + lane] = huffmanDecodeOne(readers[lane], entries, `lane${lane}`);
+            }
+            idx += 4;
+        }
+        const tail = numLiterals - q * 4;
+        for (let lane = 0; lane < tail; lane++) {
+            out[idx] = huffmanDecodeOne(readers[lane], entries, `tail${lane}`);
+            idx += 1;
+        }
+
+        return [out, streamsOff + s0 + s1 + s2 + s3];
+    }
+
     /**
      * Decode a full 'S' tag (VV_ENTROPY_SEQ) block payload.
      *
@@ -787,13 +871,11 @@
             litBuf = buf;
         } else if (litFmt === 4) {
             // HUFFMAN4 (added v2.47.0). 4-stream interleaved Huffman.
-            // Not implemented in this reference decoder.
-            throw new CorruptError(
-                "'S' lit_fmt=4 (HUFFMAN4) — 4-stream interleaved Huffman " +
-                "was added in v2.47.0 and has not yet been ported to this " +
-                "JavaScript reference. Use the C decoder (src/vv_decoder.c) " +
-                "for any v2.47.0+ archive. See README.md 'Reference decoder " +
-                "coverage gap' and AUDIT.md item 6.");
+            // Ported in v2.65.4 (Sprint 134) — the default literal
+            // format for blocks with >=1024 literals, so the reference
+            // decoder now covers default C encoder output.
+            const [buf] = vvhDecode4(src.subarray(p, p + litEncLen), totalLits);
+            litBuf = buf;
         } else {
             throw new CorruptError(`'S' unknown lit_fmt ${litFmt}`);
         }

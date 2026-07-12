@@ -2,6 +2,45 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.4 — Sprint 134: fix broken amalgamation build + complete the reference decoders
+
+Two correctness fixes to build and test infrastructure. The shipping
+codec and wire format are unchanged.
+
+**Amalgamation (single-file build) was broken.** The `make amalg` and
+`make amalg-verify` recipes carried a hardcoded source/header list that
+was never updated when the BCJ branch filter (`vv_bcj.c` / `vv_bcj.h`)
+became a core source in v2.60.x. Since `vv_compress` calls
+`vv_bcj_detect` / `vv_bcj_x86` / `vv_bcj_arm64` and uses
+`vv_filter_kind_t`, the amalgamated `build/vaptvupt.c` failed to
+compile (`unknown type name 'vv_filter_kind_t'`, implicit-declaration
+errors). The single-file build is a documented feature; both recipes
+now include `include/vv_bcj.h` and `src/vv_bcj.c`. Verified: the
+amalgamation compiles clean under `-Wall -Wextra` and round-trips all
+three modes plus the `--auto-filter` BCJ path byte-exact.
+
+**Reference decoders now cover the default literal format.** The Python
+(`reference/vv_huffman.py`, `reference/vv_ans.py`) and JavaScript
+(`reference/vv_decoder.js`) reference decoders raised
+NotImplementedError on `lit_fmt = 4` (HUFFMAN4, the 4-stream
+interleaved Huffman format the encoder selects by default for blocks
+with ≥1024 literals since v2.47.0). They therefore could not decode
+typical modern output, and the differential fuzzer silently skipped
+those cases — the independent cross-check did not cover the default
+format. Both decoders now implement `vvh_decode4` per FORMAT.md §3.4.1
+(shared code table, 9-byte stream-size header, byte-aligned streams,
+round-robin symbol interleave), reusing each implementation's existing
+Huffman primitives. Validated byte-exact: both reference decoders
+decode the full 11-file benchmark corpus in balanced and extreme mode
+(22/22 each), independently confirming the C decoder on the default
+format. The README's "byte-exact reference decoders … cross-check C
+against Python" is now accurate for the default format.
+
+Validation: 22/22 C test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; ratio gate
+±0 (C unchanged); 5,200 differential fuzz cases consistent; JS
+reference suite 17/17; both reference decoders byte-exact on the corpus.
+
 ## v2.65.3 — Sprint 133: cap the extreme prepass window allocation (memory hygiene)
 
 Output byte-identical to v2.65.0/1/2 across the corpus, the ratio gate
