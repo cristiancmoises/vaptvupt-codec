@@ -2,6 +2,37 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.3 — Sprint 133: cap the extreme prepass window allocation (memory hygiene)
+
+Output byte-identical to v2.65.0/1/2 across the corpus, the ratio gate
+(±0), and the fixture suite; wire format unchanged. This is a
+memory-robustness fix, not a speed change.
+
+The residual-literal prepass added in v2.65.0 (Sprint 130) allocated
+its throwaway matcher at the full encode window — up to wlog=24, i.e.
+2 × 2^24 × 4 = 128 MB of chain arrays reserved per block. But the
+prepass compresses ONE block (≤ VV_MAX_BLOCK_SIZE = 2^20) with a fresh
+matcher, so every match it can find is intra-block, distance < 2^20; a
+wlog-20 window covers that exactly, with non-aliasing chain indices
+across a ≤ 2^20-wide position span. The prepass matcher is now capped
+at wlog=20, reserving 8 MB instead of up to 128 MB per block.
+
+Because the chain arrays are lazily faulted (only the hash tables are
+memset, and their size is window-independent), resident memory and
+wall-clock are unchanged — the fix is to the VIRTUAL reservation.
+That matters on overcommit-strict systems (`vm.overcommit_memory=2`,
+where address-space reservation counts against the commit limit) and
+in virtual-memory-limited containers, where a 128 MB-per-block reserve
+on a large file could spuriously fail; it is dead weight everywhere
+else. Output is identical (verified per file, by the ratio gate at ±0,
+and by a byte-exact roundtrip on a 7 MB multi-block fixture).
+
+Validation: 22/22 test suites under `-O3 -flto` and under
+`-fsanitize=address,undefined -fno-sanitize-recover=all`; ratio gate
+±0 bytes (output identity); 5,200 differential fuzz cases consistent;
+27/27 negative-corpus cases; ASan+UBSan+LeakSanitizer roundtrip sweep
+clean (11 corpus files + a 7 MB fixture × 3 modes, byte-exact).
+
 ## v2.65.2 — Sprint 132: extreme-mode encode ~2x faster, byte-identical
 
 Pure speedup of the extreme-mode optimal parser; output is

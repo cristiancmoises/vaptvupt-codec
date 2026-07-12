@@ -1168,7 +1168,20 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
         memset(of_hist, 0, sizeof(of_hist));
         size_t nlit = 0, nseq_pp = 0;
         matcher_t mp;
-        if (matcher_init(&mp, m->wlog, 4)) {
+        /* SPRINT 133: the prepass compresses ONE block (<= VV_MAX_BLOCK_SIZE
+         * = 2^20) with a fresh matcher, so every match it can find is
+         * intra-block: distance < block_len <= 2^20. A wlog-20 window
+         * covers that exactly, and its chain index (pos & (2^20-1)) is
+         * non-aliasing across a <= 2^20-wide position span — so the
+         * prepass finds the identical match set and emits the identical
+         * tokens/histogram/prices as it would at the real encode's wlog.
+         * Capping here avoids allocating and zeroing the full extreme
+         * window (up to 2 x 2^24 x 4 = 128 MB of chain arrays per block
+         * at wlog=24) when 2 x 2^20 x 4 = 8 MB suffices. off_bytes is
+         * unaffected: both >16 wlogs emit 3-byte offsets. Output-
+         * identical — verified by the ratio gate at +-0. */
+        uint32_t pp_wlog = (m->wlog < 20) ? m->wlog : 20;
+        if (matcher_init(&mp, pp_wlog, 4)) {
             mp.accel = 2;
             mp.max_match = m->max_match;
             size_t pcap = block_len + block_len / 255 + 1024;

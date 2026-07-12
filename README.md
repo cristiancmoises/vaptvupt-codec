@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.65.2. License: this repository (the vaptvupt-codec library and
+Version 2.65.3. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 

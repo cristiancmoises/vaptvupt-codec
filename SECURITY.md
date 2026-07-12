@@ -1,7 +1,7 @@
 # VaptVupt Security Posture
 
-**Document version**: 2.7 (v2.65.2)
-**Codebase audited**: v2.65.2
+**Document version**: 2.8 (v2.65.3)
+**Codebase audited**: v2.65.3
 **License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
