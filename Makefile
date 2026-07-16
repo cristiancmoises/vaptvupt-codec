@@ -319,6 +319,9 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 		echo "Differential fuzzer (5000 cases, deterministic seed):" ; \
 		python3 tests/fuzz_differential.py --iters 1000 --seed 42 ; \
 		echo "" ; \
+		echo "Reference-decoder default-format guard (lit_fmt=4 coverage):" ; \
+		python3 tests/reference_roundtrip.py ; \
+		echo "" ; \
 		echo "Compression ratio baseline gate:" ; \
 		python3 tests/bench_gate.py ; \
 		echo "" ; \
@@ -352,6 +355,7 @@ python-test: $(TARGET)
 	python3 reference/vv_ans.py
 	python3 tests/corpus_negative.py
 	python3 tests/fuzz_differential.py --iters 1000 --seed 42
+	python3 tests/reference_roundtrip.py
 	python3 tests/bench_gate.py
 
 # Extended fuzz run (10× default iterations, ~50 seconds)

@@ -2,6 +2,35 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.5 — Sprint 135: reference-decoder default-format regression guard in `make test`
+
+Test-infrastructure only; the shipping codec, wire format, and all
+outputs are unchanged.
+
+Sprint 134 fixed the reference decoders' missing HUFFMAN4 support — a
+gap that had let the differential cross-check silently skip default
+encoder output. This release makes that class of gap impossible to
+reintroduce unnoticed: a new guard, `tests/reference_roundtrip.py`,
+now runs in both `make test` and `make python-test`. It
+
+- builds deterministic literal-heavy fixtures and compresses them in
+  balanced and extreme mode,
+- walks the .vv container and FAILS if no 'S'/'T' block with
+  lit_fmt = 4 was produced (so the guard cannot pass vacuously if
+  encoder format selection changes),
+- decodes every stream with the Python reference decoder and compares
+  byte-for-byte, and
+- when node is available, repeats the byte-exact check with the
+  JavaScript reference decoder via `tests/reference_decode_check.js`.
+
+The guard's failure path is verified both ways: the pre-Sprint-134
+Python reference fails it with NotImplementedError, and the JS checker
+exits non-zero on an intentional plaintext mismatch.
+
+Validation: guard passes 8/8 checks with 4 HUFFMAN4 blocks exercised;
+22/22 C suites; 5,200 differential fuzz cases; JS reference suite
+17/17; ratio gate ±0.
+
 ## v2.65.4 — Sprint 134: fix broken amalgamation build + complete the reference decoders
 
 Two correctness fixes to build and test infrastructure. The shipping

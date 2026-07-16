@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.65.4. License: this repository (the vaptvupt-codec library and
+Version 2.65.5. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
@@ -296,6 +296,10 @@ bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
   safe-zone, DoS reproducers, BCJ filter, and more).
 - The Python and JavaScript reference decoders against the C output.
 - A differential fuzzer (5200 cases, fixed seed) cross-checking C and Python.
+- A reference-decoder guard that forces default-format (HUFFMAN4)
+  blocks and requires both the Python and JavaScript references to
+  decode them byte-exactly (added v2.65.5; fails if the format is not
+  exercised).
 - The negative corpus (malformed frames must be rejected, not crash).
 - An OOM-robustness sweep that fails each allocation site in compress and
   decompress in turn and asserts the codec never crashes (returns a clean
