@@ -5,13 +5,13 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.65.5. License: this repository (the vaptvupt-codec library and
+Version 2.65.6. License: this repository (the vaptvupt-codec library and
 CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
 dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
 
 ## Where it stands
 
-### v2.65.0 head-to-head (measured 2026-07)
+### v2.65.6 head-to-head (measured 2026-07)
 
 Single-core AVX2 x86-64, gcc 13 `-O3 -flto`, zstd 1.5.6 `--single-thread`,
 lz4 1.10.0. CLI subprocess timing, best of 3, 11-file mixed corpus
@@ -23,13 +23,13 @@ better.
 
 | file | vv-balanced | vv-extreme | zstd-3 | zstd-9 | lz4-1 |
 |---|---|---|---|---|---|
-| access.log | 6.322 @63/445 | 8.045 @1/459 | 6.496 @201/401 | 8.238 @54/399 | 4.070 @293/413 |
-| data.json | **5.435 @69/515** | **6.078 @1/529** | 5.241 @205/487 | 5.801 @58/546 | 2.889 @384/473 |
-| table.csv | **3.210 @30/279** | 3.728 @1/307 | 3.189 @132/310 | 3.811 @43/300 | 2.053 @233/358 |
-| catalog.xml | 11.195 @99/492 | **13.559 @1/463** | 11.897 @313/482 | 12.563 @61/429 | — |
-| text.md | 2.772 @27/222 | 2.812 @3/218 | 2.872 @92/235 | 3.146 @32/220 | — |
-| sensors.bin (float records) | **1.398 @13/198** | — | 1.176 @257/362 | — | — |
-| structs.bin (24-B records) | **1.719 @15/299** | — | 1.595 @115/289 | 1.600 @45/290 | — |
+| access.log | 6.322 @46/375 | 8.045 @2/459 | 6.496 @241/329 | 8.238 @58/551 | 4.070 @195/209 |
+| data.json | **5.435 @68/552** | **6.078 @2/484** | 5.241 @150/603 | 5.801 @62/674 | 2.889 @329/216 |
+| table.csv | **3.210 @26/320** | 3.728 @1/290 | 3.189 @117/292 | 3.811 @35/318 | 2.053 @242/366 |
+| catalog.xml | 11.195 @51/382 | **13.559 @2/505** | 11.897 @205/228 | 12.563 @63/452 | — |
+| text.md | 2.772 @29/297 | 2.812 @5/204 | 2.872 @40/199 | 3.146 @26/195 | — |
+| sensors.bin (float records) | **1.398 @13/237** | — | 1.176 @119/134 | — | — |
+| structs.bin (24-B records) | **1.719 @13/314** | — | 1.595 @86/250 | 1.600 @41/268 | — |
 
 Where each side wins:
 
@@ -41,54 +41,55 @@ Where each side wins:
 - zstd-19 still wins maximum ratio on record binary (sensors 1.469,
   structs 1.902) at single-digit MB/s; `balanced` gets most of the way
   there at about twice that speed.
-- `extreme` beats zstd-3 broadly and now takes xml AND json from zstd-9
-  (xml 7.3% smaller, json 4.6% smaller in this run); zstd-9 keeps
-  text/source/logs and zstd-19 keeps the maximum-ratio tier. Extreme
-  targets ratio, not speed (~2 MB/s on its optimal-parse path since
-  v2.65.2's collector speedups; was ~1).
+- `extreme` beats zstd-3 broadly and now takes xml and json from zstd-9
+  on this corpus (xml 13.559 vs 12.563, json 6.078 vs 5.801); zstd-9
+  keeps text/source/logs and zstd-19 keeps the maximum-ratio tier.
 - `fast` beats lz4-1 on ratio on 7 of the 11 corpus files (e.g. access.log
-  4.355 @118/320 vs 4.070 @259/342), ties the two incompressible controls,
-  and loses on xml and pure repetition — while lz4 remains 1.5–4× faster
-  at compressing.
-- Decode now leans VaptVupt's way at the default level: `balanced` decodes
-  faster than zstd-3 in this run on logs (406 vs 354 MB/s), CSV (243 vs
-  168), text (210 vs 117), records (271 vs 147), and JSON (321 vs 273).
-- Incompressible input encodes at 230–325 MB/s across modes in this run
+  4.355 @44/103 vs 4.070 @195/209), and loses on xml and pure repetition —
+  while lz4 remains several times faster at compressing.
+- Decode leans VaptVupt's way at the default level: `balanced` decodes
+  faster than zstd-3 in this run on logs (375 vs 329 MB/s), CSV (320 vs
+  292), text (297 vs 199), and records (314 vs 250); on JSON the two are
+  close and zstd-3 edges it (552 vs 603).
+- Incompressible input encodes at 125–185 MB/s across modes in this run
   (was ~31 before v2.61.0's default skip acceleration and early-RAW bail);
-  zstd-1 does 196, lz4-1 362 on the same 1 MiB random file.
+  zstd-1 does 201, lz4-1 433 on the same 1 MiB random file.
 
-v2.61.0 also fixed two latent encoder bugs (zero-match SEQ blocks emitted no
-LL bitstream; a Path A/B scratch-buffer overlap could corrupt block output
-before winner selection) — see [CHANGELOG.md](CHANGELOG.md).
+The head-to-head numbers above are current for v2.65.6: valid-stream
+output has been byte-identical since v2.65.0, so every ratio holds, and
+the speeds are a fresh v2.65.6 measurement. Recent releases, newest
+first (full detail in [CHANGELOG.md](CHANGELOG.md)):
 
-v2.61.1 raises fast-mode decode ~55% (1540 → 2430 MB/s in-process on a
-13 MB mixed buffer) via a 16-byte literal wildcopy in the token loop, with
-byte-identical output; balanced/extreme decode is unchanged. It also
-hardens the SEQ decoder's table validation — see
-[CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).
-v2.61.2 consolidates per-block scratch allocations (encoder 7→2 mallocs
-per block, decoder 2→1) with byte-identical output and unchanged
-throughput.
-v2.65.0 prices literals from the RESIDUAL stream a depth-4 greedy
-prepass predicts (instead of the raw block histogram): extreme gains
-another 6.9% on json — taking it from zstd-9 — and 1.9% on xml, giving
-back 1.6-1.9% on plain text/source. The table above is a fresh v2.65.0
-measurement.
-v2.64.0 adds entropy-aware literal pricing to the same parser (per-byte
-prices from the block histogram, blended 50/50 with the flat prior):
-extreme gains another 2.6% on xml, 1.8% on json and logs, and gives back
-1.3% on plain text — a measured, documented trade. The table above is a
-fresh v2.64.0 measurement.
-v2.63.0 gives the extreme-mode optimal parser real repeat-offset pricing
-(per-position rep histories matching the wire's per-block rep state):
-xml −12.6%, csv −2.1%, logs −1.0% at unchanged speed, and the
-pure-repetition quirk (567 B vs balanced's 165 B) is gone. The table
-above is a fresh v2.63.0 measurement.
-v2.62.0 hoists the Huffman4 literal decoder's per-symbol refill into one
-bulk refill per 3-symbol round: balanced-mode decode +13–15% on
-literal-heavy and text content (in-process: sensors 243→281 MB/s, text
-468→529), output bytes unchanged. The table above is a fresh v2.62.0
-measurement.
+- **v2.65.6** — documentation refresh: regenerated the head-to-head
+  measurement, corrected stale release-artifact version numbers, and
+  brought the "recent releases" summary current (docs only; no code
+  change, output byte-identical).
+- **v2.65.5** — test infrastructure: a guard in `make test` forces the
+  default HUFFMAN4 literal format and requires both the Python and
+  JavaScript reference decoders to decode it byte-exactly.
+- **v2.65.4** — fixed the broken single-file amalgamation build (it
+  omitted the BCJ source added in v2.60.x) and completed both reference
+  decoders with HUFFMAN4 (`lit_fmt=4`) support, so they now decode
+  default output byte-exactly.
+- **v2.65.2 / v2.65.3** — extreme-mode encode ~2x faster (byte-identical
+  collector speedups); capped a per-block virtual allocation in the
+  extreme prepass (memory hygiene for overcommit-strict systems).
+- **v2.63.0-v2.65.0** — the extreme-mode optimal parser gained
+  repeat-offset pricing, entropy-aware literal pricing, and
+  residual-literal pricing from a greedy prepass. Net effect vs
+  v2.62.0: xml -13%, json -7%, csv -2%; extreme now takes **xml and
+  json from zstd-9** on this corpus, and the pure-repetition quirk is
+  gone. (v2.65.1 evaluated offset-code pricing and shipped it off by
+  default -- a measured negative result, documented so it is not
+  re-tried blind.)
+- **v2.61.0-v2.62.0** — the encoder speed/ratio program: default-on
+  skip acceleration (incompressible input 31 -> 200+ MB/s), fast-mode
+  decode +55%, Huffman4 decode refill hoist (+13-15% balanced decode),
+  per-block allocation consolidation, and two latent-corruption fixes
+  (zero-match SEQ blocks, a Path A/B scratch overlap).
+
+`extreme` still targets ratio, not speed (~2 MB/s on its optimal-parse
+path since v2.65.2's collector speedups; was ~1).
 
 ### v2.52-era Silesia measurement
 

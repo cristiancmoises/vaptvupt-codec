@@ -2,6 +2,29 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.6 — Sprint 136: documentation refresh (docs only)
+
+Documentation only; no source, wire-format, or output change (the tree
+compiles to a v2.65.5-identical binary). Brings the docs current after
+the v2.65.1-v2.65.5 releases:
+
+- README: regenerated the head-to-head table and win/loss notes from a
+  fresh v2.65.6 measurement (ratios unchanged since v2.65.0 — output is
+  byte-identical — with corrected decode-speed comparisons and the
+  vv-extreme encode-speed column now ~2 MB/s per v2.65.2); replaced the
+  out-of-order, incomplete version-notes pile with a clean
+  newest-first "recent releases" summary through v2.65.6.
+- DEPLOY.md: corrected stale release-artifact names that were still
+  pinned to `2.61.1` (tarball, bundle, binary, and vcpkg version) while
+  the release is v2.65.x.
+- bench/COMPARISON.md: added a currency note that the v2.65.0 tables
+  hold through v2.65.6 (byte-identical output), with extreme encode
+  speed the only moved column.
+- SECURITY.md: document version to 2.11 / codebase v2.65.6.
+
+Verified: reference-decoder guard passes, ratio gate +-0, current build
+clean.
+
 ## v2.65.5 — Sprint 135: reference-decoder default-format regression guard in `make test`
 
 Test-infrastructure only; the shipping codec, wire format, and all

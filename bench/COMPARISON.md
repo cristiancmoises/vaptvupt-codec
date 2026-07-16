@@ -7,6 +7,15 @@ stands, per the project's "honesty over hype" rule.
 
 ## v2.65.0 head-to-head (measured 2026-07, corpus rev 2)
 
+> **Current through v2.65.6.** Valid-stream output is byte-identical
+> from v2.65.0 to v2.65.6, so every ratio in the tables below still
+> holds exactly; v2.65.1-v2.65.6 changed only encode/decode speed,
+> memory hygiene, and the reference decoders/test harness. The one
+> compression-size change since is the *encode-speed* column of
+> vv-extreme, which roughly doubled at v2.65.2 (≈1 → ≈2 MB/s,
+> byte-identical). Compress/decompress throughput is otherwise
+> run-to-run noise on the bench machine.
+
 Same harness, environment, and corpus as the sets below; every cell
 roundtrip-verified byte-exact, zero mismatches. v2.65.0 changes extreme
 mode only (residual-literal pricing via a greedy prepass); balanced and
