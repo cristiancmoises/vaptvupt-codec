@@ -1,0 +1,18 @@
+VaptVupt Codec licensing notice
+================================
+
+VaptVupt Codec first-party source is available under
+GPL-3.0-or-later or a separate commercial agreement signed by the applicable
+copyright holder and licensee. The complete GPL text is in LICENSE and
+LICENSE-GPL-3.0.
+
+LICENSE-COMMERCIAL is an inquiry and scope notice, not a public commercial
+license grant. Per-file SPDX and copyright notices control the scope.
+Dependencies, generated material, test corpora, and separately noticed files
+retain their own licenses.
+
+The codec's GPL choice is deliberate and differs from the AGPL public option
+used by the broader VaptVupt application. Packaging them together does not
+erase that boundary.
+
+Commercial licensing contact: sac@securityops.co

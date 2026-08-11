@@ -5,9 +5,10 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.65.6. License: this repository (the vaptvupt-codec library and
-CLI) is GPL-3.0-or-later; the VaptVupt tool built on it (formerly Zupt) is
-dual-licensed AGPL-3.0 + commercial (sac@securityops.co).
+Version 2.65.6. The codec library and CLI are available under
+GPL-3.0-or-later or, for controlled first-party rights, a separate signed
+commercial agreement. The broader VaptVupt application uses a distinct AGPL
+public option. See `NOTICE`; `LICENSE-COMMERCIAL` is not itself a grant.
 
 ## Where it stands
 
@@ -353,7 +354,9 @@ verification/ CBMC formal-verification harnesses for the BCJ filters
 
 ## License
 
-This repository — the vaptvupt-codec library and CLI — is licensed
-GPL-3.0-or-later. The VaptVupt tool built on this codec (formerly Zupt) is
-dual-licensed: AGPL-3.0 or a commercial license for uses the AGPL does not
-permit; contact sac@securityops.co. "In Code We Trust."
+This repository's first-party codec library and CLI are available under
+GPL-3.0-or-later or a separate written commercial agreement signed by the
+applicable copyright holder and licensee. The public commercial notice does
+not grant proprietary rights, and separately noticed/generated material keeps
+its own license. The broader VaptVupt tool uses an AGPL public option with its
+own commercial path. Contact `sac@securityops.co`. "In Code We Trust."
