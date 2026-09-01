@@ -17,6 +17,7 @@ git status --short
 make
 make check-debug
 make test
+make amalg
 make amalg-verify
 ```
 
@@ -66,6 +67,7 @@ tar -xzf vaptvupt-2.65.9-src.tar.gz -C "$release_tmp"
   make
   make check-debug
   make test
+  make amalg
   make amalg-verify
 )
 ```
