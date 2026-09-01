@@ -5,7 +5,12 @@ as the compression layer beneath an application's encryption envelope (for
 example, a backup tool that wraps each frame in AES-256-GCM or an ML-KEM + AEAD
 construction). It covers the API, the build, the flags that matter, and the
 threat-model boundary. Numbers here point to measured data, not headline
-claims — see `bench/COMPARISON.md` for the current full-Silesia measurement.
+claims — see `bench/COMPARISON.md` for the fresh v2.65.9 deterministic suite
+and the separately dated historical 11-file corpus.
+
+Release alignment: **v2.65.9**. The wire layout is unchanged from v2.65.8 and
+streams that release encoded validly remain compatible. A rare candidate that
+previously produced an undecodable SEQ frame now selects a lossless fallback.
 
 License: this codec library is GPL-3.0-or-later; the VaptVupt tool (formerly
 Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
@@ -39,7 +44,10 @@ Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
 
 5. **Treat any non-OK decode return as a frame-level reject.** Do not attempt
    recovery inside the codec boundary. Propagate the error to the host's
-   transaction layer and let it retry from the previous good snapshot.
+   transaction layer and let it retry from the previous good snapshot. For a
+   BCJ-filtered streaming frame, do not expose partial output: the inverse is
+   applied to the complete output exactly once, after checksum validation or
+   after the final checksumless block.
 
 ---
 
@@ -66,8 +74,36 @@ if (m < 0) { /* any negative return: reject this frame, do not recover */ }
 ```
 
 Bound `dst_cap` with `vv_compress_bound(src_len)`. The decoder enforces its own
-output and work limits; a hostile frame yields a clean negative return, never a
-crash (see below).
+output and work limits. The API contract is to reject a hostile frame with a
+clean negative return; release gates test that behavior under sanitizers and
+fuzzing, while formal evidence covers only the selected bounded helpers stated
+below.
+
+Only `VV_MODE_ULTRA_FAST`, `VV_MODE_BALANCED`, and `VV_MODE_EXTREME` are valid
+`opts.mode` values. Since v2.65.9, `vv_compress` returns `VV_ERR_PARAM` for any
+other enum representation and when both `opts.filter_x86` and
+`opts.filter_arm64` are set. Choose at most one architecture filter, or use
+`filter_auto`, for one-shot compression. The streaming encoder cannot apply a
+whole-frame transform while emitting blocks incrementally, so
+`vv_cstream_create` returns NULL and `vv_cstream_reset` returns `VV_ERR_PARAM`
+for an invalid mode or any BCJ option; use `vv_compress` for filtered frames.
+A `window_log` outside 10..24 is likewise rejected before BCJ
+allocation or transformation. One-shot decode, streaming decode, and frame-info
+parsing reject an input header that sets both BCJ bits. The CLI's `-A 0` setting
+is automatic, not disabled: fast uses factor 2 and balanced/extreme use factor
+1.
+
+The v2.65.9 sequence decoder also builds its tANS tables directly, reducing
+per-block table scratch from 52 KiB to 48 KiB without changing the stream.
+Paired pinned in-process measurements found +0.40% text and +1.21% JSON decode
+(about +0.80% geometric mean), a modest result that should be re-measured for
+the host workload.
+
+SEQ carries a global match count, so an oversize literal run before a later
+match is not representable as a midstream matchless entry. v2.65.9 rejects that
+SEQ candidate internally and falls back to another lossless block type. This is
+transparent to callers: a positive `vv_compress` result still roundtrips, and
+valid wire output is unchanged.
 
 ---
 
@@ -76,7 +112,9 @@ crash (see below).
 - `make amalg` — single-file `build/vaptvupt.{c,h}` for drop-in embedding.
 - `make` — the `vaptvupt` CLI and the static library pieces, `-Wall -Wextra -Werror`.
 - `make test` — full suite (C suites, reference decoders, differential fuzzer,
-  negative corpus, ratio gate, OOM sweep). Allow >= 850 s.
+  negative corpus, ratio gate, OOM sweep). It also checks current C output in
+  Python/JavaScript, including checksum-on/off x86/AArch64 BCJ frames. Allow
+  >= 850 s.
 - `make verify` — CBMC proofs + Frama-C/Eva analyses of the BCJ filters and the
   decoder's length reader and block-header codec (needs `cbmc`, optionally
   `frama-c-base` + `z3`).
@@ -85,6 +123,11 @@ If you vendor `src/` directly instead of the amalgamation, run
 `make amalg-verify` in CI: it rebuilds the amalgamation and fails if it
 has drifted from `src/`, so a security fix in `src/` cannot silently miss the
 embedded copy.
+
+The v2.65.9 streaming-completion and direct-table changes have dedicated
+regression/dynamic coverage; they did not receive a new full formal-tool rerun.
+The formal baseline remains scoped to the unchanged functions and bounds in
+`FORMAL_AUDIT.md` and `verification/README.md`.
 
 ---
 
@@ -96,11 +139,11 @@ embedded copy.
 - For tamper-resistance the host **must** wrap the compressed bytes in an AEAD
   (AES-256-GCM, XChaCha20-Poly1305) or an authenticated PQ construction. When
   it does, the codec's checksum is redundant and can be skipped (points 2-3).
-- What the codec alone guarantees on untrusted input is **safe decompression**:
-  a malformed or adversarial frame results in a clean negative return code or a
-  bounded resource use, never an out-of-bounds access, use-after-free, or
-  unbounded hang. Enforced by the differential fuzzer, the ASan/UBSan
-  corrupt-input sweep, the DoS reproducers, and the CBMC/Eva proofs of the
-  parse hot path (see `SECURITY.md`).
+- The codec's **safe-decompression contract** is that a malformed or
+  adversarial frame returns a clean error with bounded resource use, without an
+  out-of-bounds access, use-after-free, or unbounded hang. Evidence is empirical
+  for the full decoder (differential fuzzing, ASan/UBSan corrupt-input sweeps,
+  and DoS reproducers) and bounded/formal for the selected helpers listed in
+  `FORMAL_AUDIT.md`; it is not an unbounded proof of the entire decoder.
 - The incoming-frame decode path is the primary at-risk consumer in a backup
   pipeline; keep it behind the AEAD and treat decode errors as rejects.

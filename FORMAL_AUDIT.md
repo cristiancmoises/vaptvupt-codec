@@ -1,7 +1,9 @@
 # VaptVupt Formal Audit Document
 
-**Document version**: 1.2
-**Codebase audited**: v2.65.8
+**Document version**: 1.3
+**Codebase audit scope**: v2.65.9 release delta (regression/dynamic validation)
+**Formal evidence baseline**: inherited historical results, with original
+versions and bounds recorded below; no full formal-tool rerun for v2.65.9
 **License**: GPL-3.0-or-later
 **Intended deployment**: Embedded codec library inside the VaptVupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
 
@@ -14,12 +16,48 @@ This document is the formal audit reference for VaptVupt. It specifies what has 
 
 It is intentionally specific about what is **not** verified, to support honest risk assessment.
 
-> **Currency note (v2.65.8):** historical sprint references below record the
-> original evidence and tool availability. Sprint 138 added the truncated
-> offset regression and streaming API misuse checks. Sprint 137 added the SEQ
-> combined-run safe-zone regression, frame-window validation, and repaired
-> sanitizer/OOM/fuzzer gate propagation. Re-run the commands on the target
-> toolchain before treating historical results as current certification.
+> **Currency note (v2.65.9):** historical sprint references below record the
+> original evidence, bounds, and tool availability. This release did **not**
+> perform or claim a fresh full CBMC/Frama-C or audit-campaign rerun. Its delta
+> is covered by regression and dynamic validation: direct-vs-historical tANS
+> decode-table equivalence, established decode/roundtrip suites, streaming BCJ
+> whole/split roundtrips for x86 and AArch64 with checksum on/off, and API
+> contract cases for invalid modes and conflicting filters. The 21-case SEQ
+> suite adds direct and end-to-end coverage for oversize nonterminal literal
+> fallback; reference parity and OOM-baseline checks are also dynamic. Formal
+> results are
+> inherited only for the unchanged functions and properties named below.
+> Re-run the commands on the target toolchain before treating historical
+> results as current certification.
+
+## v2.65.9 delta-validation scope
+
+The direct sequence-table builder removes the 4 KiB spread scratch and is
+checked entry-for-entry against the prior builder over 256 deterministic valid
+normalizations, then exercised through ANS, SEQ, roundtrip, safe-zone, and
+exact-buffer decoding. The streaming completion change is exercised across
+both BCJ architectures, whole and split frames, and both checksum settings;
+the inverse occurs once, only after checksum validation or the final
+checksumless block. API-contract regressions require `VV_ERR_PARAM` for enum
+values outside the three public modes and for simultaneous x86/ARM64 filters;
+decoder regressions reject input headers that set both architecture bits in
+one-shot, streaming, and frame-info paths.
+
+`test_seq_v2` 21/21 also covers the global-`match_count` invariant: a literal
+run over 65,535 bytes before a later match is not representable as a zero-match
+midstream LL entry, so the encoder rejects that SEQ candidate and falls back
+losslessly. The OOM sweep verifies its randomized baseline roundtrip before
+injection. Both reference decoders now consume trailing LL-only entries with
+the C-equivalent iteration bound, reject dual-BCJ headers, and apply exact
+x86/AArch64 inverses after checksum validation; current-output fixtures cover
+checksum on and off. C remains canonical for legacy H/A/I/C; Python retains
+limited A-tag support and JavaScript omits the legacy tags.
+
+These are regression/dynamic claims. The streaming state-machine orchestration
+and the new direct table builder are not covered by a new bounded or deductive
+proof in this revision. The existing CBMC/Eva baseline still applies to its
+unchanged BCJ filter functions, detector, `read_ext_len`, and block-header
+helpers under the bounds stated in Section 2.
 
 ---
 
@@ -31,17 +69,17 @@ The codec is part of a layered system. Threats are categorized by which layer is
 
 | Threat | Mitigation |
 |---|---|
-| **T1: Decompression bomb** | Caller-provided `dst_cap` is enforced. No internal expansion. Decoder rejects any sequence that would exceed `dst_cap` with `VVA_ERR_BOUNDS`. |
+| **T1: Decompression bomb** | Caller-provided `dst_cap` is enforced. No internal expansion. Decoder rejects any sequence that would exceed `dst_cap` with `VV_ERR_OVERFLOW` (`VVA_ERR_OVERFLOW` in the ANS layer). |
 | **T2: Crafted match-count overflow** | Sprint 90 fix bounds `match_count` against `dst_cap / min_match` before allocation. |
 | **T3: Infinite loop on degenerate ANS state** | Sprint 89 fix adds bounded iteration counter (`max_iters = total_lits + match_count + 16`). Returns `VVA_ERR_CORRUPT` instead of hanging. |
 | **T4: Huge literal-run extension lengths** | Sprint 109 bounds-checks LL extension before memcpy. |
 | **T5: Out-of-bounds symbol codes** | Sprint 109 bounds-checks `ll_code`, `of_code`, `ml_code` against their respective tables (`VVA_LL_CODES=36`, `VVA_OF_CODES=27`, `VVA_ML_CODES=36`). |
 | **T6: NULL deref on edge-case sequences** | Sprint 109 always allocates all 3 ANS decode tables, regardless of empty-symbol-count edge cases. |
 | **T7: Crafted 4-stream Huffman attacks** | Sprint 105 hardens `vvh_decode4` against 6 distinct DoS patterns: invalid stream-length headers, mismatched stream lengths, OOB final-bit positions, malformed lit_fmt=4 selection, and two integer-overflow paths in stream-header parsing. |
-| **T8: Allocation failure mid-decode** | Sprint 100 fault-injection harness validates the decoder against 250+ allocation-failure points with no crashes / leaks / UB. |
-| **T9: Plaintext recovery via heap residue** | Sprint 118 `vv_secure_zero` scrubs all encoder working buffers (literals, LZ-tokenized output, raw input window, scratch) before `free()` — defense in depth. |
+| **T8: Allocation failure mid-decode** | The historical Sprint 100 campaign recorded 250+ randomized allocation-fault trials with no crashes / leaks / UB; the current deterministic OOM harness separately fails each allocation reached by its baseline fixture. |
+| **T9: Plaintext recovery via heap residue** | `vv_secure_zero` is called on tracked plaintext-bearing encoder arenas (literals, LZ-tokenized output, raw input window, scratch) and, since v2.65.9, the private one-shot BCJ input copy before `free()` — defense in depth, not a confidentiality boundary. |
 | **T10: Hardened-build false positives** | Sprint 117 `VV_NO_SANITIZE_INTEGER` annotations on 12 functions performing intentional unsigned modular arithmetic; `__builtin_rotateleft64` for the rotate. Result: 0 strict-integer warnings. |
-| **T11: Encoder mid-stream abort with state leak** | Streaming encoder's `vv_cstream_destroy` scrubs full context including all sub-buffers. Verified by `tests/test_secure_zero.c`. |
+| **T11: Encoder mid-stream abort with state leak** | Streaming encoder's `vv_cstream_destroy` explicitly scrubs its tracked context and sub-buffers. `tests/test_secure_zero.c` exercises destroy/roundtrip completion under sanitizers; it is not a direct post-free content proof. |
 | **T12: Concurrent encoder/decoder thread races** | ThreadSanitizer (Sprint 98 + 105) clean across multi-threaded encode + decode using lit_fmt=4. No false sharing detected; no shared mutable state across thread boundaries. |
 
 ### 1.2 Out-of-scope threats — caller / system must mitigate
@@ -54,7 +92,7 @@ The codec is part of a layered system. Threats are categorized by which layer is
 | Side-channel attacks (timing, cache, power) on the encoder | Not mitigated. The encoder's runtime depends on the input data. If the input is sensitive, use a constant-time encryption layer downstream. |
 | Side-channel attacks on the decoder | Not mitigated for the same reasons. |
 | OS-level threats (memory dumps, ptrace, etc.) | The OS must protect its own primitives. `vv_secure_zero` reduces the *codec's* contribution to heap residue but doesn't and can't fix the OS. |
-| Supply-chain attacks against the Anthropic publishing pipeline | Out of scope for the codec. Verify amalgamation hashes against the published GitHub repo. |
+| Supply-chain attacks against the release-publishing pipeline | Out of scope for the codec. Verify amalgamation hashes against the published GitHub repo. |
 
 ### 1.3 Trust boundaries
 
@@ -86,7 +124,11 @@ The decoder **must assume** the input bytes are adversarial. The encoder **may a
 
 ## 2. Verification Mechanisms
 
-Each verification mechanism is permanently integrated into the build and the CI cycle. Re-running them on a fresh checkout is one command per mechanism.
+The runtime regression suite is integrated into the normal build and CI cycle.
+The static-analysis and formal mechanisms remain reproducible from the source
+tree but are manual/tool-dependent unless a particular CI job invokes them;
+their historical results must not be read as evidence that every tool ran on
+every commit.
 
 ### 2.1 Static analysis
 
@@ -96,7 +138,9 @@ Each verification mechanism is permanently integrated into the build and the CI 
 | clang scan-build | `scan-build --status-bugs make` | 0 bugs |
 | GCC strict warnings | `make CFLAGS="-Wpedantic -Wshadow -Wcast-qual -Wcast-align -Wstrict-prototypes -Wmissing-prototypes -Wunreachable-code -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wundef -Wuninitialized"` | 0 hits |
 
-All three tools have been run continuously since v2.46.0 and the codebase has remained at zero findings across the audit campaign.
+The table records the original audit-campaign results beginning at v2.46.0.
+It is historical evidence, not a claim that all three tools were rerun for
+v2.65.9.
 
 ### 2.2 Runtime sanitizers (encoder + decoder)
 
@@ -123,7 +167,9 @@ Permanent libFuzzer harnesses in `tests/fuzz/`:
 | `fuzz_differential` | One-shot decoder vs streaming decoder, same input → same output | 24,178 | 0 |
 | **Cumulative** | | **~99,000 documented + ~46,000 added Sprint 117–118 ASan/UBSan re-runs = ~145,000** | **0** |
 
-All four harnesses are run with `-fsanitize=address,undefined`. Reproducer corpora are checked in at `tests/fuzz/corpus_*/` for regression coverage.
+The harnesses are built with `-fsanitize=address,undefined`. The current smoke
+target seeds temporary corpora under `build_obj/`; durable defect reproducers
+are checked in under `tests/regression_inputs/`.
 
 ### 2.4 DoS reproducer suite
 
@@ -137,13 +183,25 @@ Twelve saved adversarial payloads, each a known historical attack:
 
 ### 2.5 Allocation-fault injection
 
-`tests/fault_injection/` (Sprint 100) wraps `malloc`/`calloc`/`realloc` with an interposer that fails the *N*th call. The harness sweeps *N* across 250+ values for both decode and roundtrip paths. **0 crashes / leaks / UB** observed.
+Two complementary dynamic harnesses are recorded:
 
-This is the strongest available evidence that the codec correctly handles allocation failure at every internal allocation site. The interposer is invoked with `LD_PRELOAD=tests/fault_injection/libfault.so`.
+- The historical Sprint 100 `tests/fault_injection/malloc_fault.c` interposer
+  uses `VV_FAULT_RATE` and `VV_FAULT_SEED` to fail allocations randomly. The
+  audit campaign recorded 250+ trials across encode, decode, extreme,
+  streaming, multi-threaded, and sanitized paths with no crash, leak, or UB.
+- The current `tests/oom_sweep.sh` builds `tests/oom_inject.c`, counts the
+  allocations reached by its baseline `vv_compress --bcj` and `vv_decompress`
+  fixtures, and then fails each reached allocation index in turn. In v2.65.9
+  it first requires that randomized baseline to roundtrip byte-exactly, keeping
+  codec correctness failures distinct from injector failures.
+
+These are strong dynamic results for the exercised fixtures and allocation
+points, not an exhaustive proof of every potentially reachable site.
 
 ### 2.6 API contract checks
 
-`tests/test_api_contract.c` (17 tests) exercises the documented public API contract:
+`tests/test_api_contract.c` (35 checks in v2.65.9) exercises the documented
+public API contract:
 
 - NULL-pointer handling on every public function
 - `dst_cap = 0` boundary
@@ -152,8 +210,16 @@ This is the strongest available evidence that the codec correctly handles alloca
 - `vv_dstream_create` failure paths
 - Caller-owned vs codec-owned memory boundaries
 - Streaming reset after error
+- Rejection of invalid mode enum representations and simultaneous x86/ARM64
+  encoder filters
+- Rejection of invalid modes and unsupported BCJ options by streaming-encoder
+  create/reset entry points
+- Rejection of `window_log` below 10 or above 24 before BCJ allocation/work
+- Rejection of dual-BCJ input flags by one-shot decode, streaming decode, and
+  frame-info parsing
 
-All 17 pass. These are **contracts**, not implementation tests — if the implementation changes, the contract MUST still hold.
+All 35 are release-gating checks. These are **contracts**, not implementation
+tests — if the implementation changes, the contract MUST still hold.
 
 ### 2.7 Format conformance
 
@@ -162,20 +228,32 @@ Two reference decoders independent of the production C decoder:
 - `reference/vv_decoder.py` — byte-exact pure Python, easy to inspect
 - `reference/vv_decoder.js` — byte-exact JavaScript, validates the wire format spec
 
-Both reference decoders are used as differential-test oracles. The `fuzz_differential` harness compares C decoder output against the reference; any divergence is a failed fuzz run.
+Both reference decoders reproduce current/default encoder output, including
+S/T sequence entropy, HUFFMAN4 literals, and x86/AArch64 BCJ frames. Release
+fixtures cover BCJ with checksum on and off. C is canonical for legacy H/A/I/C;
+Python retains limited A-tag support and JavaScript omits the legacy tags. The
+`fuzz_differential` harness compares C output against the Python reference; any
+divergence in their shared scope is a failed run.
 
-The wire format itself is documented in `FORMAT.md` with byte-level diagrams of every block type, header, and ANS table format. The format has been **frozen since v1.0.0** for the v1 path; v2 (opt-in, format_v2 flag) has been frozen since v2.33.0.
+The wire format itself is documented in `FORMAT.md` with byte-level diagrams
+of every block type, header, and ANS table format. The base path has been
+**frozen since v1.0.0**. The `'T'`/`format_v2` path was introduced behind an
+explicit flag and has had a frozen representation since v2.33.0; since v2.61.0
+the encoder also selects it adaptively for binary balanced/extreme input.
 
 ### 2.8 Memory hygiene tests
 
-`tests/test_secure_zero.c` (Sprint 118, 4 tests):
+`tests/test_secure_zero.c` reports 4 checks in v2.65.9:
 
 1. Streaming destroy completes cleanly under sanitizers (no double-free, no use-after-free)
-2. 100 alloc/destroy cycles do not leak or corrupt
-3. One-shot `vv_compress` scrub path validates
-4. Encoder context struct is fully scrubbed (verified by sentinel pattern)
+2. The streaming output roundtrips byte-exactly
+3. 100 allocation/destroy cycles complete cleanly
+4. The one-shot BCJ private-copy cleanup path completes and roundtrips
 
-All 4 pass.
+These checks exercise the cleanup paths and observable codec behavior under
+sanitizers. They do not inspect freed storage and are not proof of post-free
+memory contents. The scrub claim itself is scoped to the explicit
+`vv_secure_zero` calls on tracked buffers, including the v2.65.9 BCJ copy.
 
 ### 2.9 Amalgamation drift detection
 
@@ -184,7 +262,8 @@ All 4 pass.
 - Stale amalgamation in the published artifact
 - Any divergence between distributed single-file and the modular source
 
-Currently in sync.
+The release gate runs `make amalg-verify`; a tag must not be published unless
+that command confirms the generated and modular sources are in sync.
 
 ---
 
@@ -208,7 +287,12 @@ The audit campaign began at Sprint 86 (v2.46.0) and has produced **13 distinct d
 | 12 | Reference JavaScript decoder lit_fmt=3 unsupported | Format conformance | 117 | `reference/vv_decoder.js` |
 | 13 | Encoder buffer plaintext residue on free | Hygiene (defense-in-depth) | 118 | `vv_encoder.c` `vv_secure_zero` |
 
-**Per-defect regression coverage**: each defect has either a test in `tests/` or a reproducer in `tests/fuzz/corpus_*/`. The test/fuzz harness must continue to exercise the historical attack — a future regression cannot reach the published codec without breaking a test.
+**Per-defect regression coverage**: each defect has either a test in `tests/`
+or a checked-in reproducer (including `tests/regression_inputs/`). Most tests
+directly detect the historical failure mode. The hygiene test is narrower: it
+exercises cleanup paths and roundtrips under sanitizers but does not inspect
+post-`free()` memory, so the presence of each explicit `vv_secure_zero` call
+also requires source review/static inspection.
 
 The audit campaign also produced **0 findings** in three follow-up campaigns (Sprints 110, 117, 118). This is empirical evidence that the bug-class search has reached genuine diminishing returns at v2.48.x.
 
@@ -226,48 +310,57 @@ Two categories of defect are intentionally not pursued by the audit:
 
 ## 5. Verification Reproduction
 
-To reproduce the full audit verification on a fresh checkout, on Ubuntu 22.04+ or equivalent:
+To rerun the documented mechanisms on a fresh checkout, on Ubuntu 22.04+ or
+equivalent, install each named tool and run the applicable commands. Results in
+Section 2 remain historical until such a rerun is recorded:
 
 ```bash
 # Static analysis
 make clean
 cppcheck --enable=warning,performance,portability -I include src/  # → 0 findings
 scan-build --status-bugs make                                       # → 0 bugs
-make CFLAGS="-Wpedantic -Wshadow -Wcast-qual -Werror"              # → builds clean
+make clean
+make CFLAGS="-Wall -Wextra -Werror -Wpedantic -Wshadow -Wcast-qual -O2 -std=c11 -D_POSIX_C_SOURCE=199309L -Iinclude"
 
-# Sanitizer matrix
+# Sanitizer matrix (one build at a time)
+printf 'formal-audit smoke input\n' > /tmp/vv-audit-input
 for s in address undefined integer leak; do
-    clang -fsanitize=$s -O1 -g -Iinclude src/*.c -o /tmp/vv-san
-    /tmp/vv-san -c -m extreme tests/fixtures/dickens -o /tmp/c.vv
-    /tmp/vv-san -d /tmp/c.vv -o /tmp/dec
+    make clean
+    make CC=clang CFLAGS="-Wall -Wextra -Werror -O1 -g -std=c11 -D_POSIX_C_SOURCE=199309L -Iinclude -fsanitize=$s" LDFLAGS="-fsanitize=$s"
+    ./vaptvupt -c -m extreme /tmp/vv-audit-input -o /tmp/c.zupt
+    ./vaptvupt -d /tmp/c.zupt -o /tmp/dec
+    cmp /tmp/vv-audit-input /tmp/dec
 done
 
 # Test suite
+make clean
 make
-for t in test_*; do ./$t; done                                      # → 18/18 pass
+make test
 
 # DoS reproducers
 make test_dos_hang
 ./test_dos_hang                                                     # → 12 payloads, <60ms each
 
-# Fuzz (set time budget)
-cd tests/fuzz
-make fuzz_decompress
-./fuzz_decompress -max_total_time=120 -fork=4 corpus_decompress/    # → 0 crashes
+# Fuzz (clang/libFuzzer; target carries its configured smoke budget)
+make fuzz-libfuzzer
 
 # Allocation fault injection
-cd tests/fault_injection
-make
-LD_PRELOAD=./libfault.so ../test_roundtrip                          # sweeps fault N
+VV_BIN=./vaptvupt CC=cc sh tests/oom_sweep.sh
+
+# Bounded/deductive verification (tool-dependent)
+make verify
 ```
 
-Total runtime: ~5 minutes for the full pass.
+The sanitizer loop, fuzz targets, and formal tools have host-dependent runtimes.
+A missing tool or skipped target must be reported, not counted as a pass.
 
 ---
 
 ## 6. Reporting Vulnerabilities
 
-Report security issues via the contact in `SECURITY.md`. The codec is GPL-3.0-or-later; downstream projects building on it inherit the GPL obligations. Anthropic does not maintain a paid bug bounty for this codec.
+Report security issues via the contact in `SECURITY.md`. The codec is
+GPL-3.0-or-later; downstream projects building on it inherit the GPL
+obligations. The project does not advertise a paid bug-bounty program.
 
 A vulnerability is defined as: any input that causes the *decoder* (one-shot or streaming) to:
 
@@ -283,4 +376,8 @@ Encoder bugs are accepted but considered lower severity — the encoder runs on 
 
 ## 7. Status
 
-This document is committed to the repo and is the source of truth for "what has been audited" claims. Updates to the document accompany every patch release that changes the audit posture. The current revision (v1.0, Sprint 121) reflects the codec state at v2.48.1.
+This document is committed to the repo and is the source of truth for "what has
+been audited" claims. Updates accompany every patch release that changes the
+audit posture. Revision 1.3 covers the v2.65.9 delta under the currency and
+scope limits above; historical result tables retain the versions on which the
+underlying evidence was originally collected.

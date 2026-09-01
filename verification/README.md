@@ -7,6 +7,49 @@ input). They are small, pure or bounded, which makes them tractable to verify
 rather than merely fuzz. This directory contains CBMC harnesses that
 machine-check their safety and correctness.
 
+## v2.65.9 currency and scope
+
+The formal baseline below is inherited for the unchanged functions and stated
+bounds; v2.65.9 does **not** claim a fresh full CBMC/Frama-C rerun. Its new
+direct sequence-tANS table builder and streaming decoder completion
+orchestration are outside these formal harnesses and are covered by regression
+and dynamic validation instead.
+
+For the direct builder, a dedicated hook compares all decode-table entries with
+the prior spread-plus-build path across 256 deterministic valid normalized
+tables, followed by the ANS, SEQ, roundtrip, safe-zone, and exact-buffer suites.
+For streaming BCJ completion, roundtrips cover x86 and AArch64 frames supplied
+whole or in 7-byte chunks, with checksum both enabled and disabled. These tests
+verify that the inverse runs exactly once after checksum validation or the
+final checksumless block. API-contract cases separately require `VV_ERR_PARAM`
+for invalid mode enums and simultaneous architecture filters. Streaming-encoder
+create/reset cases also reject invalid modes and unsupported BCJ options rather
+than accepting ignored filters, while decoder regressions reject headers that
+set both BCJ bits in one-shot, streaming, and frame-info paths.
+
+Dynamic release coverage also includes `test_seq_v2` 21/21: direct rejection
+of an unrepresentable oversize nonterminal literal run and a deterministic
+end-to-end lossless-fallback reproducer. Both reference decoders consume
+trailing LL-only entries with the C-equivalent iteration bound and reject
+dual-BCJ headers. They also implement exact x86/AArch64 inverses after checksum
+validation; current-output fixtures cover checksum on and off. Legacy
+H/A/I/C decoding remains canonical in C; Python retains limited A-tag support
+and JavaScript omits the legacy tags. The OOM sweep validates its baseline
+roundtrip before failure injection. These remain regression claims, not
+additions to the formal proof set below.
+
+The one-shot BCJ private input copy is now explicitly passed to
+`vv_secure_zero` before `free()`. `test_secure_zero` exercises that cleanup
+path and a byte-exact BCJ roundtrip under sanitizers; it does not inspect freed
+storage or prove post-`free()` contents. The scrubbing claim therefore remains
+an implementation/source-inspection claim with dynamic path coverage, not a
+new formal result.
+
+The existing CBMC/Eva results continue to describe the BCJ filter functions,
+detector, `read_ext_len`, and block-header helpers named below. Re-run
+`make verify` on the target toolchain before treating the inherited evidence as
+current certification.
+
 ## What is proven
 
 For fully nondeterministic inputs up to a bound,

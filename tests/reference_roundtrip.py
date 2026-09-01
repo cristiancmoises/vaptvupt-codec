@@ -24,6 +24,7 @@ Exit 0 on success; non-zero with a diagnostic on any failure.
 import os
 import random
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -68,10 +69,58 @@ def gen_json_records(n_records=3000, seed=7):
     return ("\n".join(lines)).encode()
 
 
+def gen_terminal_ll_split():
+    """Fixture whose final literal run crosses the 65535-byte LL ceiling."""
+    data = bytearray(b"A" * 1048839)
+    state = 42
+    for _ in range(65536):
+        state = (state * 1103515245 + 12345) & 0xFFFFFFFF
+        data.append((state >> 16) & 0xFF)
+    return bytes(data)
+
+
+def gen_x86_bcj(n=65536):
+    data = bytearray((i * 29 + 7) & 0xFF for i in range(n))
+    for i in range(0, n - 4, 8):
+        data[i:i + 5] = b"\xE8\x00\x00\x00\x00"
+    return bytes(data)
+
+
+def gen_arm64_bcj(n=65536):
+    data = bytearray((i * 13 + 3) & 0xFF for i in range(n))
+    for i in range(0, n - 3, 4):
+        insn = 0x94000000 if i & 4 else 0x90000000
+        data[i:i + 4] = insn.to_bytes(4, "little")
+    return bytes(data)
+
+
 FIXTURES = [
     ("pseudo-text", gen_pseudo_text()),
     ("json-records", gen_json_records()),
+    ("terminal-ll-split", gen_terminal_ll_split()),
 ]
+
+FILTER_FIXTURES = [
+    ("bcj-x86", gen_x86_bcj(), ["--bcj"], 0x04, True),
+    ("bcj-arm64", gen_arm64_bcj(), ["--bcj-arm64"], 0x08, True),
+    ("bcj-x86-no-checksum", gen_x86_bcj(), ["--bcj", "--fast"], 0x04, False),
+    ("bcj-arm64-no-checksum", gen_arm64_bcj(),
+     ["--bcj-arm64", "--fast"], 0x08, False),
+]
+
+
+def gen_zero_progress_frame():
+    """Malformed SEQ frame whose LL symbol never advances literal input."""
+    payload = (
+        struct.pack("<I", 1) + b"\x00" + struct.pack("<I", 1) + b"X" +
+        struct.pack("<I", 0) + struct.pack("<H", 0) + struct.pack("<H", 0) +
+        struct.pack("<H", 2) + b"\x01\x00" + b"\x00" * 6 +
+        struct.pack("<I", 0)
+    )
+    header = struct.pack("<IBBBBQ", 0x56560100, 1, 0, 1, 16, 1)
+    block_header = struct.pack("<I", 3 | (1 << 2) | (1 << 3))
+    return header + block_header + (1 + len(payload)).to_bytes(3, "little") + \
+        b"S" + payload
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -165,6 +214,90 @@ def main():
                         failures += 1
                     else:
                         print(f"  ok    {name}/{mode}: js byte-exact")
+
+        # Architecture filters checksum the forward-transformed bytes and
+        # invert only after validation. Require both independent references
+        # to reproduce the original caller-visible bytes.
+        for name, data, options, expected_flag, expect_checksum in FILTER_FIXTURES:
+            plain = os.path.join(tmpdir, name)
+            comp = os.path.join(tmpdir, f"{name}.balanced.vv")
+            with open(plain, "wb") as f:
+                f.write(data)
+            subprocess.run([VV, "-c", "-m", "balanced", *options,
+                            "-o", comp, plain],
+                           check=True, capture_output=True)
+            blob = open(comp, "rb").read()
+            if (len(blob) < 16 or (blob[5] & 0x0C) != expected_flag or
+                    bool(blob[5] & 0x01) != expect_checksum):
+                print(f"  FAIL  {name}: encoder flags differ from expected")
+                failures += 1
+                continue
+            try:
+                out = bytes(vv_decoder.decompress(blob))
+                if out != data:
+                    print(f"  FAIL  {name}: python BCJ inverse mismatch")
+                    failures += 1
+                else:
+                    print(f"  ok    {name}: python BCJ byte-exact")
+            except Exception as e:                     # noqa: BLE001
+                print(f"  FAIL  {name}: python reference raised "
+                      f"{type(e).__name__}: {str(e)[:100]}")
+                failures += 1
+            if have_node:
+                r = subprocess.run(["node", JS_CHECK, comp, plain],
+                                   capture_output=True, text=True)
+                if r.returncode != 0:
+                    print(f"  FAIL  {name}: js BCJ reference: "
+                          f"{(r.stderr or r.stdout).strip()[:100]}")
+                    failures += 1
+                else:
+                    print(f"  ok    {name}: js BCJ byte-exact")
+
+        # A malformed LL-only SEQ can decode litlen=0 forever after all
+        # matches are exhausted. All decoders must trip their progress bound
+        # promptly rather than hang.
+        zero_progress = os.path.join(tmpdir, "zero-progress.vv")
+        expected = os.path.join(tmpdir, "zero-progress.expected")
+        with open(zero_progress, "wb") as f:
+            f.write(gen_zero_progress_frame())
+        with open(expected, "wb") as f:
+            f.write(b"X")
+        try:
+            c = subprocess.run([VV, "-t", zero_progress], timeout=2,
+                               capture_output=True)
+            if c.returncode == 0:
+                print("  FAIL  zero-progress: C decoder accepted malformed frame")
+                failures += 1
+            else:
+                print("  ok    zero-progress: C decoder rejected promptly")
+        except subprocess.TimeoutExpired:
+            print("  FAIL  zero-progress: C decoder timed out")
+            failures += 1
+        try:
+            py = subprocess.run(
+                [sys.executable, os.path.join(ROOT, "reference", "vv_decoder.py"),
+                 zero_progress],
+                timeout=2, capture_output=True)
+            if py.returncode == 0:
+                print("  FAIL  zero-progress: python decoder accepted malformed frame")
+                failures += 1
+            else:
+                print("  ok    zero-progress: python decoder rejected promptly")
+        except subprocess.TimeoutExpired:
+            print("  FAIL  zero-progress: python decoder timed out")
+            failures += 1
+        if have_node:
+            try:
+                r = subprocess.run(["node", JS_CHECK, zero_progress, expected],
+                                   timeout=2, capture_output=True, text=True)
+                if r.returncode == 0:
+                    print("  FAIL  zero-progress: js decoder accepted malformed frame")
+                    failures += 1
+                else:
+                    print("  ok    zero-progress: js decoder rejected promptly")
+            except subprocess.TimeoutExpired:
+                print("  FAIL  zero-progress: js decoder timed out")
+                failures += 1
 
         if huf4_seen == 0:
             print("  FAIL  no lit_fmt=4 (HUFFMAN4) block was produced — "

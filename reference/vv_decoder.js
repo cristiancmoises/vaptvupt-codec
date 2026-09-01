@@ -4,15 +4,15 @@
  * Pure JS, zero dependencies, runs in Node.js (v14+) and browsers
  * that support BigInt + Uint8Array. Implements decoding for:
  *   - RAW, RLE, and COMPRESSED block types (FORMAT.md §3.1-3.3)
- *   - ENTROPY tag 'S' (VV_ENTROPY_SEQ) — the tag produced by the
- *     current VaptVupt encoder — including tANS literal decoding
+ *   - Current ENTROPY tags 'S' and 'T' (VV_ENTROPY_SEQ/V2), including
+ *     tANS literal decoding
  *     (single-stream and 4-way interleaved), sequence decoding
  *     with rep-match offset history, and cross-block dict carry
  *   - Multi-frame streams (§6)
  *   - XXH64 footer verification (§4) via BigInt
  *
- * Since v2.29.0, the JS decoder covers 100% of output produced by
- * the current encoder. Legacy ENTROPY tags H/A/I/C (from format
+ * The JS decoder covers current/default encoder output. Legacy ENTROPY
+ * tags H/A/I/C (from format
  * v0.3-v0.7) throw NotImplementedError — those aren't emitted by
  * modern encoders and exist in the C decoder only for back-compat.
  *
@@ -155,6 +155,89 @@
     }
 
     // ─────────────────────────────────────────────────────────────
+    // BCJ inverse filters — exact ports of src/vv_bcj.c.
+    function bcjTestMsb(value) {
+        return value === 0x00 || value === 0xff;
+    }
+
+    function bcjX86Inverse(data, ip = 0) {
+        const size = data.length;
+        if (size < 5) return;
+        let pos = 0;
+        let mask = 0;
+        const limit = size - 4;
+        ip = (ip + 5) >>> 0;
+        for (;;) {
+            let p = pos;
+            while (p < limit && (data[p] & 0xfe) !== 0xe8) p++;
+            const distance = p - pos;
+            pos = p;
+            if (p >= limit) return;
+            if (distance > 2) {
+                mask = 0;
+            } else {
+                mask >>>= distance;
+                const probe = (mask >>> 1) + 1;
+                if (mask !== 0 &&
+                    (mask > 4 || mask === 3 || bcjTestMsb(data[p + probe]))) {
+                    mask = (mask >>> 1) | 4;
+                    pos++;
+                    continue;
+                }
+            }
+
+            if (bcjTestMsb(data[p + 4])) {
+                let value = ((data[p + 4] << 24) | (data[p + 3] << 16) |
+                             (data[p + 2] << 8) | data[p + 1]) >>> 0;
+                const current = (ip + pos) >>> 0;
+                pos += 5;
+                value = (value - current) >>> 0;
+                if (mask !== 0) {
+                    const shift = (mask & 6) << 2;
+                    if (bcjTestMsb((value >>> shift) & 0xff)) {
+                        const flip = ((0x100 << shift) - 1) >>> 0;
+                        value = (value ^ flip) >>> 0;
+                        value = (value - current) >>> 0;
+                    }
+                    mask = 0;
+                }
+                data[p + 1] = value & 0xff;
+                data[p + 2] = (value >>> 8) & 0xff;
+                data[p + 3] = (value >>> 16) & 0xff;
+                data[p + 4] = (-(value >>> 24 & 1)) & 0xff;
+            } else {
+                mask = (mask >>> 1) | 4;
+                pos++;
+            }
+        }
+    }
+
+    function bcjArm64Inverse(data, ip = 0) {
+        const limit = data.length & ~3;
+        for (let pos = 0; pos < limit; pos += 4) {
+            let insn = readU32LE(data, pos);
+            if ((insn >>> 26) === 0x25) {
+                let imm = insn & 0x03ffffff;
+                const current = ((ip + pos) >>> 2) >>> 0;
+                imm = (imm - current) & 0x03ffffff;
+                insn = ((insn & 0xfc000000) | imm) >>> 0;
+            } else if (((insn & 0x9f000000) >>> 0) === 0x90000000) {
+                let imm = ((insn >>> 29) & 3) |
+                          (((insn >>> 5) & 0x7ffff) << 2);
+                const current = ((ip + pos) >>> 12) >>> 0;
+                imm = (imm - current) & 0x001fffff;
+                insn = ((insn & 0x9f00001f) | ((imm & 3) << 29) |
+                        (((imm >>> 2) & 0x7ffff) << 5)) >>> 0;
+            } else {
+                continue;
+            }
+            data[pos] = insn & 0xff;
+            data[pos + 1] = (insn >>> 8) & 0xff;
+            data[pos + 2] = (insn >>> 16) & 0xff;
+            data[pos + 3] = (insn >>> 24) & 0xff;
+        }
+    }
+
     // Errors
     // ─────────────────────────────────────────────────────────────
 
@@ -932,8 +1015,14 @@
         let litPos = 0;
         let matchesDecoded = 0;
         const decRep = [0, 0, 0];
+        const maxIters = totalLits + matchCount + 16;
+        let iterCount = 0;
 
         while (litPos < totalLits || matchesDecoded < matchCount) {
+            iterCount++;
+            if (iterCount > maxIters) {
+                throw new CorruptError("'S' sequence iteration bound exceeded");
+            }
             rdr.fill();
             if (stateLL >= ANS_L || stateOF >= ANS_L || stateML >= ANS_L) {
                 throw new CorruptError("'S' state overflow");
@@ -965,7 +1054,12 @@
             }
             litPos += litlen;
 
-            if (matchesDecoded >= matchCount) break;
+            // Terminal literal runs over 65535 bytes use trailing LL-only
+            // entries, so matches may finish before literals.
+            if (matchesDecoded >= matchCount) {
+                if (litPos >= totalLits) break;
+                continue;
+            }
 
             // OF
             rdr.fill();
@@ -1097,8 +1191,11 @@
         }
 
         const flags = buf[pos]; pos += 1;
+        if ((flags & 0x0c) === 0x0c) {
+            throw new CorruptError('simultaneous x86 and ARM64 BCJ flags');
+        }
         const hasChecksum = (flags & 0x01) !== 0;
-        // reserved bits ignored per C reference
+        // Reserved bits remain tolerated per C reference.
 
         pos += 1; // mode_hint (informational)
         const windowLog = buf[pos]; pos += 1;
@@ -1209,6 +1306,14 @@
                     `checksum mismatch: got 0x${actual.toString(16)}, `
                     + `expected 0x${expected.toString(16)}`);
             }
+        }
+
+        // Checksums cover forward-transformed bytes. Restore the public
+        // frame content only after successful footer validation.
+        if ((flags & 0x04) !== 0) {
+            bcjX86Inverse(out);
+        } else if ((flags & 0x08) !== 0) {
+            bcjArm64Inverse(out);
         }
 
         const decoded = Uint8Array.from(out);

@@ -152,10 +152,11 @@ $(TEST2_BIN): $(TEST2_SRC)
 	@rm -f build_obj/vv_simd_t2.o build_obj/vv_decoder_t2.o
 
 $(TEST3_BIN): $(TEST3_SRC)
+	@# Expose internal ANS table-builder equivalence hook to this test only.
 	@mkdir -p build_obj
-	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t3.o
-	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t3.o
-	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST3_SRC)) build_obj/vv_simd_t3.o build_obj/vv_decoder_t3.o $(LDFLAGS) -o $(TEST3_BIN)
+	$(CC) $(CFLAGS) -DVV_ANS_TEST_HOOKS -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t3.o
+	$(CC) $(CFLAGS) -DVV_ANS_TEST_HOOKS -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t3.o
+	$(CC) $(CFLAGS) -DVV_ANS_TEST_HOOKS $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST3_SRC)) build_obj/vv_simd_t3.o build_obj/vv_decoder_t3.o $(LDFLAGS) -o $(TEST3_BIN)
 	@rm -f build_obj/vv_simd_t3.o build_obj/vv_decoder_t3.o
 
 $(TEST4_BIN): $(TEST4_SRC)

@@ -84,6 +84,20 @@ static inline uint32_t effective_accel(const vv_options_t *opts) {
     return accel > 64 ? 64 : accel;
 }
 
+static inline int valid_mode(vv_mode_t mode) {
+    return mode == VV_MODE_ULTRA_FAST ||
+           mode == VV_MODE_BALANCED ||
+           mode == VV_MODE_EXTREME;
+}
+
+/* Streaming compression emits blocks as input arrives and therefore cannot
+ * apply a whole-frame BCJ transform. Reject filter requests instead of
+ * silently producing an unfiltered frame. */
+static inline int valid_cstream_options(const vv_options_t *opts) {
+    return valid_mode(opts->mode) &&
+           !opts->filter_x86 && !opts->filter_arm64 && !opts->filter_auto;
+}
+
 /* Sprint 117: VV_NO_SANITIZE_INTEGER is provided by include/vv_platform.h. */
 
 /* ═══════════════════════════════════════════════════════════════
@@ -253,7 +267,7 @@ typedef struct {
     uint32_t max_match;    /* Max representable matchlen (65535 for v1,
                             * 65534 for v2: ml_base_v2[35]=32767 with 15
                             * extra bits only reaches 65534). */
-    uint32_t accel;        /* Position-skip acceleration factor (0 = off).
+    uint32_t accel;        /* Effective position-skip acceleration factor.
                             * When >0, after a run of `f` consecutive
                             * positions with no match, compress_block
                             * advances by 1 + ((f*accel) >> 6) instead of 1,
@@ -261,11 +275,11 @@ typedef struct {
                             * unmatchable regions. Massively speeds up
                             * encode on incompressible / already-compressed
                             * input (measured ~8-9x on random/gzip data),
-                            * with a small ratio cost on compressible data
-                            * (so it is opt-in; default 0 keeps output
-                            * byte-identical). Skipped positions become
-                            * literals; output stays decodable by any
-                            * decoder. */
+                            * with a small ratio cost on compressible data.
+                            * The public zero/automatic setting is resolved
+                            * to a positive mode-dependent value before the
+                            * matcher runs. Skipped positions become literals;
+                            * output stays decodable by any decoder. */
     uint8_t  no_rep;       /* 1 = skip rep-match probing in compress_block.
                             * Measured net-positive on ratio in FAST mode
                             * (no entropy stage, so rep's short-offset code
@@ -322,7 +336,7 @@ static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
     m->use_hash4 = 0;  /* Disabled by default — enabled adaptively for binary */
     m->use_hash3 = 0;  /* Disabled by default — enabled for format v2 */
     m->single_probe = 0; /* Disabled by default — set only for ULTRA_FAST encode */
-    m->accel = 0;        /* Position-skip acceleration off by default (opt-in --accel) */
+    m->accel = 0;        /* Resolved from the public automatic/default setting later. */
     m->no_rep = 0;       /* rep-match probing on by default (opt-in --no-rep) */
     m->max_match = VV_MAX_MATCH;  /* v1 default, see matcher_set_format_v2 */
     return 1;
@@ -1569,10 +1583,10 @@ static size_t compress_block(const uint8_t *src, size_t start_pos, size_t block_
             nmatch++;
         } else {
             if (!pos_inserted) matcher_insert(m, src, pos, end);
-            /* Accel: skip ahead over unmatchable regions. accel==0 keeps
-             * the byte-identical old default (advance 1). The skipped
-             * positions are not hashed/inserted and simply become
-             * literals. SPRINT 124: balanced/extreme cap the stride at 8
+            /* Accel: skip ahead over unmatchable regions. The effective
+             * factor is already resolved from the public automatic/explicit
+             * setting. Skipped positions are not hashed/inserted and simply
+             * become literals. SPRINT 124: balanced/extreme cap the stride at 8
              * — on sparse-match data (struct-of-floats) an unbounded
              * ramp skips over match starts and costs double-digit ratio;
              * fast mode keeps the full lz4-style ramp. */
@@ -1918,6 +1932,22 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
 int64_t vv_compress(const uint8_t *src, size_t src_len,
                     uint8_t *dst, size_t dst_cap,
                     const vv_options_t *opts) {
+    /* Reject invalid public options before the BCJ copy/allocation path.
+     * Equality checks are intentional: vv_mode_t may be signed, and only
+     * the three declared values are part of the API. Applying both BCJ
+     * filters is nonsensical and previously wrote both header bits after
+     * transforming with x86 only, so a successful decode could alter data. */
+    if (opts && !valid_mode(opts->mode)) {
+        return VV_ERR_PARAM;
+    }
+    if (opts && opts->window_log != 0 &&
+        (opts->window_log < 10 || opts->window_log > 24)) {
+        return VV_ERR_PARAM;
+    }
+    if (opts && opts->filter_x86 && opts->filter_arm64) {
+        return VV_ERR_PARAM;
+    }
+
     int auto_on = opts && opts->filter_auto &&
                   !opts->filter_x86 && !opts->filter_arm64;
 
@@ -1939,6 +1969,9 @@ int64_t vv_compress(const uint8_t *src, size_t src_len,
             else
                 vv_bcj_arm64(copy, src_len, 0, 1);   /* AArch64 BL + ADRP */
             int64_t r = vv_compress_inner(copy, src_len, dst, dst_cap, &eff);
+            /* The private BCJ buffer contains a full plaintext copy. Keep it
+             * under the same memory-hygiene contract as the encoder arenas. */
+            vv_secure_zero(copy, src_len);
             free(copy);
             return r;
         }
@@ -2284,6 +2317,8 @@ struct vv_cstream_s {
 };
 
 vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
+    if (opts && !valid_cstream_options(opts)) return NULL;
+
     vv_cstream_t *ctx = (vv_cstream_t *)calloc(1, sizeof(vv_cstream_t));
     if (!ctx) return NULL;
 
@@ -2395,6 +2430,7 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
     /* Apply new options if provided. window_log cannot change without
      * reallocating the matcher tables — reject the change. */
     if (opts) {
+        if (!valid_cstream_options(opts)) return VV_ERR_PARAM;
         uint8_t new_wlog = opts->window_log;
         if (new_wlog != 0 && (new_wlog < 10 || new_wlog > 24)) return VV_ERR_PARAM;
         if (new_wlog == 0) new_wlog = 16;

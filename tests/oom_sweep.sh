@@ -85,6 +85,14 @@ sweep() {
 
 echo "OOM-robustness sweep:"
 "$VV_BIN" -c -m balanced --bcj -o "$TMP/valid.vv" "$INPUT" 2>/dev/null
+# Establish that the randomized fixture is a valid codec round-trip before
+# fault injection. Otherwise a latent encoder bug is misreported later as an
+# injector-initialization failure when count_allocs probes decompression.
+if ! "$VV_BIN" -d -o "$TMP/valid.out" "$TMP/valid.vv" 2>/dev/null ||
+   ! cmp -s "$INPUT" "$TMP/valid.out"; then
+  echo "  FAIL: baseline OOM fixture did not round-trip before injection" >&2
+  exit 1
+fi
 result=0
 sweep "compress (balanced --bcj)"  -c -m balanced --bcj -o "$TMP/o.vv"  "$INPUT"   || result=1
 sweep "decompress"                 -d              -o "$TMP/o.out" "$TMP/valid.vv"  || result=1

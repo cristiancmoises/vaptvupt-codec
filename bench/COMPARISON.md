@@ -5,16 +5,87 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
-## v2.65.8 head-to-head (ratio corpus measured 2026-07; output revalidated 2026-09)
+## v2.65.9 deterministic generated-v1 suite (measured 2026-09-01)
 
-> **Current through v2.65.8.** Valid-stream output is byte-identical
-> from v2.65.0 to v2.65.8, so every ratio in the tables below still
-> holds exactly; v2.65.1-v2.65.8 changed only encode/decode speed,
-> memory hygiene, and the reference decoders/test harness. The one
-> compression-size change since is the *encode-speed* column of
-> vv-extreme, which roughly doubled at v2.65.2 (≈1 → ≈2 MB/s,
-> byte-identical). Compress/decompress throughput is otherwise
-> run-to-run noise on the bench machine.
+This is a fresh, corpus-free release measurement, clearly separate from the
+historical 11-file tables below. The host was an Intel Core i7-13700HX running
+Linux 7.2.2; VaptVupt was built with gcc 14.3. The process was pinned to core 2.
+Each cell is the median of 7 subprocess runs after 1 warm-up. Competitors were
+zstd 1.5.6 in single-thread mode and lz4 1.10. Every measured decode was
+SHA-256-checked against its deterministic generated input. Cells are
+`ratio @ encode/decode MB/s`, where ratio is raw bytes / compressed bytes.
+
+| file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
+|---|---|---|---|---|---|
+| text.txt | 3.707 @134.3/396.0 | 7.055 @56.7/327.5 | 2.907 @274.5/379.0 | 5.768 @194.7/343.3 | 6.198 @175.1/342.9 |
+| records.jsonl | 3.142 @128.9/420.8 | 5.707 @48.8/341.7 | 3.505 @272.5/370.9 | 7.071 @215.1/339.8 | 6.521 @175.0/334.0 |
+| records.bin | 1.347 @72.3/405.1 | 2.016 @17.3/229.9 | 1.371 @251.4/384.6 | 1.934 @180.1/317.5 | 2.183 @116.1/269.6 |
+| random.bin | 1.000 @350.0/434.7 | 1.000 @239.4/402.1 | 1.000 @364.3/362.9 | 1.000 @312.6/334.4 | 1.000 @274.3/321.2 |
+
+The findings are modest and workload-dependent. On these fixtures,
+`vv-balanced` leads ratio on generated text and narrowly leads zstd-1/3 on
+generated-JSON decode, while zstd compresses both text families much faster and
+leads JSON ratio. On binary records, balanced falls between zstd-1 and zstd-3
+on ratio and trails both on throughput. `vv-fast` leads lz4-1 on text ratio,
+loses on JSON and binary-record ratio, and generally compresses more slowly.
+All five tools store the random fixture effectively raw. This small
+deterministic suite is a
+reproducible comparison anchor, not evidence that one codec universally
+supersedes another; production decisions require production data.
+
+The harness generates fixed `generated-v1` fixtures without external corpus
+files. By default it requires the complete vv-fast/vv-balanced/lz4-1/zstd-1/
+zstd-3 matrix and fails on missing tools, command errors, or decode mismatches.
+JSON carries host/tool provenance, fixture hashes, and results; CSV carries
+fixture hashes and measurements. Portable reproduction, with lz4 1.10 first on
+`PATH`:
+
+```sh
+PATH=/path/to/lz4-1.10/bin:$PATH taskset -c 2 \
+  python3 bench/competitive.py --generated-suite --vv ./vaptvupt \
+  --runs 7 --warmups 1 --csv generated-v1.csv --json generated-v1.json
+```
+
+The recorded host used this exact command and immutable lz4 store path:
+
+```sh
+PATH=/gnu/store/25bwzp99xib0855l878dws7rb6yg5zn0-lz4-1.10.0/bin:$PATH taskset -c 2 python3 bench/competitive.py --generated-suite --vv ./vaptvupt --runs 7 --warmups 1 --csv /tmp/vaptvupt-2.65.9-competitive.csv --json /tmp/vaptvupt-2.65.9-competitive.json
+```
+
+Separately, a paired pinned **in-process** decoder comparison measured the
+v2.65.9 direct sequence-tANS table builder. Baseline and patched
+`tests/bench_decode.c` binaries were built with gcc 14.3 `-O3 -flto`, pinned to
+core 4, and alternated for 8 pairs over the deterministic speed-gate text and
+JSON fixtures. The preserved evidence is this paired method and its raw
+medians; unlike the generated-v1 run above, no standalone orchestration command
+was retained. The medians were:
+
+| fixture | spread + build | direct build | delta |
+|---|---:|---:|---:|
+| text | 1145.2 MB/s | 1149.8 MB/s | +0.40% |
+| JSON | 1072.3 MB/s | 1085.2 MB/s | +1.21% |
+
+The two-fixture geometric mean is approximately +0.80%. The change removes the
+4 KiB spread scratch, reducing sequence-table storage from 52 KiB to 48 KiB per
+block, with entry-for-entry table equivalence and unchanged wire output. Those
+paired in-process deltas answer a narrower implementation question and must not
+be mixed numerically with the subprocess table above. At this effect size, the
+pairing and pinning are material; other workloads may show a different result.
+
+## Historical 11-file head-to-head (measured 2026-07; revalidated 2026-09)
+
+> **Historical measurement, ratios revalidated on v2.65.9.** The same 11
+> fixtures reproduced their recorded compressed sizes, so every ratio in the
+> tables below still holds exactly for that corpus. Streams that v2.65.8
+> encoded validly remain compatible; v2.65.9 deliberately changes the rare
+> formerly undecodable SEQ candidate described in the changelog to a lossless
+> fallback. Later releases also changed encode/decode speed, memory hygiene,
+> API validation, streaming behavior, and test infrastructure.
+> A later-release note is that vv-extreme encode speed roughly doubled at
+> v2.65.2 (≈1 → ≈2 MB/s, byte-identical); the detailed throughput cells below,
+> including their ≈1 MB/s vv-extreme values, deliberately retain the original
+> July run. No throughput value below may be relabeled as a fresh v2.65.9
+> result.
 
 Same harness, environment, and corpus as the sets below; every cell
 roundtrip-verified byte-exact, zero mismatches. v2.65.0 changes extreme
@@ -1106,6 +1177,10 @@ not deeper or shallower matching. Decode, by contrast, is already competitive
 (vv-extreme ≈ zstd-1).
 
 ## Reproduce
+
+Use `--generated-suite` and the pinned command in the v2.65.9 section for the
+current deterministic matrix. The historical arbitrary-file interface remains
+available for an external corpus:
 
 ```sh
 make

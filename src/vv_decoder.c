@@ -709,6 +709,10 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
 
         if (fh.magic != VV_MAGIC) return VV_ERR_BAD_MAGIC;
         if (fh.version != 1) return VV_ERR_CORRUPT;
+        /* A frame can carry one architecture-specific BCJ transform, never
+         * both.  Applying two inverses in sequence has no defined wire
+         * meaning, so reject the ambiguous header before decoding output. */
+        if ((fh.flags & 0x0Cu) == 0x0Cu) return VV_ERR_CORRUPT;
 
         uint32_t max_offset;
         if (!frame_max_offset(fh.window_log, &max_offset)) return VV_ERR_CORRUPT;
@@ -878,6 +882,21 @@ struct vv_dstream_s {
     vv_xxh64_state_t cks;
 };
 
+/* Complete a streaming frame exactly once. BCJ checksums cover the
+ * transformed bytes, matching the one-shot decoder, so inversion belongs
+ * after checksum validation (or immediately after the final block when the
+ * checksum is disabled). The DONE fast path at function entry guarantees
+ * that a completed frame is never inverted twice. */
+static void dstream_finish(vv_dstream_t *ctx) {
+    if (ctx->fh.flags & 4) {
+        vv_bcj_x86(ctx->dst_base_saved, ctx->output_pos, 0, 0);
+    }
+    if (ctx->fh.flags & 8) {
+        vv_bcj_arm64(ctx->dst_base_saved, ctx->output_pos, 0, 0);
+    }
+    ctx->state = VV_DSTREAM_DONE;
+}
+
 vv_dstream_t *vv_dstream_create(void) {
     vv_dstream_t *ctx = (vv_dstream_t *)calloc(1, sizeof(vv_dstream_t));
     if (!ctx) return NULL;
@@ -994,6 +1013,9 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
             memcpy(&ctx->fh, ctx->in_buf + ctx->in_pos, sizeof(vv_frame_header_t));
             if (ctx->fh.magic != VV_MAGIC) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_BAD_MAGIC; }
             if (ctx->fh.version != 1) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT; }
+            if ((ctx->fh.flags & 0x0Cu) == 0x0Cu) {
+                ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT;
+            }
             if (!frame_max_offset(ctx->fh.window_log, &ctx->max_offset)) {
                 ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT;
             }
@@ -1094,7 +1116,8 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
             dstream_consume(ctx, total_block_sz);
 
             if (is_last) {
-                ctx->state = ctx->has_checksum ? VV_DSTREAM_FOOTER : VV_DSTREAM_DONE;
+                if (ctx->has_checksum) ctx->state = VV_DSTREAM_FOOTER;
+                else dstream_finish(ctx);
             }
         }
 
@@ -1106,7 +1129,7 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
             uint64_t computed = vv_xxh64_finalize(&ctx->cks);
             if (computed != ff.checksum) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT; }
             dstream_consume(ctx, sizeof(vv_frame_footer_t));
-            ctx->state = VV_DSTREAM_DONE;
+            dstream_finish(ctx);
         }
 
         if (ctx->state == VV_DSTREAM_DONE) {

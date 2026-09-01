@@ -5,7 +5,9 @@
 #
 # Measures VaptVupt against the standard compressors available on the
 # system (gzip, zstd, lz4, xz) across a set of input files, and reports
-# compression ratio and throughput. The point of this tool is HONESTY:
+# compression ratio and throughput. Generated-suite mode measures both
+# compression and decompression; legacy file mode measures compression only.
+# The point of this tool is HONESTY:
 # it prints every result, wins and losses alike, with measured numbers —
 # never marketing. Where VaptVupt loses, the table shows it losing.
 #
@@ -17,23 +19,31 @@
 #   bench/competitive.py FILE [FILE ...]
 #   bench/competitive.py --vv ./vaptvupt --dir /path/to/corpus
 #   bench/competitive.py --modes balanced,extreme --csv results.csv FILE...
+#   bench/competitive.py --generated-suite --vv ./vaptvupt --runs 5
 #
-# Exit status is always 0 on a completed run; this is a measurement tool,
-# not a gate. (See tests/bench_gate.py for the regression gate.)
+# Legacy file mode remains a measurement tool, not a gate. Generated-suite
+# mode fails on a missing required codec, command failure, or decode mismatch.
+# (See tests/bench_gate.py for the compression-ratio regression gate.)
 
 import argparse
+import csv
+import datetime
+import hashlib
+import json
 import os
+import platform
 import shutil
+import statistics
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 
 # Each external codec: name -> (binary, compress-args building fn).
-# We invoke "<bin> <args> -c FILE > /dev/null" and count stdout bytes,
-# timing the compress. Decompress timing is intentionally out of scope
-# here (ratio + compress speed are the headline numbers); a separate
-# decode benchmark lives in the C test suite.
+# Legacy file mode invokes "<bin> <args> -c FILE" and counts stdout bytes.
+# Its decompression timing remains out of scope; generated-suite mode below
+# performs and verifies timed roundtrips for every codec.
 def _gzip(level):   return ["gzip", f"-{level}", "-c"]
 def _zstd(level):   return ["zstd", f"-{level}", "-c"]
 def _lz4(level):    return ["lz4", f"-{level}", "-c"]
@@ -45,6 +55,11 @@ EXTERNAL = [
     ("zstd-3",   _zstd(3)),
     ("zstd-19",  _zstd(19)),
     ("xz-9",     _xz(9)),
+]
+
+GENERATED_SUITE_VERSION = "generated-v1"
+GENERATED_CODEC_NAMES = [
+    "vv-fast", "vv-balanced", "lz4-1", "zstd-1", "zstd-3",
 ]
 
 
@@ -102,6 +117,387 @@ def collect_files(args):
     return files
 
 
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _generated_fixtures():
+    """Return deterministic, dependency-free fixtures for comparison runs.
+
+    The algorithms and sizes are deliberately defined here rather than by
+    Python's random module, whose higher-level sampling details can vary by
+    runtime version. Changing any generator requires a suite-version bump.
+    """
+    target = 1024 * 1024
+
+    words = (
+        "the quick brown fox jumps over lazy dog compression storage packet "
+        "record client server request response checksum window literal match "
+        "stream buffer encoder decoder balanced fast durable archive"
+    ).split()
+    state = 0x6D2B79F5
+    text_parts = []
+    text_len = 0
+    while text_len < target + 32:
+        state = (1664525 * state + 1013904223) & 0xFFFFFFFF
+        word = words[state % len(words)]
+        text_parts.append(word)
+        text_len += len(word) + 1
+    text_data = (" ".join(text_parts) + "\n").encode("ascii")[:target]
+
+    state = 0x243F6A88
+    json_lines = []
+    json_len = 0
+    i = 0
+    while json_len < target:
+        state = (1664525 * state + 1013904223) & 0xFFFFFFFF
+        line = (
+            f'{{"id":{i},"sensor":"s{i % 97:02d}",'
+            f'"value":{state % 100000},"status":"{("ok", "warn", "idle")[i % 3]}"}}\n'
+        )
+        json_lines.append(line)
+        json_len += len(line)
+        i += 1
+    json_data = "".join(json_lines).encode("ascii")
+
+    records = bytearray()
+    state = 0x13198A2E
+    for i in range(50000):
+        state = (1664525 * state + 1013904223) & 0xFFFFFFFF
+        label = f"dev{i % 4096:08x}".encode("ascii")
+        records += struct.pack("<Iii12s", i, (state % 18000) - 4000,
+                               state & 0x7FFFFFFF, label)
+
+    randomish = bytearray()
+    state64 = 0x9E3779B97F4A7C15
+    mask64 = (1 << 64) - 1
+    while len(randomish) < target:
+        state64 ^= state64 >> 12
+        state64 ^= (state64 << 25) & mask64
+        state64 ^= state64 >> 27
+        value = (state64 * 2685821657736338717) & mask64
+        randomish += struct.pack("<Q", value)
+
+    return [
+        ("text.txt", text_data),
+        ("records.jsonl", json_data),
+        ("records.bin", bytes(records)),
+        ("random.bin", bytes(randomish[:target])),
+    ]
+
+
+def _first_line(cmd):
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return "unavailable"
+    return next((line.strip() for line in p.stdout.splitlines() if line.strip()),
+                f"exit {p.returncode}")
+
+
+def _git_metadata(root):
+    def git(*args):
+        try:
+            p = subprocess.run(["git", "-C", root, *args],
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, text=True,
+                               timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return p.stdout.strip() if p.returncode == 0 else None
+
+    commit = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain", "--untracked-files=no")
+    return {
+        "commit": commit,
+        "tracked_dirty": None if status is None else bool(status),
+    }
+
+
+def _cpu_model():
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.lower().startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or "unknown"
+
+
+def _generated_codecs(vv):
+    vv_path = os.path.abspath(vv)
+    zstd = shutil.which("zstd")
+    lz4 = shutil.which("lz4")
+    codecs = [
+        {
+            "name": "vv-fast", "binary": vv_path, "suffix": ".vv",
+            "options": "-m fast",
+            "compress": lambda src, dst: [vv_path, "-c", "-m", "fast",
+                                                  "-o", dst, src],
+            "decompress": lambda src, dst: [vv_path, "-d", "-o", dst, src],
+            "version_args": ["-h"],
+        },
+        {
+            "name": "vv-balanced", "binary": vv_path, "suffix": ".vv",
+            "options": "-m balanced",
+            "compress": lambda src, dst: [vv_path, "-c", "-m", "balanced",
+                                                  "-o", dst, src],
+            "decompress": lambda src, dst: [vv_path, "-d", "-o", dst, src],
+            "version_args": ["-h"],
+        },
+        {
+            "name": "lz4-1", "binary": lz4, "suffix": ".lz4",
+            "options": "-1 -T1",
+            "compress": lambda src, dst: [lz4, "-1", "-T1", "-q", "-f",
+                                                src, dst],
+            "decompress": lambda src, dst: [lz4, "-d", "-q", "-f", src, dst],
+            "version_args": ["--version"],
+        },
+        {
+            "name": "zstd-1", "binary": zstd, "suffix": ".zst",
+            "options": "-1 --single-thread",
+            "compress": lambda src, dst: [zstd, "-1", "--single-thread",
+                                             "-q", "-f", "-o", dst, src],
+            "decompress": lambda src, dst: [zstd, "-d", "-q", "-f",
+                                               "-o", dst, src],
+            "version_args": ["--version"],
+        },
+        {
+            "name": "zstd-3", "binary": zstd, "suffix": ".zst",
+            "options": "-3 --single-thread",
+            "compress": lambda src, dst: [zstd, "-3", "--single-thread",
+                                             "-q", "-f", "-o", dst, src],
+            "decompress": lambda src, dst: [zstd, "-d", "-q", "-f",
+                                               "-o", dst, src],
+            "version_args": ["--version"],
+        },
+    ]
+    for codec in codecs:
+        binary = codec["binary"]
+        codec["available"] = bool(binary and os.path.isfile(binary)
+                                  and os.access(binary, os.X_OK))
+    return codecs
+
+
+def _run_output(cmd, out_path, timeout):
+    try:
+        os.unlink(out_path)
+    except FileNotFoundError:
+        pass
+    t0 = time.perf_counter()
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"command failed: {' '.join(cmd)}: {exc}") from exc
+    elapsed = time.perf_counter() - t0
+    if p.returncode != 0:
+        detail = p.stderr.decode("utf-8", "replace").strip()[:300]
+        raise RuntimeError(
+            f"command exited {p.returncode}: {' '.join(cmd)}: {detail}")
+    if not os.path.isfile(out_path):
+        raise RuntimeError(f"command produced no output: {' '.join(cmd)}")
+    return elapsed, os.path.getsize(out_path)
+
+
+def _benchmark_generated_codec(codec, fixture_path, raw_size, raw_sha,
+                               work_dir, runs, warmups, timeout):
+    compressed = os.path.join(work_dir, codec["name"] + codec["suffix"])
+    decoded = os.path.join(work_dir, codec["name"] + ".decoded")
+    compress_cmd = codec["compress"](fixture_path, compressed)
+    decompress_cmd = codec["decompress"](compressed, decoded)
+
+    for _ in range(warmups):
+        _run_output(compress_cmd, compressed, timeout)
+        _run_output(decompress_cmd, decoded, timeout)
+        if _sha256_file(decoded) != raw_sha:
+            raise RuntimeError(f"{codec['name']} warm-up decode mismatch")
+
+    encode_times = []
+    sizes = []
+    for _ in range(runs):
+        elapsed, size = _run_output(compress_cmd, compressed, timeout)
+        encode_times.append(elapsed)
+        sizes.append(size)
+    if len(set(sizes)) != 1:
+        raise RuntimeError(f"{codec['name']} output sizes differ: {sizes}")
+
+    decode_times = []
+    for _ in range(runs):
+        elapsed, _ = _run_output(decompress_cmd, decoded, timeout)
+        if _sha256_file(decoded) != raw_sha:
+            raise RuntimeError(f"{codec['name']} decode mismatch")
+        decode_times.append(elapsed)
+
+    enc_s = statistics.median(encode_times)
+    dec_s = statistics.median(decode_times)
+    return {
+        "codec": codec["name"],
+        "compressed_bytes": sizes[0],
+        "ratio": raw_size / sizes[0],
+        "encode_seconds_median": enc_s,
+        "encode_mbps": raw_size / enc_s / 1e6,
+        "decode_seconds_median": dec_s,
+        "decode_mbps": raw_size / dec_s / 1e6,
+        "runs": runs,
+        "verified": True,
+    }
+
+
+def _write_generated_csv(path, fixture_meta, results):
+    meta_by_name = {f["name"]: f for f in fixture_meta}
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        out = csv.writer(fh)
+        out.writerow([
+            "file", "raw_bytes", "raw_sha256", "codec", "comp_bytes",
+            "ratio", "encode_seconds_median", "encode_MBps",
+            "decode_seconds_median", "decode_MBps", "runs", "verified",
+        ])
+        for row in results:
+            fixture = meta_by_name[row["file"]]
+            out.writerow([
+                row["file"], fixture["bytes"], fixture["sha256"],
+                row["codec"], row["compressed_bytes"],
+                f"{row['ratio']:.6f}",
+                f"{row['encode_seconds_median']:.9f}",
+                f"{row['encode_mbps']:.3f}",
+                f"{row['decode_seconds_median']:.9f}",
+                f"{row['decode_mbps']:.3f}", row["runs"],
+                "true" if row["verified"] else "false",
+            ])
+
+
+def generated_suite(args):
+    if args.runs < 1:
+        raise ValueError("--runs must be at least 1")
+    if args.warmups < 0:
+        raise ValueError("--warmups must be non-negative")
+
+    codecs = _generated_codecs(args.vv)
+    missing = [c["name"] for c in codecs if not c["available"]]
+    # vv-fast and vv-balanced share one binary; make that error concise.
+    if not codecs[0]["available"]:
+        raise RuntimeError(f"vaptvupt binary not found or not executable: {args.vv}")
+    if missing and not args.allow_missing:
+        raise RuntimeError(
+            "required generated-suite codecs unavailable: "
+            + ", ".join(missing)
+            + " (install them, or use --allow-missing for a partial diagnostic run)")
+    active = [c for c in codecs if c["available"]]
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    available_gcc = shutil.which("gcc")
+    metadata = {
+        "suite": GENERATED_SUITE_VERSION,
+        "generated_at_utc": datetime.datetime.now(
+            datetime.timezone.utc).isoformat(),
+        "timing": "median subprocess wall-clock",
+        "throughput_unit": "MB/s (raw bytes / 1e6 / seconds)",
+        "runs": args.runs,
+        "warmups": args.warmups,
+        "timeout_seconds": args.timeout,
+        "complete_matrix": not missing,
+        "missing_codecs": missing,
+        "harness_sha256": _sha256_file(os.path.abspath(__file__)),
+        "host": {
+            "platform": platform.platform(),
+            "cpu": _cpu_model(),
+            "logical_cpus": os.cpu_count(),
+            "affinity": (sorted(os.sched_getaffinity(0))
+                         if hasattr(os, "sched_getaffinity") else None),
+            "python": platform.python_version(),
+            "available_gcc": (_first_line([available_gcc, "--version"])
+                              if available_gcc else None),
+        },
+        "git": _git_metadata(root),
+        "tools": {},
+    }
+    for codec in codecs:
+        if codec["available"]:
+            binary = codec["binary"]
+            metadata["tools"][codec["name"]] = {
+                "path": binary,
+                "sha256": _sha256_file(binary),
+                "version": _first_line([binary, *codec["version_args"]]),
+                "options": codec["options"],
+            }
+        else:
+            metadata["tools"][codec["name"]] = {
+                "available": False, "options": codec["options"],
+            }
+
+    fixture_meta = []
+    results = []
+    with tempfile.TemporaryDirectory(prefix="vv-generated-suite-") as td:
+        fixture_dir = os.path.join(td, "fixtures")
+        result_dir = os.path.join(td, "results")
+        os.mkdir(fixture_dir)
+        os.mkdir(result_dir)
+        for name, data in _generated_fixtures():
+            path = os.path.join(fixture_dir, name)
+            with open(path, "wb") as fh:
+                fh.write(data)
+            raw_sha = _sha256_file(path)
+            fixture_meta.append({
+                "name": name, "bytes": len(data), "sha256": raw_sha,
+            })
+            fixture_work = os.path.join(result_dir, name)
+            os.mkdir(fixture_work)
+            for codec in active:
+                row = _benchmark_generated_codec(
+                    codec, path, len(data), raw_sha, fixture_work,
+                    args.runs, args.warmups, args.timeout)
+                row["file"] = name
+                results.append(row)
+
+    payload = {
+        "metadata": metadata,
+        "fixtures": fixture_meta,
+        "results": results,
+    }
+    if args.csv:
+        _write_generated_csv(args.csv, fixture_meta, results)
+    if args.json_path:
+        with open(args.json_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+
+    print("# VaptVupt deterministic generated-suite benchmark")
+    print("# metadata: " + json.dumps(metadata, sort_keys=True))
+    for fixture in fixture_meta:
+        print(f"# fixture: {fixture['name']} bytes={fixture['bytes']} "
+              f"sha256={fixture['sha256']}")
+    if missing:
+        print("# INCOMPLETE: unavailable codecs: " + ", ".join(missing))
+    print("# cells: ratio @ encode/decode MB/s; median of "
+          f"{args.runs} measured run(s), {args.warmups} warm-up(s)")
+    print("| file | " + " | ".join(GENERATED_CODEC_NAMES) + " |")
+    print("|---|" + "---|" * len(GENERATED_CODEC_NAMES))
+    by_key = {(r["file"], r["codec"]): r for r in results}
+    for fixture in fixture_meta:
+        cells = []
+        for codec_name in GENERATED_CODEC_NAMES:
+            row = by_key.get((fixture["name"], codec_name))
+            if row is None:
+                cells.append("—")
+            else:
+                cells.append(
+                    f"{row['ratio']:.3f} @ "
+                    f"{row['encode_mbps']:.1f}/{row['decode_mbps']:.1f}")
+        print(f"| {fixture['name']} | " + " | ".join(cells) + " |")
+    if args.csv:
+        print(f"# wrote CSV: {args.csv}", file=sys.stderr)
+    if args.json_path:
+        print(f"# wrote JSON: {args.json_path}", file=sys.stderr)
+    return 0
+
+
 def self_test(vv):
     """Smoke test: synthesize a compressible buffer, run the harness logic
     on it, and assert VaptVupt produced a smaller-than-raw output and the
@@ -147,12 +543,33 @@ def main():
     ap.add_argument("--timeout", type=float, default=120.0,
                     help="per-codec-per-file timeout in seconds")
     ap.add_argument("--csv", help="write machine-readable results to this CSV")
+    ap.add_argument("--generated-suite", action="store_true",
+                    help="benchmark deterministic generated-v1 fixtures with "
+                         "vv fast/balanced, lz4-1, and zstd-1/3; verify decode")
+    ap.add_argument("--runs", type=int, default=3,
+                    help="measured runs per generated-suite cell (median; default 3)")
+    ap.add_argument("--warmups", type=int, default=1,
+                    help="warm-up roundtrips per generated-suite cell (default 1)")
+    ap.add_argument("--json", dest="json_path",
+                    help="write generated-suite metadata and results as JSON")
+    ap.add_argument("--allow-missing", action="store_true",
+                    help="allow an explicitly marked partial generated-suite run")
     ap.add_argument("--self-test", action="store_true",
                     help="run a corpus-free smoke test (for make test) and exit")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test(args.vv)
+    if args.generated_suite:
+        if args.files or args.dir:
+            ap.error("--generated-suite does not accept FILE or --dir")
+        try:
+            return generated_suite(args)
+        except (RuntimeError, ValueError) as exc:
+            print(f"generated-suite FAIL: {exc}", file=sys.stderr)
+            return 1
+    if args.json_path or args.allow_missing:
+        ap.error("--json and --allow-missing require --generated-suite")
 
     files = collect_files(args)
     if not files:

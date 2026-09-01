@@ -1,101 +1,148 @@
 # VaptVupt — Release Procedure
 
-Release v2.65.8 (tag `v2.65.8`). GPL-3.0-or-later.
+Release v2.65.9 (tag `v2.65.9`). GPL-3.0-or-later.
 
-The build environment produces and verifies the artifacts. Steps that
-require GitHub or registry credentials are marked and run on a machine where
-you are authenticated; they are written to paste directly. The kit embeds no
-secrets.
+The v2.65.9 publication plan has one release artifact:
+`vaptvupt-2.65.9-src.tar.gz`. Binary builds, Git bundles, standalone checksum
+files, and copied comparison documents are not release assets. The source
+archive already contains the repository documentation.
 
-## 1. Gate
+## 1. Gate the release commit
 
-A fresh clone from the bundle must build, reproduce the binary, and pass the
-suite:
+Start from the exact commit that will be tagged and require a clean result from
+the normal release checks:
 
 ```sh
-git clone vaptvupt-2.65.8.bundle repo
-cd repo && git checkout v2.65.8
+git status --short
 make
-make test     # 23 C suites + OOM sweep, differential 5576/5576, fuzz 5200/5200,
-              # ratio gate +/- 0, safezone 58/58, exact-buffer 20136/20136,
-              # DoS 12/12, competitive + cli_window pass
+make check-debug
+make test
+make amalg-verify
 ```
 
-`make test` must exit 0. If it does not on the target machine, stop and
-check the toolchain (gcc 13+, AVX2).
+`make test` must exit 0. Stop on any failure and record any unavailable
+optional formal tool rather than treating a skipped tool as a pass. The
+v2.65.9 delta specifically includes direct-tANS-table equivalence, streaming
+BCJ whole/split roundtrips for both architectures and checksum settings, API
+option validation, `test_seq_v2` 21/21 with oversize-nonterminal fallback,
+reference-decoder parity, OOM-baseline validation, and the competitive-harness
+self-test. Run the full generated-v1 matrix separately to produce the published
+benchmark evidence.
 
-## 2. Integrity
+Review the release diff and confirm that current version markers say 2.65.9;
+older numbers in the changelog and explicitly historical benchmark sections
+must remain:
 
 ```sh
-sha256sum -c SHA256SUMS
-git bundle verify vaptvupt-2.65.8.bundle
+git diff --check
+git diff --stat v2.65.8..HEAD
+rg -n '2\.65\.9|v2\.65\.9' --glob '*.md' --glob '*.[ch]'
 ```
 
-## 3. Push (credentials)
+## 2. Tag and build the source archive
+
+Create the release tag only after the gate is clean. Use a signed annotated tag
+where signing is configured:
 
 ```sh
-# v2.65.8 removes internal planning/prompt paths from reachable history.
-# The sanitized branch therefore needs a force-with-lease update, using the
-# actual pre-scrub branch SHA as the lease. Rewritten historical tags require
-# an explicit tag force update; do not use `--mirror` or touch unrelated main.
-git push --force-with-lease=refs/heads/v260-master:<old-branch-sha> \
-  codeberg HEAD:refs/heads/v260-master
-git push --force codeberg 'refs/tags/*'
-git push --force-with-lease=refs/heads/v260-master:<old-branch-sha> \
-  github HEAD:refs/heads/v260-master
-git push --force github 'refs/tags/*'
-git push --force-with-lease=refs/heads/v260-master:<old-branch-sha> \
-  origin-https HEAD:refs/heads/v260-master
-git push --force origin-https 'refs/tags/*'
-# Then verify each endpoint resolves the branch and v2.65.8 tag to the
-# release commit. The same explicit commands apply to the Forgejo .com.br
-# URL when it is reachable.
+git tag -s -a v2.65.9 -m "VaptVupt v2.65.9"
+git archive --format=tar.gz --prefix=vaptvupt-2.65.9/ \
+  -o vaptvupt-2.65.9-src.tar.gz v2.65.9
+sha256sum vaptvupt-2.65.9-src.tar.gz
 ```
 
-## 4. GitHub release (credentials)
+Record the printed SHA-256 in the release notes. It is release metadata, not a
+second uploaded asset.
+
+## 3. Verify the archive, not just the worktree
+
+Extract into a fresh temporary directory and run the same source-facing gate:
 
 ```sh
-gh release create v2.65.8 \
-  vaptvupt-2.65.8-src.tar.gz \
-  SHA256SUMS \
-  COMPARISON.md \
-  vaptvupt-2.65.8-linux-x86_64 \
-  vaptvupt-2.65.8-linux-x86_64-mt \
-  vaptvupt-2.65.8-linux-x86_64-pgo \
-  --title "VaptVupt v2.65.8" \
-  --notes-file <(awk '/^## v2.65.8 /{f=1;next} /^## /{f=0} f' CHANGELOG.md)
+release_tmp=$(mktemp -d)
+tar -xzf vaptvupt-2.65.9-src.tar.gz -C "$release_tmp"
+(
+  cd "$release_tmp/vaptvupt-2.65.9"
+  make
+  make check-debug
+  make test
+  make amalg-verify
+)
 ```
 
-`COMPARISON.md` ships with the release; it carries the measured position
-including the file classes where vv loses.
+Confirm the archive root is `vaptvupt-2.65.9/`, contains no `.git` directory,
+and contains only files tracked by the tagged source tree. The historical
+repository scrub completed for v2.65.8 remains a separate, one-time operation;
+ordinary v2.65.9 publication must not force-update old tags or branches.
 
-## 5. vcpkg / registries (credentials, optional)
+## 4. Push the release commit and tag (credentials)
 
-vcpkg uses SHA512, not SHA256:
+Push without history rewriting, then verify that every endpoint resolves the
+branch and tag to the same release commit:
 
 ```sh
-sha512sum vaptvupt-2.65.8-src.tar.gz
-# vcpkg.json: "version": "2.65.8"
-# portfile.cmake: REF v2.65.8, SHA512 <above>
+git push codeberg HEAD:refs/heads/v260-master
+git push codeberg refs/tags/v2.65.9
+git push github HEAD:refs/heads/v260-master
+git push github refs/tags/v2.65.9
+git push origin-https HEAD:refs/heads/v260-master
+git push origin-https refs/tags/v2.65.9
+
+release_sha=$(git rev-parse 'v2.65.9^{}')
+printf 'expected release commit: %s\n' "$release_sha"
+for remote in codeberg github origin-https; do
+  git ls-remote "$remote" refs/heads/v260-master refs/tags/v2.65.9 \
+    'refs/tags/v2.65.9^{}'
+done
 ```
 
-## 6. Smoke test after install
+Apply the same explicit branch/tag pushes to the Forgejo `.com.br` endpoint
+when it is reachable. The branch result and peeled tag (`^{}`) must equal
+`$release_sha`. Do not use `--mirror`.
+
+## 5. Create the GitHub release (credentials)
+
+Upload only the source archive. The notes come from the matching changelog
+section:
+
+```sh
+archive_sha=$(sha256sum vaptvupt-2.65.9-src.tar.gz | awk '{print $1}')
+release_notes=$(mktemp)
+awk '/^## v2.65.9 /{f=1;next} /^## /{f=0} f' CHANGELOG.md > "$release_notes"
+printf '\nSource archive SHA-256: `%s`\n' "$archive_sha" >> "$release_notes"
+gh release create v2.65.9 \
+  vaptvupt-2.65.9-src.tar.gz \
+  --title "VaptVupt v2.65.9" \
+  --notes-file "$release_notes" \
+  --verify-tag
+```
+
+Check the published page: it must list `vaptvupt-2.65.9-src.tar.gz` as the only
+manually uploaded asset, show the recorded SHA-256 in the notes, and preserve
+the workload-dependent benchmark wording.
+
+## 6. vcpkg / registries (credentials, optional)
+
+vcpkg uses SHA-512 for its source reference:
+
+```sh
+sha512sum vaptvupt-2.65.9-src.tar.gz
+# vcpkg.json: "version": "2.65.9"
+# portfile.cmake: REF v2.65.9, SHA512 <above>
+```
+
+## 7. Smoke test after install
 
 ```sh
 echo "In Code We Trust" > t.txt
-vaptvupt -c -m extreme -o t.zupt t.txt && vaptvupt -d -o t.out t.zupt && cmp t.txt t.out
-vaptvupt -c -m extreme --bcj -o code.zupt /path/to/x86-binary       # x86 binary-ratio path
-vaptvupt -c -m extreme --bcj-arm64 -o code.zupt /path/to/arm64-bin  # AArch64 binary-ratio path
+vaptvupt -c -m extreme -o t.zupt t.txt && \
+  vaptvupt -d -o t.out t.zupt && cmp t.txt t.out
+vaptvupt -c -m extreme --bcj -o code.zupt /path/to/x86-binary
+vaptvupt -c -m extreme --bcj-arm64 -o code.zupt /path/to/arm64-binary
 ```
 
-## Artifacts
+## Artifact
 
 | File | Purpose |
 |---|---|
-| `vaptvupt-2.65.8-src.tar.gz` | Source (`git archive v2.65.8`) |
-| `vaptvupt-2.65.8.bundle` | Git history + tags (clone-able) |
-| `vaptvupt-2.65.8-linux-x86_64` | Default build |
-| `vaptvupt-2.65.8-linux-x86_64-mt` | Threaded build |
-| `vaptvupt-2.65.8-linux-x86_64-pgo` | PGO build |
-| `SHA256SUMS` | Integrity (`sha256sum -c`) |
-| `CHANGELOG.md`, `COMPARISON.md` | Docs |
+| `vaptvupt-2.65.9-src.tar.gz` | Tagged source tree (`git archive v2.65.9`) |

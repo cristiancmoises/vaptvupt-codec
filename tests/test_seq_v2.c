@@ -248,8 +248,79 @@ int main(void) {
 done:   ;
     }
 
-    /* Total CHECKs = 8 (Tests 1-4) + 5 (Test 5) + 2 (Test 6) + 3 (Test 7) = 18. */
+    /* Test 8: an LL run over 65535 followed by a match cannot be represented
+     * by the current SEQ wire layout. It has a global match_count but no
+     * per-sequence has-match bit, so inserting a zero-match split before the
+     * real match used to make the decoder consume that match too early. The
+     * SEQ encoder must reject this candidate so vv_compress can use a safe
+     * fallback block. */
+    {
+        enum { LL = 65536 };
+        size_t ext_count = (LL - 15) / 255 + 1;
+        size_t tok_len = 1 + ext_count + LL + 2;
+        uint8_t *tokens = (uint8_t *)malloc(tok_len);
+        uint8_t *seq = (uint8_t *)malloc(tok_len + 4096);
+        size_t p = 0, remain = LL - 15;
+        if (!tokens || !seq) {
+            CHECK(0, "oversize nonterminal LL: alloc");
+        } else {
+            tokens[p++] = 0xF0; /* ll=extended, v2 matchlen=3 */
+            while (remain >= 255) { tokens[p++] = 255; remain -= 255; }
+            tokens[p++] = (uint8_t)remain;
+            for (size_t i = 0; i < LL; i++) tokens[p++] = (uint8_t)(i * 73u + 19u);
+            tokens[p++] = 1; tokens[p++] = 0; /* offset=1: real match follows */
+            size_t seq_len = 0;
+            vva_error_t e = vva_encode_sequences_v2(tokens, p, seq,
+                                                      tok_len + 4096,
+                                                      &seq_len, 2);
+            CHECK(p == tok_len && e != VVA_OK,
+                  "oversize nonterminal LL: SEQ candidate rejected safely");
+        }
+        free(tokens); free(seq);
+    }
+
+    /* Test 9: deterministic end-to-end reproducer for the same bug. A short
+     * compressible prefix followed by xorshift data creates sparse 3-byte
+     * matches with an intervening >64 KiB literal run. Before the fail-closed
+     * rule, vv_compress returned a frame that vv_decompress rejected. */
+    {
+        static const char phrase[] =
+            "In Code We Trust. VaptVupt OOM robustness probe. ";
+        size_t prefix_len = (sizeof(phrase) - 1) * 64;
+        size_t plain_len = prefix_len + 200000;
+        uint8_t *plain = (uint8_t *)malloc(plain_len);
+        size_t cap = vv_compress_bound(plain_len) + 4096;
+        uint8_t *cmp = (uint8_t *)malloc(cap);
+        uint8_t *dec = (uint8_t *)malloc(plain_len + 64);
+        if (!plain || !cmp || !dec) {
+            CHECK(0, "oversize nonterminal LL: end-to-end alloc");
+            CHECK(0, "oversize nonterminal LL: end-to-end round-trip");
+        } else {
+            for (size_t i = 0; i < 64; i++)
+                memcpy(plain + i * (sizeof(phrase) - 1), phrase,
+                       sizeof(phrase) - 1);
+            uint32_t rng = 4;
+            for (size_t i = prefix_len; i < plain_len; i++) {
+                rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                plain[i] = (uint8_t)(rng >> 24);
+            }
+            vv_options_t opts; vv_default_options(&opts);
+            opts.mode = VV_MODE_BALANCED;
+            int64_t clen = vv_compress(plain, plain_len, cmp, cap, &opts);
+            CHECK(clen > 0, "oversize nonterminal LL: end-to-end encode");
+            int64_t dlen = clen > 0
+                         ? vv_decompress(cmp, (size_t)clen, dec, plain_len + 64)
+                         : VV_ERR_CORRUPT;
+            CHECK(dlen == (int64_t)plain_len &&
+                  memcmp(dec, plain, plain_len) == 0,
+                  "oversize nonterminal LL: end-to-end round-trip");
+        }
+        free(plain); free(cmp); free(dec);
+    }
+
+    /* Total CHECKs = 8 (Tests 1-4) + 5 (Test 5) + 2 (Test 6)
+     * + 3 (Test 7) + 1 (Test 8) + 2 (Test 9) = 21. */
     printf("\nResults: %d passed, %d failed\n",
-           18 - failures, failures);
+           21 - failures, failures);
     return failures ? 1 : 0;
 }

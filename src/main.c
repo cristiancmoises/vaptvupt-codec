@@ -45,13 +45,12 @@ static void usage(void) {
         "            balanced=24, extreme=256). Output stays decodable by any\n"
         "            decoder; the default (0) is byte-identical to prior\n"
         "            releases.\n"
-        "  -A, --accel N  Position-skip acceleration (0..64; 0 = off, the\n"
-        "            default). >0 skips unmatchable regions during the parse,\n"
+        "  -A, --accel N  Position-skip acceleration (0..64; 0 = automatic:\n"
+        "            fast=2, balanced/extreme=1). >0 selects an explicit factor,\n"
         "            massively speeding up encode on incompressible or already-\n"
         "            compressed input (measured ~8-9x on random/gzip data) for\n"
         "            a small ratio cost on compressible data. Most useful with\n"
-        "            -m fast; output stays decodable by any decoder; 0 is\n"
-        "            byte-identical to prior releases.\n"
+        "            -m fast; output stays decodable by any decoder.\n"
         "      --no-rep   Disable rep-match probing in the parser. In fast mode\n"
         "            (no entropy stage) this is measured ~10%% faster and\n"
         "            net-positive on ratio for text/structured data (logs,\n"
@@ -182,12 +181,12 @@ int main(int argc, char **argv) {
                  && i + 1 < argc) {
             accel = atoi(argv[++i]);
             /* Position-skip acceleration: speeds up encode on incompressible
-             * input for a small ratio cost on compressible data. 0 = off
-             * (byte-identical default). Reject out-of-range rather than
+             * input for a small ratio cost on compressible data. Zero selects
+             * the mode-dependent automatic factor. Reject out-of-range rather
              * silently clamping. */
             if (accel < 0 || accel > 64) {
                 fprintf(stderr, "Invalid -A/--accel %d: must be 0..64 "
-                        "(0 = off)\n", accel);
+                        "(0 = automatic)\n", accel);
                 return 1;
             }
         }

@@ -232,6 +232,74 @@ static void build_dec(const uint16_t norm[NSYM], const uint8_t sp[ANS_L],
     }
 }
 
+/* Decode-only table builder.  Sequence decoding does not need the spread
+ * array after the decode table has been built, so place the spread symbols
+ * directly in dec[].symbol and fill the remaining fields in a second pass.
+ * The second pass remains state-ordered, preserving the exact occurrence
+ * rank (and therefore baseline/nbits) used by build_dec(). */
+static void build_dec_direct(const uint16_t norm[NSYM],
+                             vva_dec_entry_t dec[ANS_L]) {
+    const uint32_t step = (ANS_L >> 1) + (ANS_L >> 3) + 3;
+    uint32_t pos = 0;
+    int8_t nbmax_tab[NSYM];
+    int16_t lowcnt_tab[NSYM];
+    for (int s = 0; s < NSYM; s++) {
+        uint16_t f = norm[s];
+        if (f == 0 || f == (uint16_t)ANS_L) {
+            nbmax_tab[s] = 0;
+            lowcnt_tab[s] = 0;
+        } else {
+            int flg = ilog2(f);
+            int nb = ANS_LOG - flg;
+            nbmax_tab[s] = (int8_t)nb;
+            lowcnt_tab[s] = (int16_t)((1 << (flg + 1)) - (int)f);
+        }
+        for (int i = 0; i < f; i++) {
+            dec[pos].symbol = (uint8_t)s;
+            pos = (pos + step) & (ANS_L - 1);
+        }
+    }
+
+    uint16_t occ[NSYM];
+    memset(occ, 0, sizeof(occ));
+    for (int x = 0; x < ANS_L; x++) {
+        uint8_t s = dec[x].symbol;
+        int k = occ[s]++;
+        int nb_max = nbmax_tab[s];
+        vva_dec_entry_t entry;
+        entry.symbol = s;
+        if (nb_max == 0) {
+            entry.nbits = 0;
+            entry.baseline = 0;
+            dec[x] = entry;
+            continue;
+        }
+        int low_count = lowcnt_tab[s];
+        if (k < low_count) {
+            entry.nbits = (uint8_t)nb_max;
+            entry.baseline = (uint16_t)((uint32_t)k << nb_max);
+        } else {
+            int sh = nb_max - 1;
+            entry.nbits = (uint8_t)sh;
+            entry.baseline = (uint16_t)(((uint32_t)low_count << nb_max)
+                              + ((uint32_t)(k - low_count) << sh));
+        }
+        dec[x] = entry;
+    }
+}
+
+#ifdef VV_ANS_TEST_HOOKS
+int vva_test_build_dec_direct_equivalence(const uint16_t norm[NSYM]) {
+    uint8_t spread[ANS_L];
+    vva_dec_entry_t reference[ANS_L];
+    vva_dec_entry_t direct[ANS_L];
+    spread_symbols(norm, spread);
+    build_dec(norm, spread, reference);
+    build_dec_direct(norm, direct);
+    return memcmp(reference, direct, sizeof(reference)) == 0;
+}
+#endif
+
 /* ═══════════════════════════════════════════════════════════════
  * ENCODE CONTEXT
  * ═══════════════════════════════════════════════════════════════ */
@@ -1467,15 +1535,14 @@ static size_t parse_sequences(const uint8_t *tokens, size_t tok_len,
      * of extra, and silently loses the upper bits. Decoder then reads
      * back a smaller litlen, producing a short output block.
      *
-     * Fix: if a parsed token's ll exceeds LL_MAX, split into multiple
-     * seq entries: as many (LL_MAX, matchlen=0) zero-match sequences
-     * as needed to absorb the overflow, followed by the final sequence
-     * carrying the remaining (ll' ≤ LL_MAX) and the original match.
-     *
-     * Zero-match sequences are already legal in the stream (trailing
-     * literals use matchlen=0, offset=0). Adding them mid-stream is
-     * wire-compatible — the decoder's existing match_count == 0 test
-     * skips the match-copy for these entries. */
+     * A zero-match sequence is representable only after every real match:
+     * the wire stores a global match_count, not a per-sequence has-match
+     * bit, so the decoder assigns matches to the first match_count LL
+     * entries.  Splitting a long literal run before a real match would move
+     * that match onto the first split entry and silently corrupt output.
+     * Reject that SEQ candidate so emit_block falls back to a plain token or
+     * RAW block.  A terminal literal-only run can still be split safely into
+     * trailing zero-match entries. */
     enum { LL_MAX = 65535 };
 
     while (tp < tp_end && nseq < seq_cap) {
@@ -1498,7 +1565,12 @@ static size_t parse_sequences(const uint8_t *tokens, size_t tok_len,
         memcpy(lit_buf + nlits, tp, ll);
         tp += ll;
 
-        /* SPRINT 63: split oversize literal runs */
+        /* No wire marker exists for a zero-match entry in the middle of the
+         * sequence list.  Fail closed instead of emitting an ambiguous SEQ
+         * payload; the caller has lossless fallback block formats. */
+        if (ll > LL_MAX && tp < tp_end) return 0;
+
+        /* Split an oversize final literal-only run into trailing entries. */
         while (ll > LL_MAX) {
             if (nseq >= seq_cap) return 0;
             seqs[nseq].litlen = (uint32_t)LL_MAX;
@@ -2375,11 +2447,11 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     /* Decode literals based on format byte */
     /* SPRINT 126: one allocation for the literal buffer AND the decode
      * tables (previously 2 mallocs; the table section was itself fused
-     * from 4 in Sprint 125). The table space (52 KB) is reserved
+     * from 4 in Sprint 125). The table space (48 KB) is reserved
      * unconditionally up front so the whole block scratch is a single
      * malloc/free — its exact use is decided at table-build below. */
     size_t lit_sec = (total_lits + 16 + 7) & ~(size_t)7;
-    size_t tab_sec = ANS_L + 3 * (ANS_L * sizeof(vva_dec_entry_t));
+    size_t tab_sec = 3 * (ANS_L * sizeof(vva_dec_entry_t));
     uint8_t *lit_buf = (uint8_t *)malloc(lit_sec + tab_sec);
     if (!lit_buf) return VVA_ERR_NOMEM;
 
@@ -2471,8 +2543,8 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
      *
      *   (1) No out-of-range symbol has nonzero frequency — bounds every
      *       spread-table entry's symbol.
-     *   (2) Frequencies sum to exactly ANS_L — guarantees spread_symbols
-     *       fills ALL 4096 slots. Without this, a corrupt underfull
+     *   (2) Frequencies sum to exactly ANS_L — guarantees the decode-table
+     *       builder fills ALL 4096 slots. Without this, a corrupt underfull
      *       header leaves stale scratch bytes in unfilled slots, whose
      *       "symbols" bypass check (1) entirely (caught by UBSan as an
      *       OOB index into ll_extra[36] during validation of this very
@@ -2523,8 +2595,8 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
      * NULL-deref's dec_of and dec_ml. Found by libFuzzer + ASan.
      * Fix: always allocate all 3 tables. The decode-loop dereferences
      * are safe because state masks bound the index to ANS_L. */
-    /* SPRINT 125: one allocation for the spread scratch + decode tables
-     * (previously 4 separate mallocs — measurable on small blocks).
+    /* SPRINT 125: one allocation for the decode tables (previously 4
+     * separate mallocs — measurable on small blocks).
      * When match_count == 0, the ML/OF tables are never consulted for
      * real decode work (the loop `continue`s before the OF/ML reads),
      * but the ILP eager-loads at the loop top still index them — alias
@@ -2534,17 +2606,14 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     {
         size_t dec_sz = ANS_L * sizeof(vva_dec_entry_t);
         uint8_t *seq_tables = lit_buf + lit_sec;  /* reserved above */
-        uint8_t *sp_tmp = seq_tables;
-        dec_ll = (vva_dec_entry_t *)(seq_tables + ANS_L);
-        spread_symbols(norm_ll, sp_tmp);
-        build_dec(norm_ll, sp_tmp, dec_ll);
+        dec_ll = (vva_dec_entry_t *)seq_tables;
+        if (total_lits > 0 || match_count > 0)
+            build_dec_direct(norm_ll, dec_ll);
         if (match_count > 0) {
-            dec_ml = (vva_dec_entry_t *)(seq_tables + ANS_L + dec_sz);
-            dec_of = (vva_dec_entry_t *)(seq_tables + ANS_L + 2 * dec_sz);
-            spread_symbols(norm_ml, sp_tmp);
-            build_dec(norm_ml, sp_tmp, dec_ml);
-            spread_symbols(norm_of, sp_tmp);
-            build_dec(norm_of, sp_tmp, dec_of);
+            dec_ml = (vva_dec_entry_t *)(seq_tables + dec_sz);
+            dec_of = (vva_dec_entry_t *)(seq_tables + 2 * dec_sz);
+            build_dec_direct(norm_ml, dec_ml);
+            build_dec_direct(norm_of, dec_of);
         } else {
             dec_ml = dec_ll;
             dec_of = dec_ll;

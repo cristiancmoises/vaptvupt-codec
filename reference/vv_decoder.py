@@ -2,21 +2,14 @@
 """
 VaptVupt reference decoder — Python implementation.
 
-Implements decoding for block types RAW, RLE, and COMPRESSED per
-FORMAT.md sections 2-5. Multi-frame streams (§6) are supported.
-Frame footer XXH64 verification (§4) is supported.
+Implements RAW, RLE, COMPRESSED, and the modern sequence-entropy tags
+`S`/`T`, including their current literal coders. Multi-frame streams,
+XXH64 footer verification, and x86/AArch64 BCJ inverse filters are supported.
+Legacy decode-only entropy tags remain outside this compact reference; the C
+decoder is canonical for archived `H`/`I`/`C` variants.
 
-NOT IMPLEMENTED (deliberately, for spec-validation scope):
-- Block type ENTROPY (tag 'A', 'I', 'C', 'H', 'S'). These each have
-  their own internal sub-format (ANS tables, Huffman trees, context
-  models) which would require ~2,000 LOC each. The reference C
-  decoder's `vva_decode_sequences` etc. are the canonical
-  implementations of those sub-formats.
-
-This decoder's purpose is to validate that FORMAT.md sections 2-5
-are sufficient for an independent implementation. Any frame that
-contains only RAW/RLE/COMPRESSED blocks is decodable by this
-decoder. Frames with ENTROPY blocks raise NotImplementedError.
+This decoder independently validates current encoder output against FORMAT.md
+and is required by the release tests to reproduce it byte-for-byte.
 
 Usage:
     python3 vv_decoder.py <input.vv> [output_file]
@@ -55,6 +48,88 @@ ENTROPY_ANS4     = 0x49  # 'I'
 ENTROPY_CTX      = 0x43  # 'C'
 ENTROPY_SEQ      = 0x53  # 'S'
 ENTROPY_SEQ_V2   = 0x54  # 'T' — format v2 (min_match=3), v2.33.0+
+
+
+# ─────────────────────────────────────────────────────────────────
+# BCJ inverse filters — exact ports of src/vv_bcj.c.
+# ────────────────────────────────────────────────────────────────
+
+def _bcj_test_msb(value):
+    return value == 0x00 or value == 0xFF
+
+
+def _bcj_x86_inverse(data, ip=0):
+    """Invert the whole-frame x86 E8/E9 transform in-place."""
+    size = len(data)
+    if size < 5:
+        return
+    pos = 0
+    mask = 0
+    limit = size - 4
+    ip = (ip + 5) & 0xFFFFFFFF
+    while True:
+        p = pos
+        while p < limit and (data[p] & 0xFE) != 0xE8:
+            p += 1
+        distance = p - pos
+        pos = p
+        if p >= limit:
+            return
+        if distance > 2:
+            mask = 0
+        else:
+            mask >>= distance
+            probe = (mask >> 1) + 1
+            if (mask != 0 and
+                    (mask > 4 or mask == 3 or
+                     _bcj_test_msb(data[p + probe]))):
+                mask = (mask >> 1) | 4
+                pos += 1
+                continue
+
+        if _bcj_test_msb(data[p + 4]):
+            value = (data[p + 4] << 24) | (data[p + 3] << 16) | \
+                    (data[p + 2] << 8) | data[p + 1]
+            current = (ip + pos) & 0xFFFFFFFF
+            pos += 5
+            value = (value - current) & 0xFFFFFFFF
+            if mask != 0:
+                shift = (mask & 6) << 2
+                if _bcj_test_msb((value >> shift) & 0xFF):
+                    value ^= ((0x100 << shift) - 1) & 0xFFFFFFFF
+                    value = (value - current) & 0xFFFFFFFF
+                mask = 0
+            data[p + 1] = value & 0xFF
+            data[p + 2] = (value >> 8) & 0xFF
+            data[p + 3] = (value >> 16) & 0xFF
+            data[p + 4] = (-(value >> 24 & 1)) & 0xFF
+        else:
+            mask = (mask >> 1) | 4
+            pos += 1
+
+
+def _bcj_arm64_inverse(data, ip=0):
+    """Invert the whole-frame AArch64 BL/ADRP transform in-place."""
+    for pos in range(0, len(data) & ~3, 4):
+        insn = (data[pos] | (data[pos + 1] << 8) |
+                (data[pos + 2] << 16) | (data[pos + 3] << 24))
+        if insn >> 26 == 0x25:
+            imm = insn & 0x03FFFFFF
+            current = ((ip + pos) & 0xFFFFFFFF) >> 2
+            imm = (imm - current) & 0x03FFFFFF
+            insn = (insn & 0xFC000000) | imm
+        elif insn & 0x9F000000 == 0x90000000:
+            imm = ((insn >> 29) & 3) | (((insn >> 5) & 0x7FFFF) << 2)
+            current = ((ip + pos) & 0xFFFFFFFF) >> 12
+            imm = (imm - current) & 0x001FFFFF
+            insn = ((insn & 0x9F00001F) | ((imm & 3) << 29) |
+                    (((imm >> 2) & 0x7FFFF) << 5))
+        else:
+            continue
+        data[pos] = insn & 0xFF
+        data[pos + 1] = (insn >> 8) & 0xFF
+        data[pos + 2] = (insn >> 16) & 0xFF
+        data[pos + 3] = (insn >> 24) & 0xFF
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -373,8 +448,10 @@ def decompress_frame(buf, pos):
 
     flags, pos = read_u8(buf, pos)
     # Note: per FORMAT.md §2, reserved flag bits SHOULD be 0, but the C
-    # reference decoder tolerates non-zero reserved bits (it only inspects
-    # bit 0 = has_checksum). Match C behavior for cross-decoder consistency.
+    # reference decoder tolerates non-zero reserved bits. The two BCJ
+    # architecture bits are mutually exclusive, however.
+    if (flags & 0x0C) == 0x0C:
+        raise CorruptError("simultaneous x86 and ARM64 BCJ flags")
     has_checksum = (flags & 0x01) != 0
     # has_dict = (flags & 0x02) != 0  -- reserved, not used
 
@@ -506,7 +583,7 @@ def decompress_frame(buf, pos):
                 raise NotImplementedError(
                     f"ENTROPY block (tag '{tag_chr}' = 0x{tag:02X}) not "
                     f"implemented in reference Python decoder. Supported: "
-                    f"'A' (single-stream tANS) and 'S' (sequence coding). "
+                    f"'A' (single-stream tANS) and 'S'/'T' (sequence coding). "
                     f"Legacy tags 'H' (Huffman), 'I' (ANS4-only), 'C' (CTX) "
                     f"are decode-only in the C reference and were superseded "
                     f"by 'S' in the modern encoder.")
@@ -530,6 +607,13 @@ def decompress_frame(buf, pos):
             raise CorruptError(
                 f"checksum mismatch: got 0x{actual:016X}, "
                 f"expected 0x{checksum:016X}")
+
+    # The checksum covers the forward-transformed bytes, matching the C
+    # decoder. Restore caller-visible bytes only after successful validation.
+    if flags & 0x04:
+        _bcj_x86_inverse(out)
+    elif flags & 0x08:
+        _bcj_arm64_inverse(out)
 
     # Sanity check: if encoder set content_size, the decoded length
     # SHOULD match. The C reference decoder does NOT validate this
@@ -637,9 +721,8 @@ def self_test():
 
     print()
     print(f"Results: {successes} passed, {failures} failed, {skipped} skipped")
-    print(f"({skipped} skipped because they use ENTROPY blocks — the "
-          f"Python reference decoder deliberately covers RAW/RLE/COMPRESSED "
-          f"only, per FORMAT.md §3.1-3.3.)")
+    print(f"({skipped} skipped because they use a legacy entropy tag outside "
+          f"the compact Python reference.)")
     return 0 if failures == 0 else 1
 
 

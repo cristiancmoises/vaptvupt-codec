@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VaptVupt — pure-Python tANS and sequence decoders (entropy tags 'A' and 'S').
+VaptVupt — pure-Python tANS and sequence decoders (entropy tags A, S, and T).
 
 Implements:
 - 'A' tag (VV_ENTROPY_ANS): single-stream tANS over literals. Block
@@ -8,13 +8,15 @@ Implements:
 - 'S' tag (VV_ENTROPY_SEQ): self-contained full sequence coding —
   literal bytes, match lengths, offsets, and literal-run lengths
   all ANS-coded together in four interleaved streams.
+- 'T' tag (VV_ENTROPY_SEQ_V2): the same sequence layout with the v2
+  match-length base table (minimum match length 3).
 
 Supporting primitives:
 - `read_hdr`, `spread_symbols`, `build_dec`, `AnsBitReader` —
   shared by single-stream and 4-way decoders.
 - `vva_decode` — single ANS stream decoder.
 - `vva_decode4` — 4-way interleaved ANS decoder (used for literals
-  inside 'S' tag blocks when `lit_fmt == 1`).
+  inside 'S'/'T' tag blocks when `lit_fmt == 1`).
 
 Remaining legacy tags 'I' (ANS4 literals-only), 'C' (context model),
 'H' (Huffman) are NOT implemented — they were superseded by 'S' in
@@ -577,7 +579,12 @@ def vva_decode_sequences(src, dst_base, ml_base_tab=None):
     # that by treating `dst_base` as the running output accumulator.
     base_len_at_start = len(dst_base)
 
+    max_iters = total_lits + match_count + 16
+    iter_count = 0
     while lit_pos < total_lits or matches_decoded < match_count:
+        iter_count += 1
+        if iter_count > max_iters:
+            raise ValueError("'S' sequence iteration bound exceeded")
         rdr.fill()
         if state_ll >= ANS_L or state_of >= ANS_L or state_ml >= ANS_L:
             raise ValueError("'S' ANS state overflow (corrupt)")
@@ -601,8 +608,13 @@ def vva_decode_sequences(src, dst_base, ml_base_tab=None):
             out_bytes.extend(lit_buf[lit_pos : lit_pos + litlen])
             lit_pos += litlen
 
+        # A terminal literal run over 65535 bytes is represented by several
+        # trailing LL-only entries. Matches can therefore finish before the
+        # literal stream; keep consuming LL codes until both are complete.
         if matches_decoded >= match_count:
-            break
+            if lit_pos >= total_lits:
+                break
+            continue
 
         # Decode OF: state, then offset (rep or explicit)
         rdr.fill()

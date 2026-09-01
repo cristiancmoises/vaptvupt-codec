@@ -96,8 +96,8 @@ def gen_corpus(baseline):
     yield 'flags_reserved_bit7_set.vv', bytes(bad_flags)
 
     bad_flags2 = bytearray(baseline)
-    bad_flags2[5] |= 0x04
-    yield 'flags_reserved_bit2_set.vv', bytes(bad_flags2)
+    bad_flags2[5] |= 0x0C
+    yield 'flags_both_bcj_architectures_set.vv', bytes(bad_flags2)
 
     # Window log out of range
     bad_wlog_low = bytearray(baseline)

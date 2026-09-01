@@ -3,24 +3,68 @@
 **[Português (Brasil)](README.pt-BR.md)**
 
 An LZ + tANS compression codec in C11. Zero runtime dependencies, an open
-wire format with byte-exact reference decoders in Python and JavaScript, and
-a test suite that gates every release on byte-identical output and
-sanitizer-clean corrupt-input handling.
+wire format with [Python](reference/vv_decoder.py) and
+[JavaScript](reference/vv_decoder.js) decoders that reproduce current/default
+encoder output byte-exactly, and a test suite that gates every release on
+byte-identical output and sanitizer-clean corrupt-input handling. The C decoder
+remains canonical for the full legacy H/A/I/C entropy surface; Python retains
+limited A-tag coverage, while JavaScript intentionally omits legacy tags.
 
-Version 2.65.8. The codec library and CLI are available under
+Version 2.65.9. The codec library and CLI are available under
 GPL-3.0-or-later or, for controlled first-party rights, a separate signed
 commercial agreement. The broader VaptVupt application uses a distinct AGPL
 public option. See `NOTICE`; `LICENSE-COMMERCIAL` is not itself a grant.
 
 ## Where it stands
 
-### v2.65.8 head-to-head (ratio corpus measured 2026-07; output revalidated 2026-09)
+### v2.65.9 deterministic generated-v1 suite (measured 2026-09-01)
+
+Fresh subprocess measurements on an Intel Core i7-13700HX, Linux 7.2.2,
+gcc 14.3, pinned to core 2. Each cell is the median of 7 measured runs after
+1 warm-up; zstd 1.5.6 ran single-threaded and lz4 is 1.10. Every decode was
+verified against the generated input by SHA-256. Cells are
+`ratio @ encode/decode MB/s`; ratio = raw / compressed.
+
+| file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
+|---|---|---|---|---|---|
+| text.txt | 3.707 @134.3/396.0 | 7.055 @56.7/327.5 | 2.907 @274.5/379.0 | 5.768 @194.7/343.3 | 6.198 @175.1/342.9 |
+| records.jsonl | 3.142 @128.9/420.8 | 5.707 @48.8/341.7 | 3.505 @272.5/370.9 | 7.071 @215.1/339.8 | 6.521 @175.0/334.0 |
+| records.bin | 1.347 @72.3/405.1 | 2.016 @17.3/229.9 | 1.371 @251.4/384.6 | 1.934 @180.1/317.5 | 2.183 @116.1/269.6 |
+| random.bin | 1.000 @350.0/434.7 | 1.000 @239.4/402.1 | 1.000 @364.3/362.9 | 1.000 @312.6/334.4 | 1.000 @274.3/321.2 |
+
+These four deterministic fixtures show workload-dependent trade-offs, not a
+universal ordering. On this run `vv-balanced` has the best text ratio and a
+small decode lead over zstd-1/3 on generated JSON, but zstd compresses both
+text families much faster and has the better JSON ratio. Record-binary results
+split by level, while all codecs store the random fixture effectively raw.
+`vv-fast` beats lz4-1 on text ratio but not on JSON or record-binary ratio, and lz4
+compresses those fixtures substantially faster. Measure the intended workload.
+
+The suite is generated without external corpus files and requires the full
+vv-fast/vv-balanced/lz4-1/zstd-1/zstd-3 matrix. JSON records host/tool
+provenance; CSV records fixture hashes and measurements. The run fails on a
+command error, missing required codec, or SHA-256 decode mismatch. Reproduce
+with an lz4 1.10 binary first on `PATH`:
+
+```sh
+PATH=/path/to/lz4-1.10/bin:$PATH taskset -c 2 \
+  python3 bench/competitive.py --generated-suite --vv ./vaptvupt \
+  --runs 7 --warmups 1 --csv generated-v1.csv --json generated-v1.json
+```
+
+Full data and methodology are in
+[bench/COMPARISON.md](bench/COMPARISON.md).
+
+### Historical 11-file corpus excerpt (measured 2026-07; output revalidated 2026-09)
 
 Single-core AVX2 x86-64, gcc 13 `-O3 -flto`, zstd 1.5.6 `--single-thread`,
 lz4 1.10.0. CLI subprocess timing, best of 3, 11-file mixed corpus
 (logs/JSON/CSV/XML/markdown/source/ELF/float-records/struct-records plus
-random and pure-repetition controls).
-Full data and methodology in [bench/COMPARISON.md](bench/COMPARISON.md).
+random and pure-repetition controls). This compact summary and the full table
+in [bench/COMPARISON.md](bench/COMPARISON.md) are distinct July timing runs in
+the same stated benchmark family: ratios agree, while throughput cells retain
+each run's own measurements. The comparison guide carries the full corpus and
+detailed methodology.
 Cells are `ratio @ encode/decode MB/s`; ratio = raw / compressed, higher is
 better.
 
@@ -58,15 +102,33 @@ Where each side wins:
   (was ~31 before v2.61.0's default skip acceleration and early-RAW bail);
   zstd-1 does 201, lz4-1 433 on the same 1 MiB random file.
 
-The head-to-head table retains the v2.65.6 corpus measurement because the
-one-shot wire format remains byte-identical through v2.65.8. The 2026-09
-release validation rechecked output sizes and correctness; throughput cells
-remain tied to the stated 2026-07 benchmark host rather than being relabeled
-as a fresh measurement. v2.65.7-v2.65.8 add streaming-path hardening and
-API safety checks;
-its streaming measurements are recorded in [CHANGELOG.md](CHANGELOG.md).
+This historical table retains the v2.65.0/v2.65.6 11-file corpus measurement
+because the same 11 files reproduced their recorded compressed sizes on
+v2.65.9. The 2026-09 release validation rechecked output sizes and correctness; its
+throughput cells remain tied to the stated 2026-07 benchmark host and are not
+fresh v2.65.9 timings. It complements rather than overrides the generated-v1
+suite above.
+
 Recent releases, newest first:
 
+- **v2.65.9** — builds sequence tANS decode tables directly, removing 4 KiB
+  of per-block sequence-table scratch (52 KiB to 48 KiB). Paired pinned
+  in-process decode measurements improved +0.40% on text and +1.21% on JSON
+  (about +0.80%
+  geometric mean): modest, workload-dependent gains with identical wire
+  output. Streaming decode now applies the x86 or ARM64 BCJ inverse exactly
+  once at frame completion, after checksum validation or after the final
+  checksumless block. The release also rejects invalid one-shot API mode enums
+  and simultaneous architecture filters with `VV_ERR_PARAM`; the streaming
+  encoder rejects invalid modes and BCJ options rather than silently ignoring
+  filters it cannot apply. It corrects `-A 0` help and adds the deterministic
+  generated-v1 benchmark matrix. A rare
+  unrepresentable SEQ candidate (a >65,535-byte literal run before a later
+  match) now falls back losslessly instead of emitting an undecodable frame;
+  `test_seq_v2` covers the direct case and end-to-end reproducer (21/21). The
+  Python and JavaScript references now handle trailing LL-only entries with a
+  C-equivalent bound and perform exact x86/AArch64 BCJ inverses. The private
+  one-shot BCJ input copy is explicitly scrubbed before it is freed.
 - **v2.65.8** — decoder security and API hardening: closes an AVX2
   truncated-offset read after extended literals, rejects NULL streaming
   chunks, enforces stable streaming output buffers, and refreshes the
@@ -298,35 +360,53 @@ are declared in `include/vaptvupt.h`.
 The format is specified in [FORMAT.md](FORMAT.md): a 16-byte frame header
 (magic, version, flags, mode hint, window log, content size), one or more
 blocks (raw, RLE, token, or entropy-coded), and an optional XXH64 footer.
-Reference decoders that reproduce the C decoder byte-for-byte live in
-`reference/vv_decoder.py` and `reference/vv_decoder.test.js`; the differential
-fuzzer cross-checks C against Python on every `make test`.
+Reference decoders that reproduce current/default C encoder output byte-exactly
+are implemented in [Python](reference/vv_decoder.py) and
+[JavaScript](reference/vv_decoder.js); the differential fuzzer cross-checks C
+against Python on every `make test`. The C decoder remains canonical for the
+complete legacy entropy surface.
 
 Header `flags`: bit0 = XXH64 footer present, bit1 = reserved (must be zero),
 bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
-2 bytes for window log <= 16, 3 bytes for <= 24 (the 16 MiB maximum).
+2 bytes for window log <= 16, 3 bytes for <= 24 (the 16 MiB maximum). The two
+BCJ bits are mutually exclusive in valid encoder output. The C one-shot,
+streaming, and frame-info paths reject a frame that sets both. Decoders validate
+a present checksum before applying the selected inverse once; without a
+checksum they apply it once after the final block.
 
 ## Testing
 
 `make test` runs:
 
-- 23 C suites (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
+- 22 C test binaries (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
   safe-zone, DoS reproducers, BCJ filter, and more).
-- The Python reference decoder against the C output, plus the JavaScript
-  reference decoder when a working `node` runtime is available.
+- The Python reference decoder against current C output, plus the JavaScript
+  reference decoder when a working `node` runtime is available. Current S/T,
+  HUFFMAN4, and x86/AArch64 BCJ output are covered byte-exactly. The C decoder
+  remains canonical for legacy H/A/I/C; Python retains limited A-tag support,
+  while JavaScript intentionally omits those legacy tags.
 - A differential fuzzer (5200 cases, fixed seed) cross-checking C and Python.
 - A reference-decoder guard that forces default-format (HUFFMAN4)
   blocks and requires both the Python and JavaScript references to
-  decode them byte-exactly (added v2.65.5; fails if the format is not
-  exercised).
+  decode them byte-exactly when Node is available (added v2.65.5; fails if the
+  format is not exercised).
 - The negative corpus (malformed frames must be rejected, not crash).
-- An OOM-robustness sweep that fails each allocation site in compress and
-  decompress in turn and asserts the codec never crashes (returns a clean
-  error or succeeds). Under AddressSanitizer the same sweep also proves no
-  leak or use-after-free on any allocation-failure path.
+- An OOM-robustness sweep that fails each allocation point reached by its
+  baseline compress/decompress fixture in turn and asserts a clean error or
+  success. AddressSanitizer detected no leak or use-after-free on the swept
+  paths. The harness first verifies that the randomized baseline frame
+  roundtrips before injecting any failure.
 - The ratio gate (every fixture within +/- 0 bytes of the committed
   baseline) and an informational decode-speed gate.
-- The competitive harness self-test and the `-w` CLI test.
+- The competitive harness self-test and the `-w` CLI test. Release validation
+  separately runs the full generated-v1 matrix, verifies every decode by
+  SHA-256, and emits reproducibility metadata.
+- Direct-vs-legacy tANS decode-table equivalence and whole/split streaming BCJ
+  roundtrips for x86 and ARM64 with checksums both enabled and disabled.
+- `test_seq_v2` 21/21, including rejection and lossless fallback for an
+  oversize nonterminal literal run; both reference decoders consume trailing
+  LL-only entries with C-equivalent bounds, reject dual-BCJ headers, and invert
+  x86/AArch64 BCJ output with checksums on and off.
 
 Corrupt-input handling is checked under AddressSanitizer and
 UndefinedBehaviorSanitizer; releases that touch the decoder run a
@@ -353,7 +433,7 @@ for any input. See [verification/README.md](verification/README.md).
 ```
 src/        codec (encoder, decoder, tANS, Huffman, BCJ, xxh64, API, CLI)
 include/    public header (vaptvupt.h) and internal headers
-reference/  byte-exact Python and JavaScript reference decoders
+reference/  Python and JavaScript decoders for current/default encoder output
 tests/      C suites + Python fuzzer/gate/CLI tests + OOM-robustness sweep
 bench/      competitive harness (competitive.py) and COMPARISON.md
 verification/ CBMC formal-verification harnesses for the BCJ filters

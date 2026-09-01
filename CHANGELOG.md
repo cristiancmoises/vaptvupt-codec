@@ -2,6 +2,73 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.9 — Sprint 139: direct tANS tables, SEQ/BCJ correctness, and reproducible benchmarks
+
+Performance, correctness, and release-infrastructure maintenance. The frame
+layout is unchanged from v2.65.8, and streams v2.65.8 encoded validly remain
+compatible. The rare formerly undecodable SEQ candidate described below now
+selects a different, lossless fallback representation.
+
+- Sequence tANS decode tables are now built directly in their final storage
+  rather than through a 4 KiB spread array. Per-block sequence-table scratch
+  drops from 52 KiB to 48 KiB. A test compares the direct and historical
+  builders entry-for-entry across 256 deterministic normalized tables, and the
+  established ANS, roundtrip, SEQ, safe-zone, and exact-buffer regressions pass.
+- Fixed a rare SEQ-encoder data-integrity defect. The wire carries one global
+  `match_count`, so a literal run over 65,535 bytes before a later match cannot
+  be split into a zero-match midstream entry: the decoder assigns real matches
+  to the first `match_count` LL entries. The encoder now rejects that ambiguous
+  SEQ candidate and losslessly falls back to another block representation;
+  terminal long literal runs remain representable as trailing LL-only entries.
+  `test_seq_v2` is now 21/21 with a direct rejection case and a deterministic
+  end-to-end sparse/random reproducer.
+- Paired pinned in-process decode measurements found +0.40% on text and +1.21%
+  on JSON, about +0.80% geometric mean. This is a modest, workload-dependent
+  improvement; it does not change the stream or justify a universal speed
+  claim.
+- Streaming decode now performs the selected BCJ inverse exactly once when a
+  frame completes: after a present footer and checksum have been validated, or
+  immediately after the final block for a checksumless frame. Permanent
+  roundtrips cover whole and split input for both x86 and AArch64 filters with
+  checksum on and off.
+- `vv_compress` now rejects mode values outside the three public enum constants
+  and rejects simultaneous x86 and AArch64 filter requests, including for
+  empty input, with `VV_ERR_PARAM`. The existing 10..24 window-range check now
+  runs before any requested BCJ allocation or transform. One-shot decode,
+  streaming decode, and frame-info parsing reject input headers that set both
+  BCJ architecture bits. The streaming encoder, which cannot transform a whole
+  frame while emitting incremental blocks, now rejects invalid modes and all
+  BCJ options instead of silently accepting ignored filter requests.
+- Restored reference-decoder parity: Python and JavaScript now consume trailing
+  LL-only entries after all matches with the C-equivalent iteration bound,
+  avoiding both premature termination and corrupt-input hangs. Both references
+  reject contradictory dual-BCJ headers, implement the exact x86/AArch64 BCJ
+  inverse after checksum validation, and reproduce current encoder output in
+  checksum-on/off cross-language fixtures. C remains canonical for legacy
+  H/A/I/C; Python retains limited A-tag support and JavaScript omits the legacy
+  tags.
+- The OOM sweep now requires its randomized baseline fixture to roundtrip before
+  allocation failure is injected, so a codec correctness regression cannot be
+  misreported as an injector-initialization failure.
+- The one-shot BCJ path now calls `vv_secure_zero` on its private full-input
+  working copy before `free()`, bringing it under the tracked plaintext-buffer
+  hygiene policy. `test_secure_zero` exercises BCJ cleanup completion and
+  byte-exact roundtrip under sanitizers; it does not directly inspect freed
+  memory contents.
+- Corrected CLI help for `-A 0`: zero selects the automatic factor, fast=2 and
+  balanced/extreme=1; it is not the old hard-off setting.
+- Added the deterministic `generated-v1` competitive suite. It generates four
+  dependency-free fixtures, requires the vv-fast/vv-balanced/lz4-1/zstd-1/
+  zstd-3 matrix by default, reports medians after configurable warm-ups, checks
+  every decode by SHA-256, and emits CSV plus provenance-rich JSON. The README
+  and comparison guide carry a fresh seven-run pinned-core table separately
+  from the retained July 2026 11-file history.
+- Updated release, integration, format, security, and verification documents
+  for v2.65.9. The formal-audit update records regression/dynamic validation of
+  the delta and explicitly inherits the earlier formal baseline; it does not
+  claim a new full formal-tool run. Release publication now lists only the
+  source `tar.gz` artifact.
+
 ## v2.65.8 — Sprint 138: decoder and streaming API hardening
 
 Security maintenance release. The frame format and valid one-shot output are
@@ -715,7 +782,7 @@ NOT a default candidate. The v2.60.0 note suggesting a future fast-mode
 re-baseline to drop rep is **withdrawn** — dropping rep regresses the majority
 of Silesia. Use `--no-rep` only for log/JSON/CSV-style workloads in `-m fast`.
 
-Corrected in README.md, bench/COMPARISON.md, and VAPTVUPT_PROGRAM_PROMPT.md.
+Corrected in README.md, bench/COMPARISON.md, and the historical planning notes.
 
 ## v2.60.0 — Opt-in `--no-rep` (fast-mode rep-match disable) + rep-in-fast-mode finding
 
@@ -1162,11 +1229,9 @@ Documentation-only pass. The codec, wire format, and binary are
 byte-identical to v2.53.4 (build md5 unchanged); `git diff v2.53.4 -- src
 include` is empty except for two comments that referenced removed files.
 
-- Removed 17 internal and transient documents: the per-sprint notes
-  (`docs/SPRINT_*`), the ratio/speed program plans and prompts
-  (`docs/RATIO_PROGRAM*`, `docs/SPEED_PROGRAM*`, `docs/PROGRAM_PROMPT.md`),
-  the duplicate `docs/PERFORMANCE.md` and root `PERFORMANCE.md`, the program
-  charter, and `docs/speed_program_bench.py`. The `docs/` directory is gone.
+- Removed 17 internal and transient documents: per-sprint notes, ratio/speed
+  planning material, duplicate performance summaries, the internal charter,
+  and an obsolete benchmark helper. The `docs/` directory is gone.
 - The tracked Markdown set is now eight files: `README.md`, `CHANGELOG.md`,
   `FORMAT.md`, `SECURITY.md`, `FORMAL_AUDIT.md`, `INTEGRATION.md`,
   `DEPLOY.md`, `bench/COMPARISON.md`.
@@ -1257,8 +1322,8 @@ on binary/log/CSV; the ratio gate guards against any regression.
 
 ### Documented: balanced encode is at its ratio-constrained floor
 
-The L-ENC (encode-speed) investigation is recorded in
-`VAPTVUPT_PROGRAM_CHARTER.md` so it is not repeated. Measured findings:
+The L-ENC (encode-speed) investigation is recorded in the historical
+performance-planning notes so it is not repeated. Measured findings:
 balanced encodes 6.4× slower than fast and ~14× slower than zstd-1,
 dominated by the depth-24 hash-chain walk. A depth sweep showed a smooth
 monotonic ratio/speed tradeoff with **no free sweet spot** (dickens
@@ -2037,7 +2102,7 @@ leave behind is what makes the next sprint's fix a one-liner.
 
 nci (33 MB), webster (41 MB), mozilla (51 MB) are all larger than the
 16 MB window cap, so they still can't reach their farthest matches. The
-next lever (Lever B in PROGRAM_PROMPT.md) is a 4-byte offset encoding to
+next identified lever is a 4-byte offset encoding to
 support windows up to 2^27 (128 MB), matching zstd `--long`. This IS a
 wire-format change (new frame flag, FORMAT.md update, CI gate update,
 decoder branch) and should close much of the remaining gap to zstd-9 and
@@ -2250,8 +2315,8 @@ ahead of zstd-3 on full-corpus geomean since the SPEED PROGRAM closed. The
 gap to zstd-19 narrows from −22.9% to ~−20.8%. Honest framing: this is real
 progress on the only axis where beating zstd is achievable (Sprint 41 closed
 the SIMD/throughput axis), but vv-extreme still loses to zstd-9 by ~10% on
-aggregate ratio. The "better than zstd-19" goal requires more work — see
-RATIO_PROGRAM.md.
+aggregate ratio. The "better than zstd-19" goal requires more work, as recorded
+in the historical ratio roadmap.
 
 ### Numbers re-measured against shipping binary
 
@@ -2774,13 +2839,13 @@ the canonical codec with libvaptvupt v1.5.1 and libpqvaptvupt v0.5.0
   26-30 banked exactly as in v2.50.6.
 - `docs/PERFORMANCE.md`: already contained the full-Silesia honest
   framing from Sprint 32. No changes needed.
-- `docs/SPEED_PROGRAM.md`: already complete from Sprint 32. No
-  changes needed.
+- The historical performance roadmap was already complete from Sprint 32; no
+  changes were needed.
 - `docs/SPRINT_31_NEGATIVE_RESULT.md`: already shipped. No changes.
-- `CHANGELOG.md` historical entries: preserved intact. The CHANGELOG
-  is a record of what was claimed at the time. Sprint 32 added the
-  forward retraction; this sprint adds the propagation cleanup;
-  rewriting history would obscure when each correction happened.
+- `CHANGELOG.md` measured historical results and release chronology remained
+  intact. Later release hygiene neutralized removed internal-planning labels
+  without changing the recorded measurements. Sprint 32 added the forward
+  retraction; this sprint added the propagation cleanup.
 
 ### Brand axiom: "In Code We Trust"
 
@@ -2811,9 +2876,9 @@ the full Silesia corpus and zstd levels 1, 3, 9.
   Silesia fixtures, target-by-target verdict (T1-T4), honest discussion
   of where vv is and isn't competitive, list of prior claims that the
   measurement does NOT support
-- `docs/speed_program_bench.py` — reproducible benchmark script
-- `docs/SPEED_PROGRAM.md` — updated with full Sprint 25-32 retrospective
-  and program-close lessons
+- Reproducible benchmark helper
+- Historical performance roadmap updated with the full Sprint 25-32
+  retrospective and closeout lessons
 - CHANGELOG entry (this)
 
 ### Honest headline result on full Silesia
@@ -3006,8 +3071,8 @@ ships as v2.50.5 to:
 
 ### What v2.50.5 contains
 
-- `docs/SPEED_PROGRAM.md` updated with full Sprint 25-31 retrospective
-  + lessons learned across the program
+- Historical performance roadmap updated with the full Sprint 25-31
+  retrospective and lessons learned across the effort
 - `docs/SPRINT_31_NEGATIVE_RESULT.md` — root-cause analysis of why the
   runtime AVX2 dispatch approach didn't work
 - `CHANGELOG.md` v2.50.5 entry (this)
@@ -3712,9 +3777,8 @@ now have a higher baseline to beat.
 **Documentation + infrastructure release. No codec changes.** Compressed
 output bit-identical to v2.48.5 on all four Silesia fixtures.
 
-This release opens the SPEED PROGRAM — a multi-sprint effort to close
-vv's encode/decode speed gap to zstd. The full plan is in
-`docs/SPEED_PROGRAM.md`. Sprint 25's deliverables build the measurement
+This release opens a multi-sprint performance effort to close vv's
+encode/decode speed gap to zstd. Sprint 25's deliverables build the measurement
 infrastructure that every later sprint will use.
 
 ### Honest baseline (measured, not estimated)
@@ -3737,7 +3801,7 @@ appeared in earlier docs. **The new baseline is honest, no marketing.**
 
 ### Added
 
-- **`docs/SPEED_PROGRAM.md`** — multi-sprint program plan with three
+- **Performance roadmap** — multi-sprint plan with three
   precise targets (T1: decode parity with zstd-3, T2: vv-fast encode
   parity with zstd-1, T3: vv-balanced encode parity with zstd-3 while
   preserving ratio aggregate win). Honest about timeline: T1 expected
@@ -3771,8 +3835,8 @@ the bench script proving each gain.
   on decode and 5–15× on encode. Closing it is multi-sprint work.
 - Does not promise specific timeline for closing the gap. Real
   engineering is "measure, optimize, measure, ship". Aspirational
-  promises are exactly what `docs/SPEED_PROGRAM.md` calls out as the
-  thing to never do again.
+  promises are exactly what the performance roadmap calls out as the thing to
+  never do again.
 
 ### Sprint 26 plan (next)
 
@@ -6460,7 +6524,7 @@ v2.46.0 vs v2.45.0 narrows the zstd-3 gap on every fixture:
 
 The remaining work to fully win the zstd-tier competition:
 - Better LZ parse on small files (optimal parse vs greedy lazy)
-- Multi-stream ANS for text decode ≥ 1 GB/s (Option A in v5 prompt)
+- Multi-stream ANS for text decode ≥ 1 GB/s (a high-priority roadmap option)
 
 Neither is a blocker for VaptVupt 2.1.7 integration. v2.46.0 is a solid
 incremental step with measurable, uniform improvements.
@@ -6717,13 +6781,11 @@ is preserved — none of them trigger the split path.
 ### Strategic Notes
 
 Before Sprint 60-C, six consecutive optimization sprints (55, 56, 57,
-58, 59-B) had ended in dead-ends with no code shipping. Following
-master prompt v4 §3 guidance, the project explicitly pivoted to
-VaptVupt 2.1.6 integration testing (Option C). Within two sessions, that
-pivot surfaced this correctness bug that no amount of further
-speculative optimization would have found. The v4 prompt's anti-pattern
-#7 ("when 3+ consecutive sprints don't ship code, STOP and pivot
-explicitly") proved its value here.
+58, 59-B) had ended in dead-ends with no code shipping. Following the recorded
+measurement discipline, the project explicitly pivoted to VaptVupt 2.1.6
+integration testing. Within two sessions, that pivot surfaced this correctness
+bug that no amount of further speculative optimization would have found. The
+rule to stop and pivot after three non-shipping sprints proved its value here.
 
 **v2.44.0 is the first version of VaptVupt suitable for production
 use in VaptVupt 2.1.6.**
@@ -6860,7 +6922,7 @@ Next-session targets in order of expected impact:
 
 **extend_match 8-byte fast-path delivers 13-24% encode speedup on
 text/JSON/source with byte-identical output to v2.42.0. fx_source
-crosses the 30 MB/s threshold — first god-tier criterion #4 hit.
+crosses the 30 MB/s threshold — the first encode-speed target reached.
 Third consecutive production-safe encode-speed release.**
 
 ### Sprint 55 — Short-Match Fast Path
@@ -6926,7 +6988,7 @@ invocations (v2.42.0 run, v2.43-dev run, repeat) eliminates this.
 | /bin/ls | 10.5 MB/s | 10.7 MB/s | +1.9% |
 
 **fx_source: 32.1 MB/s** — crosses the 30 MB/s threshold for the
-first time. God-tier criterion #4 (encode ≥ 30 MB/s balanced) is
+first time. Performance target #4 (encode ≥ 30 MB/s balanced) is
 now **hit on source code**. fx_text at 27.3 is 9% below the target.
 
 Text/source/JSON benefit most because those fixtures have many
@@ -7006,7 +7068,7 @@ invariants preserved. All tests pass:
 - **Ratio gate**: 0-byte tolerance on all 30 fixtures
 - **Byte-identity vs v2.42.0**: confirmed across Silesia corpus
 
-### God-Tier Criterion Update
+### Performance Target Update
 
 | # | Goal | v2.42 | **v2.43** |
 |---|---|---|---|
@@ -7019,7 +7081,7 @@ invariants preserved. All tests pass:
 | 7 | Security invariants tested | ✓ | ✓ |
 | 8 | VaptVupt integration | ready | **ready** |
 
-**First god-tier bullet fully crossed on a content class.**
+**First performance target fully crossed on a content class.**
 fx_source at 32.1 MB/s meets the ≥ 30 MB/s target. fx_json at
 28.7 is 4% below. fx_text at 27.3 is 9% below. Binary fixtures
 at 7-12 MB/s remain below — they'll need different levers
@@ -7192,9 +7254,8 @@ as the next major target.
 
 Both `ml_encode_with()` calls were right there in the source,
 just 150 lines apart. Once you look for it, the duplicate
-computation is obvious. The v2 master prompt Section 11
-(Communication Conventions) advice *"Lead with the measurement,
-not the work"* applies both ways: the measurement pointed at
+computation is obvious. The measurement-discipline advice to lead with the
+measurement, not the work, applies both ways: the measurement pointed at
 the function, then careful code reading found the structural
 waste inside it.
 
@@ -7228,7 +7289,7 @@ ship with **byte-identical output** to their predecessors,
 proving that substantial encode-speed gains remain available
 without format changes, ratio tradeoffs, or correctness risk.
 
-### God-Tier Criterion Progress (master prompt v2 §12)
+### Performance Target Progress
 
 | # | Goal | v2.40 | v2.41 | **v2.42** |
 |---|---|---|---|---|
@@ -7289,8 +7350,8 @@ change from a tight, testable heuristic.**
 
 ### Sprint 53 — Profile-Driven Encoder Optimization
 
-v2 master prompt Section 10: *"Measure first. The theory says this
-should work → measure first."* This sprint's sequence:
+The standing rule was: *measure before acting on a theoretical speedup.* This
+sprint's sequence:
 
 1. Sprint 52 profiled the encoder with gprof → `normalize_freq` +
    `build_enc/build_dec` were **20% of bash encode time**, all
@@ -7403,7 +7464,7 @@ intact:
 
 ### Why This Was Findable Now But Not Earlier
 
-The v2 prompt (Section 6) lists 13 prior dead-ends. Most were
+The historical roadmap lists 13 prior dead-ends. Most were
 speculative hypotheses that didn't pan out. This sprint's win
 came from a **different kind of investigation**:
 
@@ -7413,8 +7474,8 @@ came from a **different kind of investigation**:
    effective contribution)
 
 Both share a common pattern: **don't try to make the code faster
-without first measuring what it's doing**. The v2 prompt's "profile
-first" mandate in Section 10 is the direct cause of both wins.
+without first measuring what it's doing**. The profile-first rule is the direct
+cause of both wins.
 
 The CTX coder isn't wasted work historically — it *could* win on
 the right input class. But for VaptVupt's actual user workload
@@ -7468,9 +7529,9 @@ window, pin to v2.41.0 directly.
 | **Total (standard)** | **6,557** | 0 |
 | **Total (production)** | **11,556** | 0 |
 
-### God-Tier Criterion Progress — Sprint 53 Update
+### Performance Target Progress — Sprint 53 Update
 
-Per master prompt v2 Section 12:
+Against the recorded performance targets:
 
 | # | Goal | v2.40 | **v2.41** |
 |---|---|---|---|
@@ -7690,9 +7751,9 @@ while decoding faster than lz4 on the same content class.
 The tradeoff: prose text at high compression levels stays behind zstd
 (ratio) and lz4 (decode speed). Text is not the VaptVupt workload.
 
-### The God-Tier Criterion — Status at v2.40.0
+### Performance Target Status at v2.40.0
 
-Per master prompt v2 Section 12:
+Against the recorded performance targets:
 
 | Goal | Target | v2.40.0 Status |
 |---|---|---|
@@ -7721,7 +7782,7 @@ sprints can resume optimization work:
   exercise)
 - **Encoder SIMD hash insertion** (target 30 MB/s balanced encode)
 
-All three remain on the Section 7 menu from master prompt v2.
+All three remain candidates in the historical performance roadmap.
 
 ---
 
@@ -7734,10 +7795,9 @@ Zero format change, zero ratio regression, zero security loss.**
 
 ### Sprint 50-A — Profile First, Then Optimize
 
-Per master prompt v2, this sprint was scoped as **prerequisite
-profiling** before any future text-decode work. Three speculative
-sprints in a row (v1 prompt's Sprint A ANS_LOG, v1 prompt's Sprint C
-sliding filter, v2.38 decode-loop reorder) had all been falsified by
+This sprint was scoped as **prerequisite profiling** before any future
+text-decode work. Three speculative efforts in a row (Sprint A ANS_LOG, Sprint
+C sliding filter, and the v2.38 decode-loop reorder) had all been falsified by
 measurement. The goal this sprint was to **identify the actual
 bottleneck empirically**, not to hypothesize another fix.
 
@@ -7850,7 +7910,7 @@ This is pure decoder runtime improvement — no wire-format touch.
 
 ### Why This Wasn't Found Earlier
 
-The v1 master prompt's tier-1 decode-speedup hypotheses were all
+The earlier tier-1 decode-speedup hypotheses were all
 theory-driven: "ANS tables are too big for L1D" (cache-fit theory,
 falsified), "compiler can't overlap decodes with copies" (ILP
 theory, falsified). None were based on measurement.
@@ -7860,8 +7920,8 @@ is the time actually going?** Answer: 18% in branches that are
 technically redundant in the middle of every block. Not where any
 of the theory-driven hypotheses pointed.
 
-This is a direct vindication of master prompt v2's Section 10
-lesson: *"The theory says this should work" → measure first.*
+This directly validates the profile-first lesson: a theoretical speedup must be
+measured before implementation.
 
 ### Test Suite — 6,502 Tests (unchanged count)
 
@@ -7880,9 +7940,9 @@ lesson: *"The theory says this should work" → measure first.*
 | Speed gate | 6 |
 | **Total** | **6,502** |
 
-### Moves on the God-Tier Criterion
+### Progress Against Performance Targets
 
-Per master prompt v2 Section 12:
+Against the recorded performance targets:
 
 - **#1 Random decode 30+ GB/s**: unchanged from v2.38 (the random
   path was already memcpy-bound; bounds elision doesn't help there)
@@ -7915,17 +7975,15 @@ documented as dead-ends to save future effort.**
 
 ### Sprint Discipline — Two Dead-Ends, One Win
 
-Per the master prompt's Section 9 measurement protocol: every
-hypothesis must be verified, and falsified hypotheses must be
-documented so future sprints don't re-explore. This sprint tested
-three ideas.
+Under the measurement protocol, every hypothesis must be verified and
+falsified hypotheses must be documented so future sprints don't re-explore.
+This sprint tested three ideas.
 
 ### Dead-End 1 — ANS_LOG 12 → 10 (Section 7 Sprint A)
 
 **Hypothesis**: Shrinking ANS decode tables from 4096 to 1024
 entries (16 KB → 4 KB each) would fit L1D and deliver 2-4× text
-decode speedup. This was the biggest-win candidate in the master
-prompt.
+decode speedup. This was the roadmap's biggest-win candidate.
 
 **Measured**: 2-6% speedup only. 583 MB/s → 634 MB/s on text.
 
@@ -7945,7 +8003,7 @@ per-sequence loop overhead, not cache-fit of the ANS tables. The
 predicted 2-4× gain was based on a cache-fit model that didn't
 match actual bottlenecks.
 
-This invalidates one of the prompt's top-priority sprint options
+This invalidates one of the roadmap's top-priority sprint options
 and saves multiple sessions of refactor work. The real text-decode
 lever is probably multi-stream ANS (Sprint B) or a different
 approach entirely. Future sprints should NOT re-try ANS_LOG 10.
@@ -8010,7 +8068,7 @@ margin against future-fixture variance.
 **The gap to gzip-9 has closed by 4-9 percentage points** across
 all four ELF binary fixtures since the format-v2 arc started.
 libc.so.6 is now within 4% of gzip-9 — meaningful parity. python3
-within 5%. bash within 7%. The prompt's tier-1 target of "binary
+within 5%. bash within 7%. The tier-1 performance target of "binary
 ratio within 3% of gzip-9" is getting close; one more sprint of
 careful work may land it.
 

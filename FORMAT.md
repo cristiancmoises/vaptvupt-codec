@@ -3,6 +3,7 @@
 **Version**: 1 (frame format version field = `0x01`)
 **Endianness**: Little-endian for all multi-byte integers
 **Status**: Stable since v1.0.0 of the reference encoder
+**Reference implementation alignment**: v2.65.9 (no wire-layout change)
 
 This document specifies the on-wire format produced by `vv_compress`,
 `vv_compress_mt`, and `vv_cstream_*`. It is sufficient to implement
@@ -57,6 +58,7 @@ Offset  Size  Field           Description
                               Bit 1: has_dict     (reserved; MUST be 0)
                               Bit 2: x86 BCJ filter was applied
                               Bit 3: AArch64 BCJ filter was applied
+                                      (bits 2 and 3 are mutually exclusive)
                               Bits 4-7: reserved, SHOULD be 0
   6      1    mode_hint       Compressor mode used (0=ULTRA_FAST, 1=BALANCED,
                               2=EXTREME). Informational only — decoder
@@ -81,14 +83,20 @@ A decoder MUST reject any frame with:
 - `magic != 0x56560100`
 - `version != 1`
 - `window_log < 10` or `window_log > 24`
+- both BCJ bits set (`flags & 0x0C == 0x0C`)
 - Trailing input that is too short for a complete frame
 
 A decoder MAY reject a frame with:
 - `flags & 0xF2 != 0` (reserved flag bits set; bit1 and bits4-7)
 
 The reference decoder enforces the window range because a frame header is the
-bound used to validate LZ offsets. Reserved flag bits remain tolerated for
-forward compatibility; new encoders MUST leave them clear.
+bound used to validate LZ offsets, and rejects the contradictory dual-BCJ
+combination in one-shot decode, streaming decode, and frame-info parsing.
+Reserved flag bits remain tolerated for forward compatibility; new encoders
+MUST leave them clear. A conforming encoder MUST set at most one BCJ
+architecture bit. The v2.65.9 `vv_compress` API enforces this by returning
+`VV_ERR_PARAM` when both explicit filters are requested; this validation does
+not change the flag layout.
 
 ---
 
@@ -174,10 +182,17 @@ modern encoder produces only `'S'`/`'T'` (SEQ/SEQ_V2) ENTROPY blocks
 for inputs that warrant entropy coding. Tags `'H'`, `'A'`, `'I'`,
 `'C'` are **legacy from earlier format versions** (v0.3 through v0.7)
 and remain only for decoder backward-compat with files produced by
-those versions. A new decoder MAY choose to support only `'S'`/`'T'`
-and the non-entropy block types for full compatibility with current
-encoder output, leaving the legacy tags as a "decode-old-files"
-extension.
+those versions. A reader targeting only current/default encoder output MAY
+support `'S'`/`'T'` and the non-entropy block types, leaving the legacy tags as
+a "decode-old-files" extension. Such a reader is current-output-compatible,
+not a fully backward-compatible v1 decoder under the Stability Promise in §8;
+it MUST be labeled with that narrower scope.
+
+The v2.65.9 Python and JavaScript references decode current/default encoder
+output, including `'S'`/`'T'`, HUFFMAN4 literals, and x86/AArch64 BCJ frames.
+The C decoder remains canonical for the complete legacy `'H'`/`'A'`/`'I'`/`'C'`
+surface: Python retains limited `'A'` support, while JavaScript intentionally
+omits all four legacy tags.
 
 **Adaptive `'T'` selection (encoder policy, v2.61.0+)**: Since
 v2.61.0 the reference encoder *auto-selects* `'T'` (SEQ_V2,
@@ -216,6 +231,17 @@ streams. See `src/vv_ans.c::vva_decode_sequences` for the exact
 parsing; details are out of scope for this document because the
 SEQ format has its own internal structure (ANS table headers,
 state init, four interleaved bitstreams).
+
+One SEQ block stores a **global** `match_count`, not a per-LL-entry
+`has_match` bit. The first `match_count` decoded LL entries therefore each have
+a match; only later LL entries may be literal-only. A terminal literal run over
+65,535 bytes can be represented as multiple trailing LL-only entries, and a
+decoder continues until both `match_count` matches and `total_lits` literals
+are complete. A nonterminal literal run over 65,535 bytes followed by another
+match cannot be split by inserting a literal-only entry: that would move the
+match/LL association and is not representable in this wire layout. The v2.65.9
+reference encoder rejects that SEQ candidate and selects another lossless block
+representation. This is encoder selection hardening, not a wire-format change.
 
 #### 3.4.1 SEQ Block Literal Section (`lit_fmt`)
 
@@ -292,6 +318,18 @@ A decoder MUST verify both:
 
 If either check fails, the entire frame is corrupt and decoding
 MUST return an error.
+
+For a BCJ-filtered frame, `decompressed_bytes` in the checksum definition means
+the BCJ-forward-transformed bytes produced directly by block decoding. The
+logical checksum is therefore evaluated on that representation, before the
+architecture-specific inverse produces caller-visible bytes. The v2.65.9
+reference streaming decoder retains the complete frame output and applies the
+inverse exactly once after successful footer/checksum validation; when
+`has_checksum` is zero, it applies the inverse after the final block. Another
+implementation may process incrementally only if it hashes the transformed
+bytes and carries enough BCJ position/boundary state to be exactly equivalent
+to one whole-frame inverse; treating chunks or blocks as independent filters is
+incorrect. This clarification does not change any on-wire bytes.
 
 ---
 
@@ -387,6 +425,8 @@ frame:
 - Has its own `dst_base` for match resolution (start of its own
   decompressed output, NOT start of the file).
 - Has its own checksum (covering only its own content).
+- Has its own optional BCJ inverse, applied once at that frame's completion
+  using the ordering in Section 4.
 
 This allows:
 - Parallel encoding (`vv_compress_mt`).

@@ -23,8 +23,8 @@ extern "C" {
 
 #define VV_VERSION_MAJOR  2
 #define VV_VERSION_MINOR  65
-#define VV_VERSION_PATCH  8
-#define VV_VERSION_STRING "2.65.8"
+#define VV_VERSION_PATCH  9
+#define VV_VERSION_STRING "2.65.9"
 
 #define VV_MAGIC          0x56560100u  /* "VV\x01\x00" */
 #define VV_MAX_BLOCK_SIZE (1u << 20)   /* 1 MB per block */
@@ -202,7 +202,9 @@ typedef struct {
                               *     bit2). Improves x86/x86-64 machine-code
                               *     ratio (~+3–7% measured); the decoder
                               *     inverts it automatically. Requires a
-                              *     v2.53.4+ decoder. Opt-in; default 0. */
+                              *     v2.53.4+ decoder. One-shot compression
+                              *     only; vv_cstream_* rejects BCJ options.
+                              *     Opt-in; default 0. */
     int       filter_arm64;  /* 1 = apply the reversible AArch64 (ARM64) BCJ
                               *     branch filter (BL + ADRP) before
                               *     compression (header flag bit3). Improves
@@ -231,8 +233,9 @@ typedef struct {
                               *     valid stream any decoder reads; default
                               *     output (0) is byte-identical to prior
                               *     releases. Opt-in; default 0. */
-    uint32_t  accel;         /* 0 = auto (mode-dependent; byte-identical). >0 enables
-                              *     lz4-style position-skip acceleration: after
+    uint32_t  accel;         /* 0 = automatic (fast=2, balanced/extreme=1).
+                              *     A value >0 selects an explicit lz4-style
+                              *     position-skip factor: after
                               *     a run of f consecutive no-match positions
                               *     the parser advances by 1 + ((f*accel)>>6)
                               *     instead of 1, skipping hash/insert work on
@@ -240,11 +243,10 @@ typedef struct {
                               *     encode on incompressible / already-
                               *     compressed data (measured ~8-9x on
                               *     random/gzip input) for a small ratio cost
-                              *     on compressible data (~-0.2% on dickens),
-                              *     which is why it is opt-in. Clamped to
-                              *     [0, 64]; higher = more aggressive skipping.
-                              *     Primarily useful with -m fast. Output stays
-                              *     decodable by any decoder. */
+                              *     on compressible data (~-0.2% on dickens).
+                              *     Values above 64 are clamped; higher is more
+                              *     aggressive. Output stays decodable by any
+                              *     decoder. */
     int       no_rep;        /* 1 = disable rep-match probing in the greedy/
                               *     lazy parser. Measured net-positive on ratio
                               *     in fast mode (which has no entropy stage, so
@@ -392,8 +394,11 @@ typedef struct vv_cstream_s vv_cstream_t;
 typedef struct vv_dstream_s vv_dstream_t;
 
 /* Create a new compression stream context.
- * Returns NULL on allocation failure.
+ * Returns NULL on allocation failure or invalid options.
  * If opts is NULL, uses default options (balanced mode, checksum=1).
+ * Whole-frame BCJ filtering is not available in the streaming encoder;
+ * filter_x86, filter_arm64, and filter_auto must all be zero. Use
+ * vv_compress() when a BCJ filter is required.
  * The context holds the matcher state; cross-block rep-match history
  * and hash tables are preserved across chunks for optimal ratio. */
 vv_cstream_t *vv_cstream_create(const vv_options_t *opts);
@@ -407,7 +412,8 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts);
  *
  * If opts is NULL, reuses the options from the last create/reset.
  * If opts is non-NULL, applies new options but window_log cannot
- * change (would require re-allocating matcher tables). */
+ * change (would require re-allocating matcher tables). Invalid modes,
+ * window values, or BCJ filter requests return VV_ERR_PARAM. */
 int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts);
 
 /* Compress one chunk of source into dst. chunk_len must be ≤

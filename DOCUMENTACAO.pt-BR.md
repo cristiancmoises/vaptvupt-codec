@@ -1,6 +1,6 @@
 # Documentação técnica VaptVupt (pt-BR)
 
-Versão sincronizada com o release **2.65.8**. Este guia resume integração,
+Versão sincronizada com o release **2.65.9**. Este guia resume integração,
 formato e limites de segurança em português; os documentos em inglês
 [FORMAT.md](FORMAT.md), [SECURITY.md](SECURITY.md) e [INTEGRATION.md](INTEGRATION.md)
 são as referências normativas completas. **[README em português](README.pt-BR.md)**
@@ -22,12 +22,17 @@ side-channel. A aplicação deve impor limites de tamanho, tempo e processos.
 ## Formato e compatibilidade
 
 Um frame contém cabeçalho de 16 bytes, blocos RAW/RLE/token/entropia e um
-footer XXH64 opcional. A saída válida de 2.65.8 continua compatível com as
+footer XXH64 opcional. A saída válida de 2.65.9 continua compatível com as
 versões anteriores indicadas em [FORMAT.md](FORMAT.md). O campo `window_log`
 deve estar entre 10 e 24; valores fora desse intervalo são rejeitados.
 
 No byte de flags, bit 0 indica footer XXH64, bit 1 é reservado e deve ser zero,
-bit 2 indica BCJ x86 e bit 3 indica BCJ AArch64; bits 4–7 são reservados.
+bit 2 indica BCJ x86 e bit 3 indica BCJ AArch64; bits 4–7 são reservados. Os
+bits BCJ x86 e AArch64 são mutuamente exclusivos em uma saída válida. No
+one-shot, no streaming e em `vv_get_frame_info`, o decodificador rejeita um
+cabeçalho com ambos ligados. No streaming, a inversa escolhida é aplicada uma
+única vez sobre o frame completo, depois da validação do checksum ou, sem
+checksum, depois do bloco final.
 Offsets usam 2 bytes até `window_log=16` e 3 bytes até 24. O formato v2 (`T`)
 é selecionado automaticamente para dados binários em balanced/extreme; use
 `compat_v246_5_decoder` quando o consumidor precisar de decodificadores antigos.
@@ -43,9 +48,18 @@ int64_t m = vv_decompress(dst, (size_t)n, out, out_cap);
 ```
 
 Retorno negativo é erro (`VV_ERR_OVERFLOW`, `VV_ERR_CORRUPT`, `VV_ERR_PARAM`,
-`VV_ERR_NOMEM`, entre outros). No streaming, `dst` deve ser o mesmo endereço
+`VV_ERR_NOMEM`, entre outros). `vv_compress` retorna `VV_ERR_PARAM` para um
+modo fora de `VV_MODE_ULTRA_FAST`, `VV_MODE_BALANCED` e `VV_MODE_EXTREME`, ou
+quando `filter_x86` e `filter_arm64` são pedidos simultaneamente. O encoder de
+streaming não pode aplicar um filtro de frame inteiro: `vv_cstream_create`
+retorna NULL e `vv_cstream_reset` retorna `VV_ERR_PARAM` para modo inválido ou
+qualquer opção BCJ; use `vv_compress` quando precisar do filtro. Na
+descompressão streaming, `dst` deve ser o mesmo endereço
 base em todas as chamadas; `written` é cumulativo e `consumed` é por chamada.
-Entradas NULL com comprimento não nulo são inválidas. Para embedding simples,
+Uma janela fora de 10..24 é rejeitada antes de qualquer cópia/transformação BCJ.
+Entradas NULL com comprimento não nulo são inválidas. Em frames BCJ, não
+publique os bytes parciais antes do retorno de conclusão: eles só recebem a
+inversa no fim do frame. Para embedding simples,
 `make amalg` gera `build/vaptvupt.c` e `build/vaptvupt.h`; valide com
 `make amalg-verify`.
 
@@ -60,11 +74,36 @@ make amalg-verify
 
 O conjunto inclui round-trip em todos os modos, fuzz diferencial C↔Python,
 referências JavaScript, corpus negativo, reprodutores de DoS, falhas de
-alocação e regressões de limites AVX2/SEQ. Execute também ASan+UBSan no
+alocação e regressões de limites AVX2/SEQ. No v2.65.9, também compara a nova
+construção direta das tabelas tANS com a construção histórica e cobre a inversa
+BCJ no streaming em frames inteiros/divididos, x86/AArch64 e checksum
+ligado/desligado. A tabela direta reduz o scratch das tabelas de sequência por
+bloco de 52 para 48 KiB sem alterar a saída no fio. Execute também ASan+UBSan no
 toolchain de destino; ferramentas formais ausentes no host devem ser
 reportadas, não tratadas como uma aprovação silenciosa.
 
+O layout SEQ contém um `match_count` global: apenas entradas LL depois de todos
+os matches podem ser sem match. Por isso, um literal acima de 65.535 bytes antes
+de um match posterior não pode ser dividido no meio. O v2.65.9 rejeita essa
+candidata SEQ e usa um bloco alternativo sem perda; `test_seq_v2` valida o caso
+direto e um reproducer end-to-end determinístico (21/21). Python e JavaScript
+agora consomem entradas LL finais com o limite de iterações equivalente ao de
+C, rejeitam flags BCJ duplas e aplicam as inversas exatas x86/AArch64 depois da
+validação do checksum. Fixtures checksum on/off confirmam a saída atual byte a
+byte. C permanece canônico para o conjunto legado H/A/I/C; Python mantém suporte
+limitado a A, enquanto JavaScript omite essas tags antigas. O sweep OOM confirma
+o round-trip do fixture-base antes da injeção.
+A cópia privada de entrada do BCJ one-shot é zerada explicitamente antes de
+`free()`. O teste associado cobre a execução e o round-trip sob sanitizers; não
+é uma prova direta do conteúdo da memória depois de liberada.
+
+Para a comparação do release, `bench/competitive.py --generated-suite` cria a
+suite determinística `generated-v1`, exige por padrão a matriz completa
+vv-fast/vv-balanced/lz4-1/zstd-1/zstd-3 e verifica cada decodificação por
+SHA-256. Use `--runs 7 --warmups 1 --csv ... --json ...`; o JSON registra a
+proveniência do host e das ferramentas, e o CSV registra hashes e medições.
+
 Veja [SECURITY.md](SECURITY.md) para o threat model completo e
 [INTEGRATION.md](INTEGRATION.md) para recomendações de AEAD, streaming e
-multi-thread. Não inclua documentos internos de planejamento ou prompts em
-archives de distribuição.
+multi-thread. O artefato de distribuição atual é somente o arquivo-fonte
+`vaptvupt-2.65.9-src.tar.gz`; não inclua material interno no archive.

@@ -138,13 +138,6 @@ function main() {
             if (e.name === 'NotImplementedError') {
                 console.log(`  SKIP   ${name} (ENTROPY block — out of scope for JS decoder)`);
                 skipped++;
-            } else if (e.name === 'CorruptError' && /lit_fmt=4/.test(e.message)) {
-                // Known coverage gap: 4-stream Huffman (lit_fmt=4, added v2.47.0)
-                // has not yet been ported to this JS reference.
-                // (lit_fmt=3 was ported in Sprint 117 and now PASSes.)
-                // See README.md "Reference decoder coverage gap" and AUDIT.md item 6.
-                console.log(`  SKIP   ${name} (lit_fmt=4 4-stream Huffman — known coverage gap, see README)`);
-                skipped++;
             } else {
                 console.log(`  FAIL   ${name}: ${e.name}: ${e.message}`);
                 failed++;
@@ -175,6 +168,24 @@ function main() {
             console.log(`  SKIP   multi-frame (ENTROPY — out of scope)`);
         } else {
             console.log(`  FAIL   multi-frame: ${e.name}: ${e.message}`);
+            failed++;
+        }
+    }
+
+    // The two architecture-specific BCJ flags are mutually exclusive.
+    try {
+        const contradictory = Buffer.from(
+            compressWithC(binary, Buffer.from('dual BCJ header guard')));
+        contradictory[5] |= 0x0c;
+        vv.decompress(contradictory);
+        console.log(`  FAIL   dual-BCJ flags: decoder accepted contradictory header`);
+        failed++;
+    } catch (e) {
+        if (e.name === 'CorruptError') {
+            console.log(`  PASS   dual-BCJ flags rejected with CorruptError`);
+            passed++;
+        } else {
+            console.log(`  FAIL   dual-BCJ flags: unexpected ${e.name}: ${e.message}`);
             failed++;
         }
     }

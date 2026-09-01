@@ -33,6 +33,33 @@ static int full_roundtrip(const uint8_t*orig,size_t n,int which){
     if(cl>0){ int64_t dl=vv_decompress(c,(size_t)cl,o,n+64); r=(dl==(int64_t)n && memcmp(o,orig,n)==0); }
     free(c);free(o); return r;
 }
+/* one-shot encode -> streaming decode. Streaming completion must reverse the
+ * same BCJ transform as the one-shot decoder, with and without a footer and
+ * regardless of how the input frame is split across calls. */
+static int streaming_roundtrip(const uint8_t*orig,size_t n,int which,
+                               int checksum,size_t chunk){
+    size_t cap=vv_compress_bound(n)+64;
+    uint8_t*c=malloc(cap),*o=malloc(n?n:1);
+    vv_options_t opt; vv_default_options(&opt); opt.mode=VV_MODE_BALANCED;
+    opt.checksum=checksum;
+    if(which) opt.filter_arm64=1; else opt.filter_x86=1;
+    int64_t cl=vv_compress(orig,n,c,cap,&opt);
+    vv_dstream_t*d=vv_dstream_create();
+    int ret=0,r=0; size_t pos=0,written=0;
+    if(cl>0&&d){
+        while(pos<(size_t)cl&&ret==0){
+            size_t take=(size_t)cl-pos;
+            if(take>chunk)take=chunk;
+            size_t consumed=0,now_written=0;
+            ret=vv_dstream_decompress_chunk(d,c+pos,take,o,n?n:1,
+                                             &consumed,&now_written);
+            if(ret<0||consumed==0)break;
+            pos+=consumed; written=now_written;
+        }
+        r=ret==1&&pos==(size_t)cl&&written==n&&memcmp(o,orig,n)==0;
+    }
+    vv_dstream_destroy(d); free(c); free(o); return r;
+}
 /* corrupt-input safety: compress with a filter, bit-flip the stream, decode.
  * The decoder must never read/write out of bounds; it may return an error or
  * (since flips can yield a still-valid stream) succeed. We only require that
@@ -93,6 +120,19 @@ int main(void){
     { uint8_t z[1]={0};
       ok(full_roundtrip(z,0,0),"x86 empty"); ok(full_roundtrip(z,1,0),"x86 1-byte");
       ok(full_roundtrip(z,0,1),"arm64 empty"); ok(full_roundtrip(z,1,1),"arm64 1-byte"); }
+
+    /* ---- streaming decode must perform the BCJ inverse exactly once ---- */
+    { enum { N=16384 }; uint8_t*x86=malloc(N),*arm64=malloc(N);
+      for(size_t i=0;i<N;i++){x86[i]=(uint8_t)(i*29u+7u);arm64[i]=(uint8_t)(i*13u+3u);}
+      for(size_t i=0;i+5<=N;i+=8){x86[i]=0xE8;x86[i+1]=0;x86[i+2]=0;x86[i+3]=0;x86[i+4]=0;}
+      for(size_t i=0;i+4<=N;i+=4){uint32_t insn=(i&4)?0x94000000u:0x90000000u;arm64[i]=(uint8_t)insn;arm64[i+1]=(uint8_t)(insn>>8);arm64[i+2]=(uint8_t)(insn>>16);arm64[i+3]=(uint8_t)(insn>>24);}
+      for(int checksum=0;checksum<=1;checksum++){
+          ok(streaming_roundtrip(x86,N,0,checksum,(size_t)-1),"x86 streaming BCJ whole frame");
+          ok(streaming_roundtrip(x86,N,0,checksum,7),"x86 streaming BCJ split frame");
+          ok(streaming_roundtrip(arm64,N,1,checksum,(size_t)-1),"arm64 streaming BCJ whole frame");
+          ok(streaming_roundtrip(arm64,N,1,checksum,7),"arm64 streaming BCJ split frame");
+      }
+      free(x86);free(arm64); }
 
     /* ---- corrupt-input safety (memory safety verified under ASan/UBSan) ---- */
     for(int t=0;t<400;t++){

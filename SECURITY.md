@@ -1,14 +1,80 @@
 # VaptVupt Security Posture
 
-**Document version**: 2.13 (v2.65.8)
-**Codebase audited**: v2.65.8
+**Document version**: 2.14 (v2.65.9)
+**Codebase audited**: v2.65.9 release delta, subject to the evidence scope below
 **License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
 
 ---
 
-## v2.65.8 security delta
+## v2.65.9 security and correctness delta
+
+Streaming decode now completes a BCJ-filtered frame by applying the selected
+x86 or AArch64 inverse exactly once. With a footer, the decoder first validates
+the footer magic and checksum over the transformed bytes; without a checksum,
+it waits for the final block. Permanent regressions cover whole-frame and
+7-byte-split input for both architectures with checksum enabled and disabled.
+This closes a streaming data-integrity gap; it is not presented as a new
+memory-safety finding.
+
+`vv_compress` now validates public option values before allocation or filtering.
+Modes outside the three declared enum constants and simultaneous x86 plus
+AArch64 filter requests return `VV_ERR_PARAM`, including on empty input. The
+existing 10..24 window-range check also runs before requested BCJ work. The
+dual-filter case previously allowed contradictory header flags after applying
+only one forward transform, so a nominally successful roundtrip could alter
+the caller's data. One-shot decode, streaming decode, and `vv_get_frame_info`
+also reject an input header that sets both BCJ architecture bits; unrelated
+reserved bits retain their documented forward-compatible treatment. Streaming
+compression cannot apply a whole-frame BCJ transform while emitting blocks;
+its create/reset entry points now reject invalid modes and every BCJ option
+instead of silently accepting an ignored filter request. Callers that need BCJ
+must use one-shot `vv_compress`.
+
+The sequence tANS decoder now constructs each decode table directly in its
+final storage, removing the 4 KiB spread scratch and reducing per-block table
+scratch from 52 KiB to 48 KiB. Entry-for-entry equivalence across 256
+deterministic normalized tables plus the established ANS/SEQ/roundtrip,
+safe-zone, and exact-buffer regressions support the unchanged-wire claim. The
+paired performance result (+0.40% text, +1.21% JSON, about +0.80% geometric
+mean) is modest, workload-dependent, and not a security claim.
+
+The SEQ encoder now fails closed on an unrepresentable candidate. Because the
+wire has a global `match_count`, a literal run over 65,535 bytes before a later
+match cannot be split into a zero-match midstream entry; doing so previously
+could produce an undecodable frame on rare sparse/random inputs. The candidate
+is now rejected and another lossless block representation is selected.
+`test_seq_v2` covers the direct invariant and a deterministic end-to-end
+reproducer (21/21). This is encoder-side data integrity, not decoder memory
+unsafety, and does not change valid wire output.
+
+The Python and JavaScript reference decoders now consume trailing LL-only
+entries after all matches with the C-equivalent iteration bound. This prevents
+both premature termination and an unbounded loop on corrupt input. Both
+references reject dual-BCJ headers and implement the exact x86/AArch64 inverse
+after checksum validation; current-output fixtures cover checksum on and off.
+C remains canonical for legacy H/A/I/C; Python retains limited A-tag support
+and JavaScript omits the legacy tags. The OOM sweep now requires its
+randomized baseline fixture to roundtrip byte-exactly before injecting
+failures, preventing a codec bug from being mislabeled as an
+allocation-injector failure.
+
+The one-shot BCJ path holds a private full-input, plaintext-derived copy. It now
+calls `vv_secure_zero(copy, src_len)` before `free()`, bringing that allocation
+under the implementation's tracked-buffer scrubbing policy. The updated
+`test_secure_zero` exercises this cleanup path to completion and verifies a
+byte-exact BCJ roundtrip under sanitizers. It does **not** read freed memory or
+prove its post-free contents; the protection claim rests on the explicit
+zero-before-free implementation, with the test providing path/regression
+coverage.
+
+Assurance for this delta is regression and dynamic validation. No fresh full
+CBMC/Frama-C or historical audit-campaign rerun is claimed for v2.65.9; the
+formal baseline is inherited only for the unchanged functions and bounded
+properties identified in `FORMAL_AUDIT.md` and `verification/README.md`.
+
+## v2.65.8 security delta (historical)
 
 The AVX2 token decoder now validates the full offset field after an extended
 literal run before reading it. This closes a malformed-stream out-of-bounds
@@ -66,7 +132,7 @@ Per the project's discipline ("State explicitly what the system does NOT protect
 | **Denial of service from `dst_cap` exhaustion** | Caller (the codec enforces `dst_cap` but the caller chooses the value; passing `SIZE_MAX` defeats DoS protection) |
 | **Resource exhaustion from extreme-mode *encoding* of attacker-controlled input** | Caller (since v2.52.0, extreme mode uses up to a 16 MB window → ~128 MB matcher and ~1 MB/s optimal parse, so a large input consumes proportional time/memory: measured 169 MB / 126 s on a 51 MB input. The decoder is unaffected. Deployments exposing extreme *encoding* to untrusted input sizes must impose their own size/timeout limits — same caveat as zstd `--ultra --long`. Decode of untrusted input remains bounded by `dst_cap`.) |
 | **Multi-process race conditions on shared input/output buffers** | Caller (codec assumes single-writer-during-call semantics) |
-| **Disk persistence of working buffers** | Caller (Sprint 118's secure-zero scrubs heap, not swap; mlockall is caller's job) |
+| **Disk persistence of working buffers** | Caller (secure-zero covers tracked plaintext-bearing heap buffers, not swap; mlockall is caller's job) |
 | **Resistance to compiler downgrades** | Caller (the security properties below assume `-O2` or `-O3` with a modern gcc/clang; `-O0` builds are functional but not audit-targeted) |
 
 **Specifically**: a `.vv` file alone provides **no** confidentiality and **no** authentication. It is a compressed blob with an integrity checksum that detects accidental corruption, not deliberate tampering. For deliberate-tampering resistance, the caller MUST wrap the codec output in an authenticated encryption scheme (AEAD). This is exactly how VaptVupt uses it (via libpqvaptvupt's `pqvv_seal` / `pqvv_open`).
@@ -357,11 +423,11 @@ The following tools and harnesses are permanently committed to the source tree f
 ### Allocation fault injection
 - **`tests/oom_inject.c`** — LD_PRELOAD allocator interposer that fails the
   Nth malloc/calloc/realloc.
-- **`tests/oom_sweep.sh`** — sweeps every allocation site in `vv_compress`
-  (including the BCJ copy) and `vv_decompress`, asserting no crash; runs in
-  `make test`. Under ASan/UBSan it also proves no leak or use-after-free on
-  any allocation-failure path. The full sweep (144 allocation points) is
-  clean: no crash, no leak, no use-after-free on any single failure.
+- **`tests/oom_sweep.sh`** — sweeps every allocation point reached by its
+  baseline `vv_compress` (including the BCJ copy) and `vv_decompress` paths;
+  runs in `make test`. Across the injected baseline paths, ASan/UBSan detected
+  no crash, leak, or use-after-free. This is dynamic fixture coverage, not an
+  exhaustive proof of unreachable allocation paths.
 
 ### Formal verification (`verification/`, `make verify`)
 The BCJ branch filters in `src/vv_bcj.c` and selected decoder helpers run on
@@ -403,7 +469,7 @@ contract and loop invariant for an unbounded deductive proof of `read_ext_len`
 with the full Frama-C WP plugin.
 
 ### Regression reproducers (`tests/regression_inputs/`)
-13 permanent reproducer files covering every defect found:
+12 permanent malformed-stream/DoS reproducer files:
 - `huf4_inflate_s1.vv`, `huf4_zero_s1.vv`, `huf4_truncate.vv` (Sprint 105 4-stream Huffman DoS attacks)
 - `fuzz_oob_ll_code.vv` (Sprint 109 LL OOB read)
 - `fuzz_oob_decode_block.vv` (Sprint 109 memcpy OOB)
@@ -462,7 +528,9 @@ The encoder's working buffers contain plaintext-derived data (literal bytes from
 - Process core dumps containing freed-but-not-zeroed memory
 - Memory-introspection tools running with the same process
 
-**v2.47.9 introduces explicit secure-zero scrubbing** of plaintext-bearing buffers before `free()`:
+Sprint 118 introduced explicit secure-zero scrubbing of tracked
+plaintext-bearing buffers before `free()`; v2.65.9 adds the previously omitted
+one-shot BCJ private copy:
 
 | Buffer | Contents | Scrubbed in |
 |---|---|---|
@@ -471,13 +539,26 @@ The encoder's working buffers contain plaintext-derived data (literal bytes from
 | `src_buf` | Raw input sliding window (streaming) | `vv_cstream_destroy` |
 | `tmp` | Scratch for LZ tokens | same |
 | `ent_buf` | Pre-output entropy-coded blocks | same |
+| One-shot BCJ copy | Full input after the forward branch transform | `vv_compress` BCJ exit |
 | Encoder context struct | Options, internal state | `vv_cstream_destroy` |
 
-The implementation (`vv_secure_zero` in `src/vv_encoder.c`) prefers `explicit_bzero` (BSD/glibc 2.25+) and falls back to a volatile-pointer memset that the optimizer cannot eliminate. Behavior is verified by `tests/test_secure_zero.c` (TEST18 in the suite).
+The implementation (`vv_secure_zero` in `src/vv_encoder.c`) prefers
+`explicit_bzero` (BSD/glibc 2.25+) and falls back to a volatile-pointer memset
+that the optimizer cannot eliminate. `tests/test_secure_zero.c` (TEST18)
+exercises streaming cleanup, repeated allocation/destruction, and the one-shot
+BCJ cleanup path under sanitizers while checking successful roundtrips. It is
+completion/path coverage, not a direct post-`free()` memory-content test.
 
-**This is defense in depth**, not a primary security boundary. The original input buffer (caller-owned) is unaffected; if the caller doesn't zero it themselves, the codec's hygiene doesn't help. But for VaptVupt's pipeline (compress → encrypt → write), the codec's working buffers are now scrubbed before the encryption step gets the data.
+**This is defense in depth**, not a primary security boundary. The original
+input buffer (caller-owned) is unaffected; if the caller doesn't zero it
+themselves, the codec's hygiene doesn't help. In VaptVupt's compress → encrypt
+→ write pipeline, the tracked plaintext-bearing codec buffers listed above are
+scrubbed before the encryption step receives the output.
 
-**Encoder output is byte-identical to v2.47.8** — scrubbing happens after output is emitted, so the wire format and compressed bytes are unchanged.
+The Sprint 118 scrubbing-only change did not alter the encoder output of its
+then-current codec baseline: scrubbing happens after output is emitted. Later
+format-policy and encoder changes are documented separately and are not part of
+that historical equivalence statement.
 
 ---
 
@@ -549,7 +630,11 @@ Four CI jobs run on every commit:
 
 A nightly long-run fuzz workflow is shipped as of Sprint 40 (`.github/workflows/nightly-fuzz.yml`, see Section 9 item 4) — the per-commit CI is intentionally fast (under 10 minutes total) to provide PR feedback without becoming a merge bottleneck, while the nightly campaign provides depth.
 
-The full 13-tool audit campaign from Section 3 is NOT run on every commit (some tools are too slow); CI catches the common-case regressions and a manual re-run of the full audit is required before any release tag.
+The full 13-tool historical audit campaign from Section 3 is not run on every
+commit. CI catches common regression classes; each release must state exactly
+which additional tools were run. As recorded in the v2.65.9 delta above, this
+release carries regression/dynamic validation and inherits the formal baseline;
+it does not claim a fresh full-campaign rerun.
 
 ---
 
@@ -709,14 +794,14 @@ These represent residual risk to be addressed in future audit sprints if VaptVup
 
 ## 10. Reporting Vulnerabilities
 
-This is currently a pre-VaptVupt-integration codebase. For all security disclosures:
+For security disclosures concerning the released codec:
 
 **Email**: `sac@securityops.co`
 
 **Subject prefix**: `[VaptVupt SEC]` (codec) or `[libpqvaptvupt SEC]` (companion crypto library)
 
 **Include**:
-- Affected version (e.g., `v2.50.8`)
+- Affected version (e.g., `v2.65.9`)
 - Reproducer file (the `.vv` blob or input that triggers the issue)
 - Observed behavior (crash, hang, OOB read, etc.)
 - Build configuration (`make` flags, sanitizers, compiler version)
@@ -724,11 +809,11 @@ This is currently a pre-VaptVupt-integration codebase. For all security disclosu
 
 **Response SLA**: best-effort, typically within 7 days. Acknowledgement of receipt within 48 hours.
 
-**PGP**: a project-specific PGP key for encrypted disclosure will be published before VaptVupt v2.2.3 ships. Until then, sensitive details can be exchanged out-of-band after initial contact.
+**Sensitive details**: initiate contact by email and arrange a protected
+out-of-band channel before sending exploit material or private data. This
+document does not publish a project-specific PGP key.
 
 **Coordinated disclosure**: preferred. Public CVE assignment will follow standard 90-day embargo unless the reporter and maintainer agree otherwise.
-
-When VaptVupt is integrated into VaptVupt and reaches public release, vulnerability disclosure should also follow VaptVupt's policy at securityops.co (TBD URL).
 
 ---
 

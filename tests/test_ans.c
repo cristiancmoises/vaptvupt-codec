@@ -6,6 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef VV_ANS_TEST_HOOKS
+extern int vva_test_build_dec_direct_equivalence(
+    const uint16_t norm[VVA_MAX_SYMBOL]);
+#endif
+
 static int tests_run = 0, tests_passed = 0;
 #define TEST(n) do { tests_run++; fprintf(stderr, "  %-48s ", n); fflush(stderr); } while(0)
 #define PASS() do { tests_passed++; fprintf(stderr, "PASS\n"); } while(0)
@@ -134,6 +139,41 @@ int main(void) {
         }
         free(b); free(e);
     }
+
+#ifdef VV_ANS_TEST_HOOKS
+    /* The decode-only table builder must be entry-for-entry identical to
+     * the reference spread + build path; the state mapping is part of the
+     * existing wire format. */
+    {
+        TEST("Direct decode-table builder equivalence");
+        uint32_t rng = 0x9E3779B9u;
+        int ok = 1;
+        for (int trial = 0; trial < 256 && ok; trial++) {
+            uint16_t norm[VVA_MAX_SYMBOL];
+            uint8_t symbols[VVA_MAX_SYMBOL];
+            memset(norm, 0, sizeof(norm));
+            for (int i = 0; i < VVA_MAX_SYMBOL; i++) symbols[i] = (uint8_t)i;
+            for (int i = VVA_MAX_SYMBOL - 1; i > 0; i--) {
+                rng = rng * 1664525u + 1013904223u;
+                int j = (int)(rng % (uint32_t)(i + 1));
+                uint8_t tmp = symbols[i]; symbols[i] = symbols[j]; symbols[j] = tmp;
+            }
+
+            int active = 1 + trial % 64;
+            uint32_t remaining = VVA_TABLE_SIZE;
+            for (int i = 0; i < active - 1; i++) {
+                uint32_t reserve = (uint32_t)(active - i - 1);
+                rng = rng * 1664525u + 1013904223u;
+                uint32_t freq = 1 + rng % (remaining - reserve);
+                norm[symbols[i]] = (uint16_t)freq;
+                remaining -= freq;
+            }
+            norm[symbols[active - 1]] = (uint16_t)remaining;
+            if (!vva_test_build_dec_direct_equivalence(norm)) ok = 0;
+        }
+        if (ok) PASS(); else FAIL("decode tables differ");
+    }
+#endif
 
     fprintf(stderr, "\n═══════════════════════════════════════════\n");
     fprintf(stderr, "  Results: %d/%d passed\n", tests_passed, tests_run);
