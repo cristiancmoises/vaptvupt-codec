@@ -34,12 +34,22 @@ git bundle verify vaptvupt-2.65.8.bundle
 ## 3. Push (credentials)
 
 ```sh
-# Explicitly push the release branch; do not assume `main`, `master`, or an
-# upstream. Push each authoritative remote separately and never force:
-git push codeberg HEAD:refs/heads/v260-master refs/tags/v2.65.8
-git push github HEAD:refs/heads/v260-master refs/tags/v2.65.8
-git push origin-https HEAD:refs/heads/v260-master refs/tags/v2.65.8
-# Then verify each endpoint resolves both refs to the release commit.
+# v2.65.8 removes internal planning/prompt paths from reachable history.
+# The sanitized branch therefore needs a force-with-lease update, using the
+# actual pre-scrub branch SHA as the lease. Rewritten historical tags require
+# an explicit tag force update; do not use `--mirror` or touch unrelated main.
+git push --force-with-lease=refs/heads/v260-master:<old-branch-sha> \
+  codeberg HEAD:refs/heads/v260-master
+git push --force codeberg 'refs/tags/*'
+git push --force-with-lease=refs/heads/v260-master:<old-branch-sha> \
+  github HEAD:refs/heads/v260-master
+git push --force github 'refs/tags/*'
+git push --force-with-lease=refs/heads/v260-master:<old-branch-sha> \
+  origin-https HEAD:refs/heads/v260-master
+git push --force origin-https 'refs/tags/*'
+# Then verify each endpoint resolves the branch and v2.65.8 tag to the
+# release commit. The same explicit commands apply to the Forgejo .com.br
+# URL when it is reachable.
 ```
 
 ## 4. GitHub release (credentials)
