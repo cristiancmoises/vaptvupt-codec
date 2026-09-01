@@ -17,10 +17,10 @@ SHA-256-checked against its deterministic generated input. Cells are
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
-| text.txt | 3.707 @134.3/396.0 | 7.055 @56.7/327.5 | 2.907 @274.5/379.0 | 5.768 @194.7/343.3 | 6.198 @175.1/342.9 |
-| records.jsonl | 3.142 @128.9/420.8 | 5.707 @48.8/341.7 | 3.505 @272.5/370.9 | 7.071 @215.1/339.8 | 6.521 @175.0/334.0 |
-| records.bin | 1.347 @72.3/405.1 | 2.016 @17.3/229.9 | 1.371 @251.4/384.6 | 1.934 @180.1/317.5 | 2.183 @116.1/269.6 |
-| random.bin | 1.000 @350.0/434.7 | 1.000 @239.4/402.1 | 1.000 @364.3/362.9 | 1.000 @312.6/334.4 | 1.000 @274.3/321.2 |
+| text.txt | 3.707 @143.4/395.7 | 7.055 @61.9/343.7 | 2.907 @288.8/387.9 | 5.768 @206.2/342.5 | 6.198 @187.6/348.9 |
+| records.jsonl | 3.142 @139.2/424.0 | 5.707 @53.9/355.7 | 3.505 @279.6/398.6 | 7.071 @221.2/354.5 | 6.521 @190.8/354.8 |
+| records.bin | 1.347 @80.3/408.4 | 2.016 @18.7/253.7 | 1.371 @267.1/402.5 | 1.934 @193.9/343.6 | 2.183 @127.2/307.2 |
+| random.bin | 1.000 @360.1/445.2 | 1.000 @267.2/438.2 | 1.000 @397.9/374.6 | 1.000 @332.3/351.6 | 1.000 @296.6/355.8 |
 
 The findings are modest and workload-dependent. On these fixtures,
 `vv-balanced` leads ratio on generated text and narrowly leads zstd-1/3 on
@@ -46,10 +46,12 @@ PATH=/path/to/lz4-1.10/bin:$PATH taskset -c 2 \
   --runs 7 --warmups 1 --csv generated-v1.csv --json generated-v1.json
 ```
 
-The recorded host used this exact command and immutable lz4 store path:
+The recorded host used this exact command and immutable lz4 store path from
+clean commit `3be9a7a2bc60f5ad1a5f5c0209899b8a7546966d`
+(`tracked_dirty=false` in the JSON provenance):
 
 ```sh
-PATH=/gnu/store/25bwzp99xib0855l878dws7rb6yg5zn0-lz4-1.10.0/bin:$PATH taskset -c 2 python3 bench/competitive.py --generated-suite --vv ./vaptvupt --runs 7 --warmups 1 --csv /tmp/vaptvupt-2.65.9-competitive.csv --json /tmp/vaptvupt-2.65.9-competitive.json
+PATH=/gnu/store/25bwzp99xib0855l878dws7rb6yg5zn0-lz4-1.10.0/bin:$PATH taskset -c 2 python3 bench/competitive.py --generated-suite --vv ./vaptvupt --runs 7 --warmups 1 --csv /tmp/vaptvupt-2.65.9-competitive-final.csv --json /tmp/vaptvupt-2.65.9-competitive-final.json
 ```
 
 Separately, a paired pinned **in-process** decoder comparison measured the
