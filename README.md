@@ -5,7 +5,7 @@ wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.65.6. The codec library and CLI are available under
+Version 2.65.7. The codec library and CLI are available under
 GPL-3.0-or-later or, for controlled first-party rights, a separate signed
 commercial agreement. The broader VaptVupt application uses a distinct AGPL
 public option. See `NOTICE`; `LICENSE-COMMERCIAL` is not itself a grant.
@@ -56,10 +56,16 @@ Where each side wins:
   (was ~31 before v2.61.0's default skip acceleration and early-RAW bail);
   zstd-1 does 201, lz4-1 433 on the same 1 MiB random file.
 
-The head-to-head numbers above are current for v2.65.6: valid-stream
-output has been byte-identical since v2.65.0, so every ratio holds, and
-the speeds are a fresh v2.65.6 measurement. Recent releases, newest
-first (full detail in [CHANGELOG.md](CHANGELOG.md)):
+The head-to-head table is a v2.65.6 measurement. v2.65.7 preserves the
+one-shot wire format and adds streaming-path hardening and throughput work;
+its streaming measurements are recorded in [CHANGELOG.md](CHANGELOG.md).
+Recent releases, newest first:
+
+- **v2.65.7** — security and streaming performance: repaired the SEQ
+  safe-zone bound for a combined maximum literal/match sequence, validates
+  the declared 10..24 window, restores streaming `accel=0` auto behavior,
+  and removes quadratic streaming-decode buffer shifts. The test and CI
+  gates now propagate sanitizer, OOM, and fuzz failures.
 
 - **v2.65.6** — documentation refresh: regenerated the head-to-head
   measurement, corrected stale release-artifact version numbers, and
@@ -294,9 +300,10 @@ bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
 
 `make test` runs:
 
-- 20 C suites (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
+- 22 C suites (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
   safe-zone, DoS reproducers, BCJ filter, and more).
-- The Python and JavaScript reference decoders against the C output.
+- The Python reference decoder against the C output, plus the JavaScript
+  reference decoder when a working `node` runtime is available.
 - A differential fuzzer (5200 cases, fixed seed) cross-checking C and Python.
 - A reference-decoder guard that forces default-format (HUFFMAN4)
   blocks and requires both the Python and JavaScript references to

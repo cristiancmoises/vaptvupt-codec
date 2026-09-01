@@ -91,16 +91,16 @@ int main(void) {
     if ((frame[5] & 0x01) == 0x01) PASS();
     else { char m[40]; snprintf(m, sizeof(m), "got 0x%02X", frame[5]); FAIL(m); }
 
-    TEST("FORMAT.md §2: encoder produces zero in flags reserved bits 2-7");
-    if ((frame[5] & 0xFC) == 0) PASS();
+    TEST("FORMAT.md §2: encoder leaves reserved flag bits 1 and 4-7 clear");
+    if ((frame[5] & 0xF2) == 0) PASS();
     else { char m[40]; snprintf(m, sizeof(m), "got 0x%02X", frame[5]); FAIL(m); }
 
     TEST("FORMAT.md §2: mode_hint at offset 6 is 1 (BALANCED)");
     if (frame[6] == 0x01) PASS();
     else { char m[40]; snprintf(m, sizeof(m), "got 0x%02X", frame[6]); FAIL(m); }
 
-    TEST("FORMAT.md §2: window_log at offset 7 is in [10..27]");
-    if (frame[7] >= 10 && frame[7] <= 27) PASS();
+    TEST("FORMAT.md §2: window_log at offset 7 is in [10..24]");
+    if (frame[7] >= 10 && frame[7] <= 24) PASS();
     else { char m[40]; snprintf(m, sizeof(m), "got 0x%02X", frame[7]); FAIL(m); }
 
     TEST("FORMAT.md §2: content_size at offset 8 (LE u64) equals input length");

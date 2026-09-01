@@ -2,6 +2,37 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.7 — Sprint 137: streaming throughput and SEQ decoder hardening
+
+Security and performance maintenance release. The frame format is unchanged;
+valid one-shot output remains compatible with v2.65.6.
+
+- Fixed a SEQ-decoder safe-zone bounds proof: one sequence can write both a
+  65,535-byte literal run and a 65,535-byte match. The fast path now reserves
+  their combined 131,070-byte maximum before eliding checks, uses
+  subtraction-based bounds tests, and avoids out-of-object pointer formation.
+  A permanent exact-capacity/one-byte-short regression runs under sanitizers.
+- The SEQ decoder now uses the actual frame window as its offset bound. Normal
+  wlog-16 streams can reach the guarded fast path after 64 KiB rather than
+  waiting for the 24-bit maximum, while malformed offsets beyond the declared
+  window are rejected.
+- Restored documented automatic skip acceleration for `vv_cstream_*`:
+  `accel=0` means fast=2 and balanced/extreme=1 just as it does for one-shot
+  compression. On the local GCC 14.3 host, 1 MiB streaming chunks of
+  incompressible data improved from 92 to 3,413 MiB/s in fast mode and from
+  35 to 2,323 MiB/s in balanced mode; raw output size is unchanged. A
+  streaming regression asserts automatic and explicit settings are identical
+  before and after reset.
+- Replaced per-block input-buffer `memmove` in streaming decode with a read
+  cursor and compact-on-append strategy, removing quadratic buffer traffic
+  when callers supply multi-block frames in one chunk. Added checked input
+  growth arithmetic.
+- Enforced the supported 10..24 window-log range in encoder, decoder, and
+  frame-info APIs. Corrected the version macros and CLI banner to 2.65.7.
+- Verification now honors supplied sanitizer flags, propagates OOM and fuzzer
+  failures, includes BCJ and the release AVX2 path in libFuzzer builds, and
+  runs CI for `v260-master`.
+
 ## v2.65.6 — Sprint 136: documentation refresh (docs only)
 
 Documentation only; no source, wire-format, or output change (the tree

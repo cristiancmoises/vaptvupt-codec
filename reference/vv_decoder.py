@@ -380,9 +380,8 @@ def decompress_frame(buf, pos):
 
     mode_hint, pos = read_u8(buf, pos)
     window_log, pos = read_u8(buf, pos)
-    # Note: per FORMAT.md §2, window_log SHOULD be in [10..27], but the C
-    # reference decoder does not validate the range — it only branches on
-    # window_log > 16 to choose 2-byte vs 3-byte offsets. Match C behavior.
+    if not 10 <= window_log <= 24:
+        raise CorruptError(f"invalid window_log {window_log} (expected 10..24)")
     off_bytes = 2 if window_log <= 16 else 3
 
     content_size, pos = read_u64(buf, pos)

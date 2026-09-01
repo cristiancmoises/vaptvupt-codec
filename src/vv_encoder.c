@@ -74,6 +74,16 @@ static inline void vv_secure_zero(void *buf, size_t len) {
 #endif
 }
 
+/* accel=0 is the documented automatic setting.  Keep its resolution in one
+ * place so one-shot and streaming encoders cannot silently choose different
+ * parsers for the same options. */
+static inline uint32_t effective_accel(const vv_options_t *opts) {
+    uint32_t accel = opts->accel;
+    if (accel == 0)
+        accel = (opts->mode >= VV_MODE_BALANCED) ? 1u : 2u;
+    return accel > 64 ? 64 : accel;
+}
+
 /* Sprint 117: VV_NO_SANITIZE_INTEGER is provided by include/vv_platform.h. */
 
 /* ═══════════════════════════════════════════════════════════════
@@ -276,6 +286,7 @@ typedef struct {
  * real defect. The fix tolerates allocator failure cleanly. */
 static void matcher_free(matcher_t *m); /* fwd decl for cleanup-on-failure */
 static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
+    if (window_log < 10 || window_log > 24) return 0;
     uint32_t wsz = 1u << window_log;
     /* Initialize ALL pointers to NULL first so matcher_free is safe to
      * call on partial-failure paths. */
@@ -1955,6 +1966,7 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
     }
 
     uint8_t wlog = opts->window_log;
+    if (wlog != 0 && (wlog < 10 || wlog > 24)) return VV_ERR_PARAM;
     uint32_t depth;
     if (wlog == 0) {
         switch (opts->mode) {
@@ -2110,12 +2122,7 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
      * at 8 inside compress_block). This is what turns 1 MB of random
      * bytes from a 24 ns/byte full-parse crawl into a near-memcpy RAW
      * store. Explicit --accel values are honored unchanged. */
-    {
-        uint32_t eff_accel = opts->accel;
-        if (eff_accel == 0)
-            eff_accel = (opts->mode >= VV_MODE_BALANCED) ? 1 : 2;
-        m.accel = eff_accel > 64 ? 64 : eff_accel;
-    }
+    m.accel = effective_accel(opts);
     m.no_rep = opts->no_rep ? 1 : 0;
     /* Format v2 cap applies to EVERY match emitted from this matcher,
      * not just those produced via hash3. Set unconditionally when
@@ -2286,6 +2293,7 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
     /* Resolve window log (fixed for streams — no adaptive probe) */
     uint8_t wlog = ctx->opts.window_log;
     if (wlog == 0) wlog = 16;
+    if (wlog < 10 || wlog > 24) { free(ctx); return NULL; }
     ctx->wlog = wlog;
 
     uint32_t depth;
@@ -2309,7 +2317,7 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
     /* SPRINT 58: single-probe finder for ULTRA_FAST streaming, matching
      * the one-shot fast path. balanced/extreme keep single_probe==0. */
     ctx->m.single_probe = (ctx->opts.mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
-    ctx->m.accel = ctx->opts.accel > 64 ? 64 : ctx->opts.accel;
+    ctx->m.accel = effective_accel(&ctx->opts);
     ctx->m.no_rep = ctx->opts.no_rep ? 1 : 0;
     /* Format v2 matchlen cap applies to every match — set whenever
      * streaming opts has format_v2 on, not just when hash3 fires.
@@ -2388,6 +2396,7 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
      * reallocating the matcher tables — reject the change. */
     if (opts) {
         uint8_t new_wlog = opts->window_log;
+        if (new_wlog != 0 && (new_wlog < 10 || new_wlog > 24)) return VV_ERR_PARAM;
         if (new_wlog == 0) new_wlog = 16;
         if (new_wlog != ctx->wlog) return VV_ERR_PARAM;
         ctx->opts = *opts;
@@ -2409,7 +2418,7 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
     /* SPRINT 58: keep the single-probe flag in sync if the mode changed
      * across reset (e.g. balanced stream reset to fast). */
     ctx->m.single_probe = (ctx->opts.mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
-    ctx->m.accel = ctx->opts.accel > 64 ? 64 : ctx->opts.accel;
+    ctx->m.accel = effective_accel(&ctx->opts);
     ctx->m.no_rep = ctx->opts.no_rep ? 1 : 0;
 
     matcher_reset(&ctx->m);

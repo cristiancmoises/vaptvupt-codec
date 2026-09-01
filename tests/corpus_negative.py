@@ -101,11 +101,11 @@ def gen_corpus(baseline):
 
     # Window log out of range
     bad_wlog_low = bytearray(baseline)
-    bad_wlog_low[7] = 9   # below allowed [10..27]
+    bad_wlog_low[7] = 9   # below allowed [10..24]
     yield 'window_log_9_too_low.vv', bytes(bad_wlog_low)
 
     bad_wlog_high = bytearray(baseline)
-    bad_wlog_high[7] = 28  # above allowed [10..27]
+    bad_wlog_high[7] = 28  # above allowed [10..24]
     yield 'window_log_28_too_high.vv', bytes(bad_wlog_high)
 
     bad_wlog_zero = bytearray(baseline)

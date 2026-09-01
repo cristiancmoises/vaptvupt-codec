@@ -21,10 +21,10 @@ extern "C" {
  * VERSION & CONSTANTS
  * ═══════════════════════════════════════════════════════════════ */
 
-#define VV_VERSION_MAJOR  0
-#define VV_VERSION_MINOR  1
-#define VV_VERSION_PATCH  0
-#define VV_VERSION_STRING "0.1.0"
+#define VV_VERSION_MAJOR  2
+#define VV_VERSION_MINOR  65
+#define VV_VERSION_PATCH  7
+#define VV_VERSION_STRING "2.65.7"
 
 #define VV_MAGIC          0x56560100u  /* "VV\x01\x00" */
 #define VV_MAX_BLOCK_SIZE (1u << 20)   /* 1 MB per block */
@@ -121,7 +121,7 @@ static inline uint32_t vv_bh_pack(vv_block_type_t t, int last, uint32_t sz) {
 typedef struct {
     uint32_t magic;           /* VV_MAGIC */
     uint8_t  version;         /* Format version (1) */
-    uint8_t  flags;           /* bit0: has_checksum, bit1: has_dict,
+    uint8_t  flags;           /* bit0: has_checksum, bit1: reserved,
                                *  bit2: x86 BCJ filter applied,
                                *  bit3: ARM64 BCJ filter applied */
     uint8_t  mode_hint;       /* Compression mode used (informational) */
@@ -185,7 +185,7 @@ typedef struct {
 
 typedef struct {
     vv_mode_t mode;
-    uint8_t   window_log;    /* 0 = auto (20 for balanced, 24 for extreme) */
+    uint8_t   window_log;    /* 0 = auto; explicit values are 10..24 */
     int       checksum;      /* 1 = compute XXH64 */
     int       verbose;
     int       format_v2;     /* 1 = produce 'T' tag blocks (min_match=3) for

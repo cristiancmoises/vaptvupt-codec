@@ -2345,7 +2345,8 @@ static VV_NO_SANITIZE_INTEGER
 vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
                                               uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                               const uint8_t *dst_base,
-                                              const uint32_t *ml_base_tab) {
+                                              const uint32_t *ml_base_tab,
+                                              uint32_t max_offset) {
     const uint8_t *p = src, *end = src + src_len;
 
     /* Read literal section: [4B lit_count] [1B lit_fmt] [4B lit_enc_len] */
@@ -2588,32 +2589,37 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
      * invalid offset or overlong matchlen still triggers the checks
      * near the boundaries. We maintain §4 invariants 3 and 5.
      *
-     * SAFEZONE_MAX_OFFSET covers the legal offset range (1 << wlog_max).
-     * SAFEZONE_MAX_RUN covers BOTH max litlen and max matchlen (both are
+     * max_offset covers the legal offset range declared by the frame header.
+     * SAFEZONE_MAX_RUN covers both max litlen and max matchlen (both are
      * bounded by the wire format at ≤65535: LL encoding ll_base[35]=61440
      * + up to 4095 extra bits = 65535; ML encoding likewise). So
      * op_safe_end = op_end - 65535 guarantees any single sequence's
-     * total writes (literals + match) fit without per-iter overflow
-     * checking.
+     * total writes (literals + match) fit without per-iteration overflow
+     * checking.  A sequence may carry one maximum literal run AND one
+     * maximum match, so its entry margin is twice SAFEZONE_MAX_RUN.
      *
-     * SPRINT 46: raised from 1<<20 to 1<<24. The 3-byte offset wire
-     * encoding (off_bytes==3 for wlog>16) represents offsets up to
-     * exactly 2^24, so that is the true maximum legal offset and the
-     * correct absolute-cap DoS guard. The previous 1<<20 cap assumed
-     * extreme mode never exceeded a 1 MB window; the Sprint 46
-     * large-window scaling emits legitimate offsets up to 16 MB on
-     * multi-block files, which the old cap wrongly rejected as corrupt.
-     * Consequence: for outputs smaller than 16 MB the safe-zone floor
-     * is never reached, so the explicit (offset > op - dst_base) check
-     * runs every iteration — correct, just not the fast path. The
-     * fast-path optimization re-engages only past 16 MB of output.
-     * An offset > 2^24 remains genuinely corrupt (unrepresentable in
-     * 3 bytes) and is still rejected, preserving the DoS guard. */
-    enum { SAFEZONE_MAX_OFFSET = 1u << 24 };  /* 3-byte offset wire max */
+     * The decoder receives max_offset from the frame header. This preserves
+     * the 24-bit ceiling needed by wlog-24 streams while allowing ordinary
+     * wlog-16 streams to enter the safe zone after their real 64 KiB history
+     * requirement, not after 16 MiB. */
     enum { SAFEZONE_MAX_RUN    = 65535 };     /* litlen or matchlen */
-    uint8_t *op_safe_end = (dst_cap > SAFEZONE_MAX_RUN)
-                           ? op_end - SAFEZONE_MAX_RUN : dst;
-    const uint8_t *offset_check_floor = dst_base + SAFEZONE_MAX_OFFSET;
+    enum { SAFEZONE_MAX_SEQ_WRITE = 2 * SAFEZONE_MAX_RUN };
+    if (max_offset == 0 || max_offset > (1u << 24)) return VVA_ERR_CORRUPT;
+    int has_output_safe_zone = dst_cap >= SAFEZONE_MAX_SEQ_WRITE;
+    uint8_t *op_safe_end = has_output_safe_zone
+                           ? op_end - SAFEZONE_MAX_SEQ_WRITE : dst;
+
+    /* Do not form dst_base + max_offset unless it is known to lie inside
+     * this frame's output object.  That pointer arithmetic itself would be
+     * undefined for a short destination, even when the fast path is never
+     * entered. */
+    const uint8_t *offset_check_floor = NULL;
+    size_t history_at_block_start = (size_t)(dst - dst_base);
+    if (history_at_block_start >= max_offset) {
+        offset_check_floor = dst;
+    } else if ((size_t)max_offset - history_at_block_start <= dst_cap) {
+        offset_check_floor = dst + ((size_t)max_offset - history_at_block_start);
+    }
 
     size_t seqs_decoded = 0;
     /* SPRINT 90 SECURITY FIX (DoS hardening):
@@ -2663,7 +2669,8 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
 
         /* Fast path: in safe zone (past warmup, before final max_match
          * bytes). Both bounds checks are tautological and skipped. */
-        int in_safe_zone = (op >= offset_check_floor) & (op <= op_safe_end);
+        int in_safe_zone = has_output_safe_zone && offset_check_floor &&
+                           (op >= offset_check_floor) && (op <= op_safe_end);
 
         /* PERF: state validation via mask-on-access rather than
          * explicit branches. Since ANS_L is a power of 2, masking
@@ -2693,11 +2700,11 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
         uint32_t ll_extra_val = ans_br_read(&r, ll_extra[ll_code]);
         size_t litlen = ll_decode(ll_code, ll_extra_val);
 
-        if (VV_UNLIKELY(lit_pos + litlen > total_lits)) {
+        if (VV_UNLIKELY(litlen > total_lits - lit_pos)) {
             free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
-        if (VV_UNLIKELY(!in_safe_zone && op + litlen > op_end)) {
+        if (VV_UNLIKELY(!in_safe_zone && litlen > (size_t)(op_end - op))) {
             free(lit_buf);
             return VVA_ERR_OVERFLOW;
         }
@@ -2771,20 +2778,19 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
          * offsets beyond any legal window. In-safe-zone skip only
          * removes the position-dependent check (offset > op - dst_base),
          * which is guaranteed tautological when both
-         *    offset ≤ SAFEZONE_MAX_OFFSET   (absolute cap, checked)
-         *    op ≥ dst_base + SAFEZONE_MAX_OFFSET  (safe-zone floor)
-         * The matchlen-overshoot check is similarly safe because
-         * op_safe_end = op_end - SAFEZONE_MAX_MATCH, and matchlen is
-         * always ≤ SAFEZONE_MAX_MATCH by wire format. */
-        if (VV_UNLIKELY(offset == 0 || offset > SAFEZONE_MAX_OFFSET)) {
+         *    offset ≤ max_offset             (absolute cap, checked)
+         *    op has at least max_offset bytes of prior frame history
+         * The matchlen-overshoot check is similarly safe because the
+         * combined literal+match margin remains before op_end. */
+        if (VV_UNLIKELY(offset == 0 || offset > max_offset)) {
             free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
-        if (VV_UNLIKELY(!in_safe_zone && offset > (uint32_t)(op - dst_base))) {
+        if (VV_UNLIKELY(!in_safe_zone && (size_t)offset > (size_t)(op - dst_base))) {
             free(lit_buf);
             return VVA_ERR_CORRUPT;
         }
-        if (VV_UNLIKELY(!in_safe_zone && op + matchlen > op_end)) {
+        if (VV_UNLIKELY(!in_safe_zone && (size_t)matchlen > (size_t)(op_end - op))) {
             free(lit_buf);
             return VVA_ERR_OVERFLOW;
         }
@@ -2881,7 +2887,7 @@ vva_error_t vva_decode_sequences(const uint8_t *src, size_t src_len,
                                   uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                   const uint8_t *dst_base) {
     return vva_decode_sequences_impl(src, src_len, dst, dst_cap, dst_len,
-                                      dst_base, ml_base);
+                                     dst_base, ml_base, 1u << 24);
 }
 
 /* Public entry for 'T' tag (VV_ENTROPY_SEQ_V2, min_match=3).
@@ -2891,5 +2897,19 @@ vva_error_t vva_decode_sequences_v2(const uint8_t *src, size_t src_len,
                                      uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                      const uint8_t *dst_base) {
     return vva_decode_sequences_impl(src, src_len, dst, dst_cap, dst_len,
-                                      dst_base, ml_base_v2);
+                                     dst_base, ml_base_v2, 1u << 24);
+}
+
+vva_error_t vva_decode_sequences_limited(const uint8_t *src, size_t src_len,
+                                          uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                          const uint8_t *dst_base, uint32_t max_offset) {
+    return vva_decode_sequences_impl(src, src_len, dst, dst_cap, dst_len,
+                                     dst_base, ml_base, max_offset);
+}
+
+vva_error_t vva_decode_sequences_v2_limited(const uint8_t *src, size_t src_len,
+                                             uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                             const uint8_t *dst_base, uint32_t max_offset) {
+    return vva_decode_sequences_impl(src, src_len, dst, dst_cap, dst_len,
+                                     dst_base, ml_base_v2, max_offset);
 }

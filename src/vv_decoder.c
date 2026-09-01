@@ -654,6 +654,19 @@ static vv_error_t decode_block_ctx(
     return err;
 }
 
+/* A frame's window header is a decoding invariant, not a hint. Keeping its
+ * exact bound lets the SEQ decoder enter its proven fast zone after the
+ * advertised history distance instead of always waiting for 16 MiB. */
+static int frame_max_offset(uint8_t window_log, uint32_t *max_offset) {
+    uint32_t limit;
+    if (window_log < 10 || window_log > 24) return 0;
+    limit = (window_log == 24) ? 0xFFFFFFu : (1u << window_log);
+    if (limit > 0xFFFFFFu) limit = 0xFFFFFFu;
+    if (window_log <= 16 && limit > 0xFFFFu) limit = 0xFFFFu;
+    *max_offset = limit;
+    return 1;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * PUBLIC API: DECOMPRESS
  * ═══════════════════════════════════════════════════════════════ */
@@ -686,6 +699,9 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
 
         if (fh.magic != VV_MAGIC) return VV_ERR_BAD_MAGIC;
         if (fh.version != 1) return VV_ERR_CORRUPT;
+
+        uint32_t max_offset;
+        if (!frame_max_offset(fh.window_log, &max_offset)) return VV_ERR_CORRUPT;
 
         int has_checksum = (fh.flags & 1);
         int off_bytes = (fh.window_log > 16) ? 3 : 2;
@@ -744,12 +760,14 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
                 } else if (tag == VV_ENTROPY_CTX) {
                     err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start);
                 } else if (tag == VV_ENTROPY_SEQ) {
-                    err = vva_decode_sequences(bdata, bdata_len, op, dsz, &actual, frame_out_start);
+                    err = vva_decode_sequences_limited(bdata, bdata_len, op, dsz, &actual,
+                                                       frame_out_start, max_offset);
                     if (err != VV_OK) err = VV_ERR_CORRUPT;
                 } else if (tag == VV_ENTROPY_SEQ_V2) {
                     /* 'T' tag: sequence coding with min_match=3. Wire
                      * payload identical to 'S', only ml_base differs. */
-                    err = vva_decode_sequences_v2(bdata, bdata_len, op, dsz, &actual, frame_out_start);
+                    err = vva_decode_sequences_v2_limited(bdata, bdata_len, op, dsz, &actual,
+                                                          frame_out_start, max_offset);
                     if (err != VV_OK) err = VV_ERR_CORRUPT;
                 } else if (tag == VV_ENTROPY_HUFFMAN) {
                     err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start);
@@ -837,7 +855,10 @@ struct vv_dstream_s {
     /* Input-side buffer for incomplete blocks/headers */
     uint8_t *in_buf;
     size_t   in_cap;
+    size_t   in_pos;  /* first unread byte in in_buf */
     size_t   in_len;
+
+    uint32_t max_offset;
 
     /* Output position tracking (for checksum and bookkeeping) */
     size_t   output_pos;
@@ -870,6 +891,8 @@ int vv_dstream_reset(vv_dstream_t *ctx) {
     ctx->state = VV_DSTREAM_HEADER;
     ctx->has_checksum = 0;
     ctx->off_bytes = 0;
+    ctx->max_offset = 0;
+    ctx->in_pos = 0;
     ctx->in_len = 0;
     ctx->output_pos = 0;
     ctx->dst_base_saved = NULL;
@@ -882,7 +905,13 @@ int vv_dstream_reset(vv_dstream_t *ctx) {
 static int dstream_reserve(vv_dstream_t *ctx, size_t need) {
     if (need <= ctx->in_cap) return 0;
     size_t new_cap = ctx->in_cap;
-    while (new_cap < need) new_cap *= 2;
+    while (new_cap < need) {
+        if (new_cap > SIZE_MAX / 2) {
+            new_cap = need;
+            break;
+        }
+        new_cap *= 2;
+    }
     uint8_t *new_buf = (uint8_t *)realloc(ctx->in_buf, new_cap);
     if (!new_buf) return -1;
     ctx->in_buf = new_buf;
@@ -892,17 +921,30 @@ static int dstream_reserve(vv_dstream_t *ctx, size_t need) {
 
 /* Append bytes to input buffer */
 static int dstream_append(vv_dstream_t *ctx, const uint8_t *src, size_t src_len) {
-    if (dstream_reserve(ctx, ctx->in_len + src_len) != 0) return -1;
-    memcpy(ctx->in_buf + ctx->in_len, src, src_len);
+    if (src_len > SIZE_MAX - ctx->in_len) return -1;
+
+    /* Compact at most once per append, rather than after every decoded
+     * block. This avoids quadratic memory traffic for large input chunks. */
+    if (ctx->in_pos > 0 && src_len > ctx->in_cap - (ctx->in_pos + ctx->in_len)) {
+        memmove(ctx->in_buf, ctx->in_buf + ctx->in_pos, ctx->in_len);
+        ctx->in_pos = 0;
+    }
+    if (src_len > ctx->in_cap - (ctx->in_pos + ctx->in_len)) {
+        if (dstream_reserve(ctx, ctx->in_len + src_len) != 0) return -1;
+    }
+    memcpy(ctx->in_buf + ctx->in_pos + ctx->in_len, src, src_len);
     ctx->in_len += src_len;
     return 0;
 }
 
 /* Consume first n bytes from input buffer */
 static void dstream_consume(vv_dstream_t *ctx, size_t n) {
-    if (n >= ctx->in_len) ctx->in_len = 0;
+    if (n >= ctx->in_len) {
+        ctx->in_pos = 0;
+        ctx->in_len = 0;
+    }
     else {
-        memmove(ctx->in_buf, ctx->in_buf + n, ctx->in_len - n);
+        ctx->in_pos += n;
         ctx->in_len -= n;
     }
 }
@@ -936,9 +978,12 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
     for (;;) {
         if (ctx->state == VV_DSTREAM_HEADER) {
             if (ctx->in_len < sizeof(vv_frame_header_t)) { *written = ctx->output_pos; return VV_OK; }
-            memcpy(&ctx->fh, ctx->in_buf, sizeof(vv_frame_header_t));
+            memcpy(&ctx->fh, ctx->in_buf + ctx->in_pos, sizeof(vv_frame_header_t));
             if (ctx->fh.magic != VV_MAGIC) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_BAD_MAGIC; }
             if (ctx->fh.version != 1) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT; }
+            if (!frame_max_offset(ctx->fh.window_log, &ctx->max_offset)) {
+                ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT;
+            }
             ctx->has_checksum = (ctx->fh.flags & 1);
             ctx->off_bytes = (ctx->fh.window_log > 16) ? 3 : 2;
             dstream_consume(ctx, sizeof(vv_frame_header_t));
@@ -950,7 +995,8 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
             if (ctx->in_len < 4) { *written = ctx->output_pos; return VV_OK; }
 
             uint32_t bh_packed;
-            memcpy(&bh_packed, ctx->in_buf, 4);
+            const uint8_t *in = ctx->in_buf + ctx->in_pos;
+            memcpy(&bh_packed, in, 4);
             vv_block_type_t btype = vv_bh_type(bh_packed);
             int is_last = vv_bh_last(bh_packed);
             uint32_t dsz = vv_bh_size(bh_packed);
@@ -968,7 +1014,7 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
                 block_data_sz = 1;
             } else if (btype == VV_BLOCK_COMPRESSED || btype == VV_BLOCK_ENTROPY) {
                 if (ctx->in_len < block_header_sz + 3) { *written = ctx->output_pos; return VV_OK; }
-                const uint8_t *p = ctx->in_buf + block_header_sz;
+                const uint8_t *p = in + block_header_sz;
                 uint32_t csz = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
                 block_data_sz = 3 + csz;
             } else {
@@ -979,7 +1025,7 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
             if (ctx->in_len < total_block_sz) { *written = ctx->output_pos; return VV_OK; }
 
             /* Decode the block — decoder uses dst_base for match resolution */
-            const uint8_t *p = ctx->in_buf + block_header_sz;
+            const uint8_t *p = in + block_header_sz;
             if (btype == VV_BLOCK_RAW) {
                 memcpy(op, p, dsz);
             } else if (btype == VV_BLOCK_RLE) {
@@ -1010,10 +1056,12 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
                 } else if (tag == VV_ENTROPY_CTX) {
                     err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved);
                 } else if (tag == VV_ENTROPY_SEQ) {
-                    err = vva_decode_sequences(bdata, bdata_len, op, dsz, &actual, ctx->dst_base_saved);
+                    err = vva_decode_sequences_limited(bdata, bdata_len, op, dsz, &actual,
+                                                       ctx->dst_base_saved, ctx->max_offset);
                     if (err != VV_OK) err = VV_ERR_CORRUPT;
                 } else if (tag == VV_ENTROPY_SEQ_V2) {
-                    err = vva_decode_sequences_v2(bdata, bdata_len, op, dsz, &actual, ctx->dst_base_saved);
+                    err = vva_decode_sequences_v2_limited(bdata, bdata_len, op, dsz, &actual,
+                                                          ctx->dst_base_saved, ctx->max_offset);
                     if (err != VV_OK) err = VV_ERR_CORRUPT;
                 } else if (tag == VV_ENTROPY_HUFFMAN) {
                     err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved);
@@ -1040,7 +1088,7 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
         if (ctx->state == VV_DSTREAM_FOOTER) {
             if (ctx->in_len < sizeof(vv_frame_footer_t)) { *written = ctx->output_pos; return VV_OK; }
             vv_frame_footer_t ff;
-            memcpy(&ff, ctx->in_buf, sizeof(ff));
+            memcpy(&ff, ctx->in_buf + ctx->in_pos, sizeof(ff));
             if (ff.footer_magic != 0x56564E44u) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT; }
             uint64_t computed = vv_xxh64_finalize(&ctx->cks);
             if (computed != ff.checksum) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT; }

@@ -210,6 +210,56 @@ static int test_streaming_full(size_t n, size_t enc_chunk, size_t dec_chunk, vv_
     PASS(); return 1;
 }
 
+/* accel=0 is the public automatic setting.  Streaming must resolve it exactly
+ * as one-shot does (fast=2, balanced/extreme=1), including after reset. */
+static int test_stream_auto_accel(vv_mode_t mode, const char *name) {
+    enum { N = 2 * 1024 * 1024, CHUNK = 1024 * 1024 };
+    TEST(name);
+    uint8_t *src = malloc(N);
+    size_t cap = vv_compress_bound(N) + 4096;
+    uint8_t *automatic = malloc(cap), *explicit_auto = malloc(cap), *again = malloc(cap);
+    if (!src || !automatic || !explicit_auto || !again) {
+        free(src); free(automatic); free(explicit_auto); free(again); FAIL("allocation"); return 0;
+    }
+    gen_compressible(src, N, (uint32_t)(900 + mode));
+    vv_options_t opts; vv_default_options(&opts); opts.mode = mode;
+    vv_cstream_t *c = vv_cstream_create(&opts);
+    if (!c) { free(src); free(automatic); free(explicit_auto); free(again); FAIL("create automatic"); return 0; }
+
+    size_t lens[3] = {0, 0, 0};
+    uint8_t *outs[3] = {automatic, explicit_auto, again};
+    for (int pass = 0; pass < 3; pass++) {
+        if (pass == 1) {
+            opts.accel = (mode >= VV_MODE_BALANCED) ? 1 : 2;
+            if (vv_cstream_reset(c, &opts) != VV_OK) break;
+        } else if (pass == 2 && vv_cstream_reset(c, NULL) != VV_OK) {
+            break;
+        }
+        size_t total = 0;
+        for (size_t pos = 0; pos < N; pos += CHUNK) {
+            size_t w = 0;
+            int last = pos + CHUNK == N;
+            if (vv_cstream_compress_chunk(c, src + pos, CHUNK, outs[pass] + total,
+                                           cap - total, &w, last) != VV_OK) break;
+            total += w;
+        }
+        lens[pass] = total;
+    }
+    vv_cstream_destroy(c);
+    int ok = lens[0] > 0 && lens[0] == lens[1] && lens[0] == lens[2] &&
+             memcmp(automatic, explicit_auto, lens[0]) == 0 &&
+             memcmp(automatic, again, lens[0]) == 0;
+    if (ok) {
+        uint8_t *decoded = malloc(N);
+        int64_t dlen = decoded ? vv_decompress(automatic, lens[0], decoded, N) : VV_ERR_NOMEM;
+        ok = dlen == N && memcmp(src, decoded, N) == 0;
+        free(decoded);
+    }
+    free(src); free(automatic); free(explicit_auto); free(again);
+    if (ok) PASS(); else FAIL("automatic acceleration diverged");
+    return ok;
+}
+
 int main(void) {
     fprintf(stderr, "\n═══ VaptVupt streaming tests ═══\n");
 
@@ -221,12 +271,16 @@ int main(void) {
     test_streaming_compress(1000000, 65536,    VV_MODE_BALANCED,   "stream-enc 1MB chunk=64K balanced");
     test_streaming_compress(3000000, 1048576,  VV_MODE_BALANCED,   "stream-enc 3MB chunk=1M balanced");
     test_streaming_compress(100000,  4096,     VV_MODE_ULTRA_FAST, "stream-enc 100KB chunk=4K fast");
+    test_stream_auto_accel(VV_MODE_ULTRA_FAST, "stream-enc auto accel fast equals explicit + reset");
+    test_stream_auto_accel(VV_MODE_BALANCED, "stream-enc auto accel balanced equals explicit + reset");
+    test_stream_auto_accel(VV_MODE_EXTREME, "stream-enc auto accel extreme equals explicit + reset");
 
     /* One-shot compress → streaming decompress */
     test_streaming_decompress(1000,    1,       VV_MODE_BALANCED, "stream-dec 1KB chunk=1 balanced");
     test_streaming_decompress(100000,  100,     VV_MODE_BALANCED, "stream-dec 100KB chunk=100 balanced");
     test_streaming_decompress(1000000, 4096,    VV_MODE_BALANCED, "stream-dec 1MB chunk=4K balanced");
     test_streaming_decompress(3000000, 1048576, VV_MODE_BALANCED, "stream-dec 3MB chunk=1M balanced");
+    test_streaming_decompress(3000000, 3000000, VV_MODE_BALANCED, "stream-dec 3MB whole-frame buffer balanced");
 
     /* Full streaming loop: varied chunk pairs */
     test_streaming_full(100000, 4096,    4096,    VV_MODE_BALANCED,   1, "full stream 100KB enc=dec=4K balanced+cks");
@@ -338,6 +392,19 @@ int main(void) {
         int r = vv_get_frame_info(bad, sizeof(bad), &info);
         if (r != VV_ERR_BAD_MAGIC) FAIL("should reject bad magic");
         else PASS();
+    }
+
+    {
+        TEST("frame window_log outside 10..24 is rejected");
+        uint8_t buf[1024]; gen_compressible(buf, sizeof(buf), 3);
+        uint8_t comp[1400], out[1024];
+        vv_options_t opts; vv_default_options(&opts);
+        int64_t csz = vv_compress(buf, sizeof(buf), comp, sizeof(comp), &opts);
+        comp[7] = 25; /* packed frame-header window_log byte */
+        vv_frame_info_t info;
+        int ok = csz > 0 && vv_get_frame_info(comp, (size_t)csz, &info) == VV_ERR_CORRUPT &&
+                 vv_decompress(comp, (size_t)csz, out, sizeof(out)) == VV_ERR_CORRUPT;
+        if (ok) PASS(); else FAIL("invalid window log accepted");
     }
 
     {

@@ -178,7 +178,7 @@ def gen_valid_header_garbage_body(rng):
                           1,  # version
                           flags,
                           rng.randrange(3),    # mode_hint
-                          rng.randrange(10, 28),  # window_log
+                          rng.randrange(10, 25),  # window_log
                           rng.randrange(0, 100000))  # content_size
     body_len = rng.randrange(0, 257)
     body = bytes(rng.randrange(256) for _ in range(body_len))

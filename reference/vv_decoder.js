@@ -1102,6 +1102,9 @@
 
         pos += 1; // mode_hint (informational)
         const windowLog = buf[pos]; pos += 1;
+        if (windowLog < 10 || windowLog > 24) {
+            throw new CorruptError(`invalid window_log ${windowLog} (expected 10..24)`);
+        }
         const offBytes = windowLog <= 16 ? 2 : 3;
 
         const contentSize = readU64LE(buf, pos); pos += 8;

@@ -134,6 +134,17 @@ vva_error_t vva_decode_sequences_v2(const uint8_t *src, size_t src_len,
                                      uint8_t *dst, size_t dst_cap, size_t *dst_len,
                                      const uint8_t *dst_base);
 
+/* Internal decoder entry points used by the frame decoder.  The wire header
+ * bounds offsets more tightly than the 24-bit maximum for normal windows;
+ * passing that bound lets the SEQ safe path activate without weakening its
+ * proof.  Public compatibility wrappers above retain the 24-bit limit. */
+vva_error_t vva_decode_sequences_limited(const uint8_t *src, size_t src_len,
+                                          uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                          const uint8_t *dst_base, uint32_t max_offset);
+vva_error_t vva_decode_sequences_v2_limited(const uint8_t *src, size_t src_len,
+                                             uint8_t *dst, size_t dst_cap, size_t *dst_len,
+                                             const uint8_t *dst_base, uint32_t max_offset);
+
 static inline size_t vva_bound(size_t src_len) {
     /* Context model header can be up to ~10KB, seq coding adds 3 table headers */
     return 12288 + (src_len * 15 + 7) / 8 + 16;

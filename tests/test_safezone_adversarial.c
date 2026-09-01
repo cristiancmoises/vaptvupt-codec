@@ -4,7 +4,7 @@
  * vva_decode_sequences_impl. The safe zone skips per-iteration
  * bounds checks when:
  *   op >= dst_base + SAFEZONE_MAX_OFFSET (= 16 MB, 1<<24 since Sprint 46)
- *   op <= op_end - SAFEZONE_MAX_RUN (= op_end - 65535)
+ *   op <= op_end - 2*SAFEZONE_MAX_RUN (= op_end - 131070)
  *
  * These tests construct adversarial frames that attempt to trigger
  * OOB access by:
@@ -20,6 +20,7 @@
  */
 
 #include "vaptvupt.h"
+#include "vv_ans.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -291,6 +292,56 @@ static void test_safezone_fastpath_engaged(void) {
     free(dec); free(cmp); free(src);
 }
 
+/* Test 10: one SEQ entry can contain BOTH a 65535-byte literal run and a
+ * 65535-byte match.  The old fast-zone proof reserved room for only one of
+ * them, then reused its stale pre-literal result for the match check.  Place
+ * this synthetic block after enough prior output to enter a small (1 KiB)
+ * advertised safe zone: exact capacity must succeed, one byte less must
+ * fail cleanly.  Under ASan the old implementation writes one byte past the
+ * short destination. */
+static void test_combined_run_safezone_margin(void) {
+    enum { LITLEN = 65535, MATCHLEN = 65535, OUTLEN = LITLEN + MATCHLEN };
+    const size_t ext_ll = LITLEN - 15;
+    const size_t ext_ml = MATCHLEN - 15 - VV_MIN_MATCH;
+    const size_t tok_len = 1 + (ext_ll / 255 + 1) + LITLEN + 2 +
+                           (ext_ml / 255 + 1);
+    uint8_t *tokens = malloc(tok_len);
+    uint8_t *payload = malloc(vva_bound(tok_len));
+    uint8_t *base = malloc(1024 + OUTLEN);
+    size_t payload_len = 0, at = 0, out_len = 0;
+    if (!tokens || !payload || !base) {
+        CHECK(0, "allocate combined-run safe-zone fixture");
+        free(tokens); free(payload); free(base); return;
+    }
+
+    tokens[at++] = 0xff; /* litlen=15 + extension, matchlen=15 + extension */
+    for (size_t n = ext_ll; n >= 255; n -= 255) tokens[at++] = 255;
+    tokens[at++] = (uint8_t)(ext_ll % 255);
+    memset(tokens + at, 'L', LITLEN); at += LITLEN;
+    tokens[at++] = 1; tokens[at++] = 0; /* offset 1 */
+    for (size_t n = ext_ml; n >= 255; n -= 255) tokens[at++] = 255;
+    tokens[at++] = (uint8_t)(ext_ml % 255);
+    CHECK(at == tok_len, "construct combined-run token stream");
+
+    vva_error_t enc = vva_encode_sequences(tokens, tok_len, payload,
+                                            vva_bound(tok_len), &payload_len, 2);
+    CHECK(enc == VVA_OK && payload_len > 0, "encode combined-run SEQ payload");
+    memset(base, 'P', 1024 + OUTLEN);
+    if (enc == VVA_OK) {
+        vva_error_t dec = vva_decode_sequences_limited(payload, payload_len,
+                                                        base + 1024, OUTLEN, &out_len,
+                                                        base, 1024);
+        CHECK(dec == VVA_OK && out_len == OUTLEN,
+              "exact combined-run capacity succeeds in safe zone");
+        dec = vva_decode_sequences_limited(payload, payload_len,
+                                           base + 1024, OUTLEN - 1, &out_len,
+                                           base, 1024);
+        CHECK(dec == VVA_ERR_OVERFLOW,
+              "short combined-run capacity is rejected before match copy");
+    }
+    free(tokens); free(payload); free(base);
+}
+
 int main(void) {
     printf("=== SAFEZONE ADVERSARIAL TESTS (v2.40.0) ===\n");
     test_small_buffer_no_safezone();
@@ -302,6 +353,7 @@ int main(void) {
     test_repeated_compression();
     test_v2_large_output();
     test_safezone_fastpath_engaged();
+    test_combined_run_safezone_margin();
     printf("\nResults: %d passed, %d failed\n", passed, failures);
     return failures;
 }

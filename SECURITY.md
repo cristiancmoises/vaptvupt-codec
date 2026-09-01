@@ -1,10 +1,30 @@
 # VaptVupt Security Posture
 
-**Document version**: 2.11 (v2.65.6)
-**Codebase audited**: v2.65.6
+**Document version**: 2.12 (v2.65.7)
+**Codebase audited**: v2.65.7
 **License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
+
+---
+
+## v2.65.7 security delta
+
+Sprint 137 repaired the SEQ decoder's fast-zone invariant. A single sequence
+can contain up to 65,535 literals followed by a 65,535-byte match; the old
+entry margin covered only one run. The decoder now reserves the combined
+131,070-byte maximum before eliding checks, performs remaining-space tests
+without constructing out-of-range pointers, and has a permanent
+exact-capacity/one-byte-short regression test. Frame `window_log` is now
+validated in the 10..24 range and becomes the actual maximum accepted SEQ
+offset, preventing malformed streams from claiming a smaller window while
+using a larger history distance.
+
+Verification infrastructure is also hardened: sanitizer flags are no longer
+silently overwritten, allocation-fault crashes fail the OOM sweep, fuzzer
+crashes fail their target, and BCJ plus the release AVX2 decoder path are part
+of libFuzzer builds. These changes improve assurance; they are not a claim
+that unavailable tools were run on every host.
 
 ---
 

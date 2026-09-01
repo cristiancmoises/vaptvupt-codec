@@ -1,7 +1,7 @@
 # VaptVupt Formal Audit Document
 
-**Document version**: 1.1
-**Codebase audited**: v2.53.4
+**Document version**: 1.2
+**Codebase audited**: v2.65.7
 **License**: GPL-3.0-or-later
 **Intended deployment**: Embedded codec library inside the VaptVupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
 
@@ -13,6 +13,12 @@ This document is the formal audit reference for VaptVupt. It specifies what has 
 - Independent third-party security auditors performing pre-integration review
 
 It is intentionally specific about what is **not** verified, to support honest risk assessment.
+
+> **Currency note (v2.65.7):** historical sprint references below record the
+> original evidence and tool availability. Sprint 137 added the SEQ
+> combined-run safe-zone regression, frame-window validation, and repaired
+> sanitizer/OOM/fuzzer gate propagation. Re-run the commands on the target
+> toolchain before treating historical results as current certification.
 
 ---
 

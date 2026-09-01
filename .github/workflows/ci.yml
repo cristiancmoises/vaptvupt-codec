@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, v260-master]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, v260-master]
   workflow_dispatch:
 
 jobs:
@@ -64,15 +64,18 @@ jobs:
         uses: actions/checkout@v4
       - name: Build with ASan + UBSan
         env:
-          CC: clang
           CFLAGS: "-Wall -Wextra -Werror -Wno-unused-parameter -O1 -g -std=c11 -Iinclude -D_POSIX_C_SOURCE=199309L -fsanitize=address,undefined -fno-omit-frame-pointer"
           LDFLAGS: "-fsanitize=address,undefined"
-        run: make
+        # Pass the flags explicitly so the sanitizer configuration is visible
+        # in the build invocation as well as the environment.
+        run: make CC=clang CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"
       - name: Run tests under sanitizers
         env:
+          CFLAGS: "-Wall -Wextra -Werror -Wno-unused-parameter -O1 -g -std=c11 -Iinclude -D_POSIX_C_SOURCE=199309L -fsanitize=address,undefined -fno-omit-frame-pointer"
+          LDFLAGS: "-fsanitize=address,undefined"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
           ASAN_OPTIONS: "halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
-        run: make test
+        run: make CC=clang CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" test
 
   # ─── Wire-format regression gate ────────────────────────────────────
   # The compressed output for the Silesia fixtures is checked against
@@ -100,10 +103,11 @@ jobs:
       - name: Verify byte-identical compressed sizes (smoke)
         # If the fixtures couldn't be downloaded, skip with a pass — the
         # check is best-effort against the network. The wire-format
-        # invariant is also covered by tests/test_main.c's roundtrip suite.
+        # invariant is also covered by tests/bench_gate.py's byte-exact
+        # baseline gate.
         run: |
           if [ ! -f /tmp/silesia/dickens ]; then
-            echo "Silesia fixtures unavailable; skipping wire-format check (covered by test suite)."
+            echo "Silesia fixtures unavailable; skipping wire-format check (covered by bench_gate.py)."
             exit 0
           fi
           # fast/balanced sizes are pinned and FROZEN — these modes have

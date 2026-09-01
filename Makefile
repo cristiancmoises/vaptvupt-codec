@@ -3,7 +3,9 @@
 # Test:  make test        (runs both test suites)
 # Bench: make bench
 
-CC       ?= gcc
+ifeq ($(origin CC), default)
+CC := gcc
+endif
 # SPRINT 26 (v2.48.6): default to -O3 -flto.
 # Measured decode speedup on Silesia: dickens +23%, xml +11%, sao +12%,
 # x-ray +15% (best of 7 runs each, gcc 13.3, x86_64). Encode -m fast
@@ -14,8 +16,12 @@ CC       ?= gcc
 #   make clean && make perf
 # which adds -march=native. Native binaries are NOT portable across
 # CPU generations; the default -O3 -flto build is.
-CFLAGS   = -Wall -Wextra -Werror -Wno-unused-parameter -O3 -flto -std=c11 -Iinclude -D_POSIX_C_SOURCE=199309L
-LDFLAGS  = -flto
+ifneq ($(filter undefined default,$(origin CFLAGS)),)
+CFLAGS = -Wall -Wextra -Werror -Wno-unused-parameter -O3 -flto -std=c11 -Iinclude -D_POSIX_C_SOURCE=199309L
+endif
+ifneq ($(filter undefined default,$(origin LDFLAGS)),)
+LDFLAGS = -flto
+endif
 
 # Optional: multi-threaded encoding support.
 #   make ENABLE_THREADS=1
@@ -382,25 +388,32 @@ FUZZ_CFLAGS = -O1 -g -Wall -Wno-unused-parameter \
               -Iinclude -D_POSIX_C_SOURCE=199309L
 
 FUZZ_CORE   = src/vv_decoder.c src/vv_encoder.c src/vv_xxh64.c \
-              src/vv_huffman.c src/vv_ans.c src/vaptvupt_api.c
+              src/vv_huffman.c src/vv_ans.c src/vv_bcj.c src/vaptvupt_api.c
 FUZZ_SIMD_O = build_obj/vv_simd_fuzz.o
+
+# Match the release decoder path on x86-64. The default build already uses
+# AVX2 for vv_decoder.c, so fuzzing a scalar-only decoder leaves coverage gaps.
+FUZZ_ARCH_FLAGS :=
+ifeq ($(ARCH),x86_64)
+FUZZ_ARCH_FLAGS := -mavx2
+endif
 
 build_obj/vv_simd_fuzz.o: src/vv_simd.c
 	@command -v clang >/dev/null 2>&1 || { echo "fuzz: clang required"; exit 1; }
 	@mkdir -p build_obj
-	clang -O1 -g -Wall -Wno-unused-parameter -msse4.2 -fPIC -Iinclude -c $< -o $@
+	clang -O1 -g -Wall -Wno-unused-parameter $(FUZZ_ARCH_FLAGS) -fPIC -Iinclude -c $< -o $@
 
 build_obj/fuzz_decompress: tests/fuzz/fuzz_decompress.c $(FUZZ_SIMD_O)
 	@mkdir -p build_obj
-	clang $(FUZZ_CFLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
+	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
 
 build_obj/fuzz_dstream: tests/fuzz/fuzz_dstream.c $(FUZZ_SIMD_O)
 	@mkdir -p build_obj
-	clang $(FUZZ_CFLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
+	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
 
 build_obj/fuzz_roundtrip: tests/fuzz/fuzz_roundtrip.c $(FUZZ_SIMD_O)
 	@mkdir -p build_obj
-	clang $(FUZZ_CFLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
+	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
 
 fuzz-libfuzzer: build_obj/fuzz_decompress build_obj/fuzz_dstream build_obj/fuzz_roundtrip
 
@@ -408,11 +421,14 @@ test-fuzz: fuzz-libfuzzer
 	@command -v clang >/dev/null 2>&1 || { echo "test-fuzz: skipped (clang required)"; exit 0; }
 	@mkdir -p build_obj/corpus_decompress build_obj/corpus_dstream build_obj/corpus_roundtrip
 	@echo "[fuzz_decompress] 30s smoke"
-	@build_obj/fuzz_decompress -max_total_time=30 -print_final_stats=0 build_obj/corpus_decompress 2>&1 | grep -E "Done|crash" || true
+	@build_obj/fuzz_decompress -max_total_time=30 -print_final_stats=0 build_obj/corpus_decompress >build_obj/fuzz_decompress.log 2>&1; rc=$$?; \
+	grep -E "Done|crash" build_obj/fuzz_decompress.log || true; test $$rc -eq 0
 	@echo "[fuzz_dstream] 30s smoke"
-	@build_obj/fuzz_dstream    -max_total_time=30 -print_final_stats=0 build_obj/corpus_dstream    2>&1 | grep -E "Done|crash" || true
+	@build_obj/fuzz_dstream    -max_total_time=30 -print_final_stats=0 build_obj/corpus_dstream >build_obj/fuzz_dstream.log 2>&1; rc=$$?; \
+	grep -E "Done|crash" build_obj/fuzz_dstream.log || true; test $$rc -eq 0
 	@echo "[fuzz_roundtrip] 30s smoke"
-	@build_obj/fuzz_roundtrip  -max_total_time=30 -print_final_stats=0 build_obj/corpus_roundtrip  2>&1 | grep -E "Done|crash" || true
+	@build_obj/fuzz_roundtrip  -max_total_time=30 -print_final_stats=0 build_obj/corpus_roundtrip >build_obj/fuzz_roundtrip.log 2>&1; rc=$$?; \
+	grep -E "Done|crash" build_obj/fuzz_roundtrip.log || true; test $$rc -eq 0
 
 fuzz-clean:
 	rm -f build_obj/fuzz_decompress build_obj/fuzz_dstream build_obj/fuzz_roundtrip

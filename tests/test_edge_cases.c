@@ -292,7 +292,7 @@ static void test_null_parameters(void) {
      * opts and fall back to vv_default_options. */
     int64_t csz = vv_compress(buf, sizeof(buf), out, sizeof(out), NULL);
     if (csz > 0) PASS();
-    else { char m[40]; snprintf(m, sizeof(m), "got %lld (expected success)", (long long)csz); FAIL(m); }
+    else { char m[64]; snprintf(m, sizeof(m), "got %lld (expected success)", (long long)csz); FAIL(m); }
 
     TEST("vv_decompress: NULL src returns error");
     r = vv_decompress(NULL, 100, out, sizeof(out));

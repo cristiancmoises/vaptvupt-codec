@@ -14,7 +14,7 @@ Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
 
 ## Five integration points
 
-1. **Link against the amalgamation.** `make amalgamation` emits
+1. **Link against the amalgamation.** `make amalg` emits
    `build/vaptvupt.c` + `build/vaptvupt.h` — a single translation unit, no
    Makefile wiring required. Compile `build/vaptvupt.c` with `-mavx2` (or your
    target's SIMD flag) and include `build/vaptvupt.h`.
@@ -57,11 +57,11 @@ opts.checksum = 0;                  /* outer AEAD authenticates the bytes   */
 /* opts.filter_auto = 1; */         /* optional: auto x86/ARM64 BCJ on ELF  */
 
 int64_t n = vv_compress(src, src_len, dst, dst_cap, &opts);
-if (n < 0) { /* handle VV_ERR_*; insufficient dst is VV_ERR_DST_TOO_SMALL */ }
+if (n < 0) { /* handle VV_ERR_*; insufficient dst is VV_ERR_OVERFLOW */ }
 
 /* Decode (untrusted input) */
-int64_t m = vv_decompress_ex(comp, comp_len, out, out_cap,
-                             VV_DECOMPRESS_SKIP_CHECKSUM);
+int64_t m = vv_decompress_flags(comp, comp_len, out, out_cap,
+                                VV_DECOMPRESS_SKIP_CHECKSUM);
 if (m < 0) { /* any negative return: reject this frame, do not recover */ }
 ```
 
@@ -73,7 +73,7 @@ crash (see below).
 
 ## Build targets
 
-- `make amalgamation` — single-file `build/vaptvupt.{c,h}` for drop-in embedding.
+- `make amalg` — single-file `build/vaptvupt.{c,h}` for drop-in embedding.
 - `make` — the `vaptvupt` CLI and the static library pieces, `-Wall -Wextra -Werror`.
 - `make test` — full suite (C suites, reference decoders, differential fuzzer,
   negative corpus, ratio gate, OOM sweep). Allow >= 850 s.
@@ -82,7 +82,7 @@ crash (see below).
   `frama-c-base` + `z3`).
 
 If you vendor `src/` directly instead of the amalgamation, run
-`make amalgamation-check` in CI: it rebuilds the amalgamation and fails if it
+`make amalg-verify` in CI: it rebuilds the amalgamation and fails if it
 has drifted from `src/`, so a security fix in `src/` cannot silently miss the
 embedded copy.
 

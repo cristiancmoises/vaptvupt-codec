@@ -52,6 +52,7 @@ int vv_get_frame_info(const uint8_t *src, size_t src_len,
     memcpy(&fh, src, sizeof(fh));
     if (fh.magic != VV_MAGIC) return VV_ERR_BAD_MAGIC;
     if (fh.version != 1) return VV_ERR_CORRUPT;
+    if (fh.window_log < 10 || fh.window_log > 24) return VV_ERR_CORRUPT;
 
     info->version = fh.version;
     info->has_checksum = (fh.flags & 1) ? 1 : 0;

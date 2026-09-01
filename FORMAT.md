@@ -54,13 +54,15 @@ Offset  Size  Field           Description
                               (bytes 0x00 0x01 0x56 0x56 in stream order)
   4      1    version         Format version. MUST be 0x01.
   5      1    flags           Bit 0: has_checksum (1 = trailing footer present)
-                              Bit 1: has_dict     (1 = external dict used; reserved)
-                              Bits 2-7: reserved, SHOULD be 0 (decoders MAY ignore)
+                              Bit 1: has_dict     (reserved; MUST be 0)
+                              Bit 2: x86 BCJ filter was applied
+                              Bit 3: AArch64 BCJ filter was applied
+                              Bits 4-7: reserved, SHOULD be 0
   6      1    mode_hint       Compressor mode used (0=ULTRA_FAST, 1=BALANCED,
                               2=EXTREME). Informational only — decoder
                               ignores this field for bitstream parsing.
   7      1    window_log      log2 of the LZ window size used by the encoder.
-                              Valid range: 10 to 27.
+                              Valid range: 10 to 24.
                               **CRITICAL**: window_log determines offset
                               encoding width: ≤16 → 2-byte offsets,
                               ≥17 → 3-byte offsets in COMPRESSED blocks.
@@ -78,20 +80,15 @@ Offset  Size  Field           Description
 A decoder MUST reject any frame with:
 - `magic != 0x56560100`
 - `version != 1`
+- `window_log < 10` or `window_log > 24`
 - Trailing input that is too short for a complete frame
 
 A decoder MAY reject a frame with:
-- `window_log < 10` or `window_log > 27` (the C reference ignores
-  this constraint and only branches on `> 16` for offset width;
-  decoders that enforce the range are stricter than the reference)
-- `flags & 0xFC != 0` (reserved flag bits set; the C reference
-  ignores them)
+- `flags & 0xF2 != 0` (reserved flag bits set; bit1 and bits4-7)
 
-These "MAY reject" cases reflect a deliberate trade-off: stricter
-decoders may reject malformed-but-harmless inputs that the C
-reference accepts. For maximum interop with existing `.vv` files,
-follow the reference's tolerance. For maximum security posture in
-new implementations, enforce the SHOULD-be-zero reserved bits.
+The reference decoder enforces the window range because a frame header is the
+bound used to validate LZ offsets. Reserved flag bits remain tolerated for
+forward compatibility; new encoders MUST leave them clear.
 
 ---
 
