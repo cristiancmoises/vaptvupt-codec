@@ -211,6 +211,12 @@ decode_block_tokens_impl(
         op += ll;
 
         if (VV_UNLIKELY(ip >= ip_end)) break;
+        /* An extended literal run invalidates the loop's entry lookahead.
+         * Check the complete offset before the wide load; otherwise a
+         * truncated offset (one byte left for a 2/3-byte field) is an OOB
+         * read in the AVX2 warmup path. */
+        if (VV_UNLIKELY((size_t)(ip_end - ip) < (size_t)off_bytes))
+            return VV_ERR_CORRUPT;
 
         uint32_t offset;
         if (off_bytes == 2) {
@@ -304,6 +310,10 @@ decode_block_tokens_impl(
         op += ll;
 
         if (VV_UNLIKELY(ip >= ip_end)) break;
+        /* Literal extensions consume the input margin reserved at loop
+         * entry; validate the entire offset before loading it. */
+        if (VV_UNLIKELY((size_t)(ip_end - ip) < (size_t)off_bytes))
+            return VV_ERR_CORRUPT;
 
         uint32_t offset;
         if (off_bytes == 2) {
@@ -954,11 +964,14 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
                                 uint8_t *dst, size_t dst_cap,
                                 size_t *consumed, size_t *written) {
     if (!ctx || !dst || !consumed || !written) return VV_ERR_PARAM;
+    if (src_len > 0 && !src) return VV_ERR_PARAM;
     *consumed = 0;
     *written = 0;
 
     if (ctx->state == VV_DSTREAM_ERROR) return VV_ERR_CORRUPT;
     if (ctx->state == VV_DSTREAM_DONE) return 1;
+    if (ctx->dst_base_saved && dst != ctx->dst_base_saved) return VV_ERR_PARAM;
+    if (ctx->output_pos > dst_cap) return VV_ERR_OVERFLOW;
 
     /* Append new input */
     if (src_len > 0) {

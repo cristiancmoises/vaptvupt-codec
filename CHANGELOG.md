@@ -2,6 +2,23 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.8 — Sprint 138: decoder and streaming API hardening
+
+Security maintenance release. The frame format and valid one-shot output are
+unchanged from v2.65.7.
+
+- Hardened both AVX2 token-decode hot loops against truncated offsets after
+  extended literal runs. The decoder now checks the complete 2- or 3-byte
+  offset before loading it, preventing malformed-input out-of-bounds reads.
+- Added one-shot and streaming regression coverage for truncated offsets under
+  both window encodings, including sanitizer-compatible exact buffers.
+- Streaming APIs now reject a non-NULL length paired with a NULL chunk, reject
+  output-buffer relocation between decode calls, and reject a reduced output
+  capacity before forming an output pointer.
+- Refreshed the comparison-table metadata for v2.65.8 without relabeling
+  historical throughput as a new benchmark; added the minimal pt-BR release
+  README and consolidated technical guide.
+
 ## v2.65.7 — Sprint 137: streaming throughput and SEQ decoder hardening
 
 Security and performance maintenance release. The frame format is unchanged;

@@ -1,18 +1,20 @@
 # VaptVupt
 
+**[Português (Brasil)](README.pt-BR.md)**
+
 An LZ + tANS compression codec in C11. Zero runtime dependencies, an open
 wire format with byte-exact reference decoders in Python and JavaScript, and
 a test suite that gates every release on byte-identical output and
 sanitizer-clean corrupt-input handling.
 
-Version 2.65.7. The codec library and CLI are available under
+Version 2.65.8. The codec library and CLI are available under
 GPL-3.0-or-later or, for controlled first-party rights, a separate signed
 commercial agreement. The broader VaptVupt application uses a distinct AGPL
 public option. See `NOTICE`; `LICENSE-COMMERCIAL` is not itself a grant.
 
 ## Where it stands
 
-### v2.65.6 head-to-head (measured 2026-07)
+### v2.65.8 head-to-head (ratio corpus measured 2026-07; output revalidated 2026-09)
 
 Single-core AVX2 x86-64, gcc 13 `-O3 -flto`, zstd 1.5.6 `--single-thread`,
 lz4 1.10.0. CLI subprocess timing, best of 3, 11-file mixed corpus
@@ -56,11 +58,19 @@ Where each side wins:
   (was ~31 before v2.61.0's default skip acceleration and early-RAW bail);
   zstd-1 does 201, lz4-1 433 on the same 1 MiB random file.
 
-The head-to-head table is a v2.65.6 measurement. v2.65.7 preserves the
-one-shot wire format and adds streaming-path hardening and throughput work;
+The head-to-head table retains the v2.65.6 corpus measurement because the
+one-shot wire format remains byte-identical through v2.65.8. The 2026-09
+release validation rechecked output sizes and correctness; throughput cells
+remain tied to the stated 2026-07 benchmark host rather than being relabeled
+as a fresh measurement. v2.65.7-v2.65.8 add streaming-path hardening and
+API safety checks;
 its streaming measurements are recorded in [CHANGELOG.md](CHANGELOG.md).
 Recent releases, newest first:
 
+- **v2.65.8** — decoder security and API hardening: closes an AVX2
+  truncated-offset read after extended literals, rejects NULL streaming
+  chunks, enforces stable streaming output buffers, and refreshes the
+  release-facing comparison metadata.
 - **v2.65.7** — security and streaming performance: repaired the SEQ
   safe-zone bound for a combined maximum literal/match sequence, validates
   the declared 10..24 window, restores streaming `accel=0` auto behavior,
@@ -292,7 +302,7 @@ Reference decoders that reproduce the C decoder byte-for-byte live in
 `reference/vv_decoder.py` and `reference/vv_decoder.test.js`; the differential
 fuzzer cross-checks C against Python on every `make test`.
 
-Header `flags`: bit0 = XXH64 footer present, bit1 = dictionary frame,
+Header `flags`: bit0 = XXH64 footer present, bit1 = reserved (must be zero),
 bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
 2 bytes for window log <= 16, 3 bytes for <= 24 (the 16 MiB maximum).
 
@@ -300,7 +310,7 @@ bit2 = x86 BCJ filter applied, bit3 = AArch64 BCJ filter applied. Offsets are
 
 `make test` runs:
 
-- 22 C suites (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
+- 23 C suites (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
   safe-zone, DoS reproducers, BCJ filter, and more).
 - The Python reference decoder against the C output, plus the JavaScript
   reference decoder when a working `node` runtime is available.

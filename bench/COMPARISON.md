@@ -5,11 +5,11 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
-## v2.65.0 head-to-head (measured 2026-07, corpus rev 2)
+## v2.65.8 head-to-head (ratio corpus measured 2026-07; output revalidated 2026-09)
 
-> **Current through v2.65.6.** Valid-stream output is byte-identical
-> from v2.65.0 to v2.65.6, so every ratio in the tables below still
-> holds exactly; v2.65.1-v2.65.6 changed only encode/decode speed,
+> **Current through v2.65.8.** Valid-stream output is byte-identical
+> from v2.65.0 to v2.65.8, so every ratio in the tables below still
+> holds exactly; v2.65.1-v2.65.8 changed only encode/decode speed,
 > memory hygiene, and the reference decoders/test harness. The one
 > compression-size change since is the *encode-speed* column of
 > vv-extreme, which roughly doubled at v2.65.2 (≈1 → ≈2 MB/s,

@@ -83,6 +83,10 @@ int main(void) {
     cs = vv_cstream_create(&opts);
     CHECK(cs != NULL, "create with defaults succeeds");
     if (cs) {
+        size_t written = 0;
+        ir = vv_cstream_compress_chunk(cs, NULL, 1, buf, sizeof(buf),
+                                       &written, 0);
+        CHECK(ir == VV_ERR_PARAM, "cstream rejects NULL chunk with nonzero length");
         ir = vv_cstream_reset(cs, NULL);
         CHECK(ir == 0, "reset NULL opts succeeds");
         vv_cstream_destroy(cs);
@@ -97,6 +101,10 @@ int main(void) {
     vv_dstream_t *ds = vv_dstream_create();
     CHECK(ds != NULL, "create succeeds");
     if (ds) {
+        size_t consumed = 0, written = 0;
+        ir = vv_dstream_decompress_chunk(ds, NULL, 1, buf, sizeof(buf),
+                                         &consumed, &written);
+        CHECK(ir == VV_ERR_PARAM, "dstream rejects NULL src with nonzero length");
         ir = vv_dstream_reset(ds);
         CHECK(ir == 0, "reset succeeds");
         vv_dstream_destroy(ds);
@@ -117,6 +125,6 @@ int main(void) {
     printf("  ✓ NULL data with len=0 returned 0x%lx\n", (unsigned long)h1);
     
     printf("\n%s: %d fails / %d total\n", fails ? "FAIL" : "PASS",
-           fails, 17);
+           fails, 19);
     return fails ? 1 : 0;
 }

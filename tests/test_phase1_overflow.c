@@ -76,6 +76,60 @@ static void test_phase1_offset_class(uint32_t offset, const char *label) {
     free(op);
 }
 
+/* A long literal extension consumes the AVX2 loop's normal input lookahead.
+ * Leave fewer offset bytes than the selected window encoding requires and
+ * require both public decode surfaces to reject it without reading past src. */
+static void test_truncated_offset_after_literals(void) {
+    for (uint8_t wlog = 16; wlog <= 17; wlog++) {
+        size_t off_bytes = (wlog > 16) ? 3u : 2u;
+        size_t csz = 1u + 1u + 80u + off_bytes - 1u;
+        size_t frame_len = sizeof(vv_frame_header_t) + 4u + 3u + csz;
+        uint8_t *frame = (uint8_t *)calloc(1, frame_len);
+        uint8_t *dst = (uint8_t *)calloc(1, 80);
+        CHECK(frame != NULL && dst != NULL, "allocate truncated-offset frame");
+        if (!frame || !dst) { free(frame); free(dst); continue; }
+
+        vv_frame_header_t fh;
+        memset(&fh, 0, sizeof(fh));
+        fh.magic = VV_MAGIC;
+        fh.version = 1;
+        fh.mode_hint = VV_MODE_BALANCED;
+        fh.window_log = wlog;
+        fh.content_size = 80;
+        memcpy(frame, &fh, sizeof(fh));
+
+        uint32_t bh = vv_bh_pack(VV_BLOCK_COMPRESSED, 1, 80);
+        memcpy(frame + sizeof(fh), &bh, 4);
+        uint8_t *p = frame + sizeof(fh) + 4;
+        p[0] = (uint8_t)csz;
+        p[1] = (uint8_t)(csz >> 8);
+        p[2] = (uint8_t)(csz >> 16);
+        p += 3;
+        *p++ = 0xF0;             /* ll extension follows */
+        *p++ = 65;               /* 15 + 65 = 80 literals */
+        memset(p, 'L', 80);
+        p += 80;
+        memset(p, 0, off_bytes - 1u); /* deliberately truncated offset */
+
+        int64_t one_shot = vv_decompress(frame, frame_len, dst, 80);
+        CHECK(one_shot < 0, wlog == 16 ?
+              "one-shot rejects truncated 2-byte offset" :
+              "one-shot rejects truncated 3-byte offset");
+
+        vv_dstream_t *ds = vv_dstream_create();
+        size_t consumed = 0, written = 0;
+        int streaming = ds ? vv_dstream_decompress_chunk(ds, frame, frame_len,
+                                                          dst, 80, &consumed,
+                                                          &written) : VV_ERR_NOMEM;
+        CHECK(streaming < 0, wlog == 16 ?
+              "streaming rejects truncated 2-byte offset" :
+              "streaming rejects truncated 3-byte offset");
+        vv_dstream_destroy(ds);
+        free(frame);
+        free(dst);
+    }
+}
+
 int main(void) {
     /* One case per match-copy branch in the warmup loop. */
     test_phase1_offset_class(64, "offset>=32 (match_copy_32_hot) rejects overrun");
@@ -103,6 +157,8 @@ int main(void) {
         CHECK(r != VV_OK, "3-byte offset path rejects overrun");
         free(op);
     }
+
+    test_truncated_offset_after_literals();
 
     printf("test_phase1_overflow: %d passed, %d failed\n", passed, failures);
     return failures ? 1 : 0;

@@ -2440,6 +2440,7 @@ int vv_cstream_compress_chunk(vv_cstream_t *ctx,
                               uint8_t *dst, size_t dst_cap,
                               size_t *written, int is_last) {
     if (!ctx || !dst || !written) return VV_ERR_PARAM;
+    if (chunk_len > 0 && !chunk) return VV_ERR_PARAM;
     if (chunk_len > VV_MAX_BLOCK_SIZE) return VV_ERR_PARAM;
     *written = 0;
 

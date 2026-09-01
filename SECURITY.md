@@ -1,14 +1,22 @@
 # VaptVupt Security Posture
 
-**Document version**: 2.12 (v2.65.7)
-**Codebase audited**: v2.65.7
+**Document version**: 2.13 (v2.65.8)
+**Codebase audited**: v2.65.8
 **License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
 
 ---
 
-## v2.65.7 security delta
+## v2.65.8 security delta
+
+The AVX2 token decoder now validates the full offset field after an extended
+literal run before reading it. This closes a malformed-stream out-of-bounds
+read when only part of a 2- or 3-byte offset remains. Streaming entry points
+also reject NULL input with a nonzero length, output-buffer relocation, and a
+capacity smaller than bytes already emitted.
+
+## v2.65.7 security delta (historical)
 
 Sprint 137 repaired the SEQ decoder's fast-zone invariant. A single sequence
 can contain up to 65,535 literals followed by a 65,535-byte match; the old

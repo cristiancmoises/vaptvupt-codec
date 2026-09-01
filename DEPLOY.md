@@ -1,6 +1,6 @@
 # VaptVupt — Release Procedure
 
-Release v2.65.7 (tag `v2.65.7`). GPL-3.0-or-later.
+Release v2.65.8 (tag `v2.65.8`). GPL-3.0-or-later.
 
 The build environment produces and verifies the artifacts. Steps that
 require GitHub or registry credentials are marked and run on a machine where
@@ -13,10 +13,10 @@ A fresh clone from the bundle must build, reproduce the binary, and pass the
 suite:
 
 ```sh
-git clone vaptvupt-2.65.7.bundle repo
-cd repo && git checkout v2.65.7
+git clone vaptvupt-2.65.8.bundle repo
+cd repo && git checkout v2.65.8
 make
-make test     # 22 C suites + OOM sweep, differential 5576/5576, fuzz 5200/5200,
+make test     # 23 C suites + OOM sweep, differential 5576/5576, fuzz 5200/5200,
               # ratio gate +/- 0, safezone 58/58, exact-buffer 20136/20136,
               # DoS 12/12, competitive + cli_window pass
 ```
@@ -28,7 +28,7 @@ check the toolchain (gcc 13+, AVX2).
 
 ```sh
 sha256sum -c SHA256SUMS
-git bundle verify vaptvupt-2.65.7.bundle
+git bundle verify vaptvupt-2.65.8.bundle
 ```
 
 ## 3. Push (credentials)
@@ -36,24 +36,24 @@ git bundle verify vaptvupt-2.65.7.bundle
 ```sh
 # Explicitly push the release branch; do not assume `main`, `master`, or an
 # upstream. Push each authoritative remote separately and never force:
-git push codeberg HEAD:refs/heads/v260-master refs/tags/v2.65.7
-git push github HEAD:refs/heads/v260-master refs/tags/v2.65.7
-git push origin-https HEAD:refs/heads/v260-master refs/tags/v2.65.7
+git push codeberg HEAD:refs/heads/v260-master refs/tags/v2.65.8
+git push github HEAD:refs/heads/v260-master refs/tags/v2.65.8
+git push origin-https HEAD:refs/heads/v260-master refs/tags/v2.65.8
 # Then verify each endpoint resolves both refs to the release commit.
 ```
 
 ## 4. GitHub release (credentials)
 
 ```sh
-gh release create v2.65.7 \
-  vaptvupt-2.65.7-src.tar.gz \
+gh release create v2.65.8 \
+  vaptvupt-2.65.8-src.tar.gz \
   SHA256SUMS \
   COMPARISON.md \
-  vaptvupt-2.65.7-linux-x86_64 \
-  vaptvupt-2.65.7-linux-x86_64-mt \
-  vaptvupt-2.65.7-linux-x86_64-pgo \
-  --title "VaptVupt v2.65.7" \
-  --notes-file <(awk '/^## v2.65.7 /{f=1;next} /^## /{f=0} f' CHANGELOG.md)
+  vaptvupt-2.65.8-linux-x86_64 \
+  vaptvupt-2.65.8-linux-x86_64-mt \
+  vaptvupt-2.65.8-linux-x86_64-pgo \
+  --title "VaptVupt v2.65.8" \
+  --notes-file <(awk '/^## v2.65.8 /{f=1;next} /^## /{f=0} f' CHANGELOG.md)
 ```
 
 `COMPARISON.md` ships with the release; it carries the measured position
@@ -64,9 +64,9 @@ including the file classes where vv loses.
 vcpkg uses SHA512, not SHA256:
 
 ```sh
-sha512sum vaptvupt-2.65.7-src.tar.gz
-# vcpkg.json: "version": "2.65.7"
-# portfile.cmake: REF v2.65.7, SHA512 <above>
+sha512sum vaptvupt-2.65.8-src.tar.gz
+# vcpkg.json: "version": "2.65.8"
+# portfile.cmake: REF v2.65.8, SHA512 <above>
 ```
 
 ## 6. Smoke test after install
@@ -82,10 +82,10 @@ vaptvupt -c -m extreme --bcj-arm64 -o code.zupt /path/to/arm64-bin  # AArch64 bi
 
 | File | Purpose |
 |---|---|
-| `vaptvupt-2.65.7-src.tar.gz` | Source (`git archive v2.65.7`) |
-| `vaptvupt-2.65.7.bundle` | Git history + tags (clone-able) |
-| `vaptvupt-2.65.7-linux-x86_64` | Default build |
-| `vaptvupt-2.65.7-linux-x86_64-mt` | Threaded build |
-| `vaptvupt-2.65.7-linux-x86_64-pgo` | PGO build |
+| `vaptvupt-2.65.8-src.tar.gz` | Source (`git archive v2.65.8`) |
+| `vaptvupt-2.65.8.bundle` | Git history + tags (clone-able) |
+| `vaptvupt-2.65.8-linux-x86_64` | Default build |
+| `vaptvupt-2.65.8-linux-x86_64-mt` | Threaded build |
+| `vaptvupt-2.65.8-linux-x86_64-pgo` | PGO build |
 | `SHA256SUMS` | Integrity (`sha256sum -c`) |
 | `CHANGELOG.md`, `COMPARISON.md` | Docs |

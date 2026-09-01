@@ -23,8 +23,8 @@ extern "C" {
 
 #define VV_VERSION_MAJOR  2
 #define VV_VERSION_MINOR  65
-#define VV_VERSION_PATCH  7
-#define VV_VERSION_STRING "2.65.7"
+#define VV_VERSION_PATCH  8
+#define VV_VERSION_STRING "2.65.8"
 
 #define VV_MAGIC          0x56560100u  /* "VV\x01\x00" */
 #define VV_MAX_BLOCK_SIZE (1u << 20)   /* 1 MB per block */
@@ -231,7 +231,7 @@ typedef struct {
                               *     valid stream any decoder reads; default
                               *     output (0) is byte-identical to prior
                               *     releases. Opt-in; default 0. */
-    uint32_t  accel;         /* 0 = off (default; byte-identical). >0 enables
+    uint32_t  accel;         /* 0 = auto (mode-dependent; byte-identical). >0 enables
                               *     lz4-style position-skip acceleration: after
                               *     a run of f consecutive no-match positions
                               *     the parser advances by 1 + ((f*accel)>>6)
