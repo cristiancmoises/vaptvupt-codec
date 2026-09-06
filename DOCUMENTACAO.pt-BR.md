@@ -180,6 +180,29 @@ LZ4 usa bloco cru sem checksum e Zstd usa frame com checksum padrão desligado.
 Os bytes finais de cada lote são verificados fora da região cronometrada.
 São páginas sintéticas quentes no cache, não resultados de zram ou filesystem.
 
+## Contextos FAST com memória do chamador
+
+As APIs de desenvolvimento `vv_fast_context_size`, `vv_fast_context_alignment`,
+`vv_fast_context_init` e `vv_fast_context_compress` aceitam entradas independentes
+de até 64 KiB. O chamador fornece armazenamento alinhado, mantém seu endereço
+estável e usa cada contexto em uma operação por vez. A inicialização copia as
+opções; exige modo FAST e rejeita BCJ, filtro automático e opções nulas.
+Cada compressão reinicia o histórico e os offsets repetidos, sem alocação
+interna. A saída precisa comportar `vv_compress_bound(src_len)` bytes.
+
+O mapa e os elos usam posições de 16 bits. A última posição inserível precisa
+de pelo menos quatro bytes da entrada; por isso 65535 representa uma entrada
+vazia sem perder posições válidas. O mapa conserva os 18 bits do hash e ocupa
+512 KiB. As APIs one-shot e streaming continuam usando posições de 32 bits.
+O formato e as decisões de matches são preservados; testes comparam a saída
+byte a byte com o encoder one-shot, incluindo referências acima de 32 KiB.
+
+O tamanho retornado inclui metadados, mapa, cadeia e scratch. Consulte sempre
+as funções de tamanho e alinhamento, pois esses valores não são constantes de
+ABI. O scratch de tokens é zerado após o parsing; quem precisa limpar todo o
+armazenamento deve fazê-lo antes de liberá-lo. Detalhes sobre erros, ownership
+e limites estão em [INTEGRATION.md](INTEGRATION.md#caller-owned-fast-contexts-development-api).
+
 ## Prontidão para o kernel Linux
 
 O v2.65.11 não está pronto para inclusão upstream. A licença pública

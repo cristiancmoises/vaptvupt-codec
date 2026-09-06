@@ -191,6 +191,10 @@ static int init_tests(void) {
     CHECK(vv_fast_context_size(0) == 0);
     CHECK(vv_fast_context_size(PAGE_MAX + 1) == 0);
     CHECK(vv_fast_context_size(SIZE_MAX) == 0);
+    /* Resource ceilings, not fixed layout or ABI sizes. Allow metadata to
+     * evolve without silently restoring the full-width page matcher. */
+    CHECK(vv_fast_context_size(4096) < 600u * 1024u);
+    CHECK(vv_fast_context_size(PAGE_MAX) < 750u * 1024u);
     static const size_t maxima[] = {1, 4096, 16384, PAGE_MAX};
     size_t previous_size = 0;
     for (size_t k = 0; k < sizeof(maxima) / sizeof(maxima[0]); k++) {
@@ -285,6 +289,132 @@ static int rejected_compress(vv_fast_context_t *ctx, const uint8_t *src,
     CHECK(no_allocations && result == expected);
     CHECK(filled(output->data, output->cap, CANARY));
     CHECK(guarded_ok(output));
+    return 1;
+}
+
+/* Inspect match positions in the existing plain token grammar. Round-trip
+ * decoding is checked by parity(); this walker establishes that a fixture
+ * actually uses high dictionary positions, rather than merely being large. */
+static int high_references(const guarded_t *frame, size_t raw_size,
+                           unsigned *high_matches, size_t *token_size) {
+    size_t start = sizeof(vv_frame_header_t);
+    CHECK(frame->cap >= start + 7);
+    uint32_t header = vv_read32(frame->data + start);
+    CHECK(vv_bh_type(header) == VV_BLOCK_COMPRESSED);
+    CHECK(vv_bh_last(header) && vv_bh_size(header) == raw_size);
+    const uint8_t *size_bytes = frame->data + start + 4;
+    size_t compressed = (size_t)size_bytes[0] |
+                        ((size_t)size_bytes[1] << 8) |
+                        ((size_t)size_bytes[2] << 16);
+    CHECK(compressed <= frame->cap - start - 7);
+    vv_frame_header_t fh;
+    memcpy(&fh, frame->data, sizeof(fh));
+    size_t offset_bytes = fh.window_log > 16 ? 3 : 2;
+    const uint8_t *tokens = frame->data + start + 7;
+    size_t cursor = 0, produced = 0;
+    *high_matches = 0;
+    while (cursor < compressed) {
+        uint8_t token = tokens[cursor++];
+        size_t literals = token >> 4;
+        if (literals == 15) {
+            uint8_t extension;
+            do {
+                CHECK(cursor < compressed);
+                extension = tokens[cursor++];
+                CHECK(extension <= raw_size - literals);
+                literals += extension;
+            } while (extension == 255);
+        }
+        CHECK(literals <= compressed - cursor && literals <= raw_size - produced);
+        cursor += literals;
+        produced += literals;
+        if (cursor == compressed) break;
+        CHECK(offset_bytes <= compressed - cursor);
+        size_t offset = (size_t)tokens[cursor] | ((size_t)tokens[cursor + 1] << 8);
+        if (offset_bytes == 3) offset |= (size_t)tokens[cursor + 2] << 16;
+        cursor += offset_bytes;
+        CHECK(offset != 0 && offset <= produced);
+        if (produced - offset > 32767) (*high_matches)++;
+        size_t match = (token & 15u) + VV_MIN_MATCH;
+        if ((token & 15u) == 15) {
+            uint8_t extension;
+            do {
+                CHECK(cursor < compressed);
+                extension = tokens[cursor++];
+                CHECK(extension <= raw_size - match);
+                match += extension;
+            } while (extension == 255);
+        }
+        CHECK(match <= raw_size - produced);
+        produced += match;
+    }
+    CHECK(cursor == compressed && produced == raw_size);
+    *token_size = compressed;
+    return 1;
+}
+
+static int high_position_tests(void) {
+    guarded_t source, output, reference, decoded, storage;
+    size_t frame_cap = vv_compress_bound(PAGE_MAX);
+    size_t context_size = vv_fast_context_size(PAGE_MAX);
+    CHECK(guarded_alloc(&source, PAGE_MAX, 1));
+    CHECK(guarded_alloc(&output, frame_cap, 1));
+    CHECK(guarded_alloc(&reference, frame_cap, 1));
+    CHECK(guarded_alloc(&decoded, PAGE_MAX, 1));
+    CHECK(guarded_alloc(&storage, context_size, vv_fast_context_alignment()));
+    /* Unique record headers stop matches from swallowing the page. Common
+     * prefixes followed by three different tails create chains whose older
+     * candidates can match farther than their newest candidate. */
+    make_input(source.data, PAGE_MAX, 0);
+    for (size_t record = 0; record < PAGE_MAX / 64; record++) {
+        uint8_t *p = source.data + record * 64;
+        p[0] = (uint8_t)record;
+        p[1] = (uint8_t)(record >> 8);
+        for (size_t i = 8; i < 16; i++) p[i] = (uint8_t)(17 + i);
+        for (size_t i = 16; i < 64; i++)
+            p[i] = (uint8_t)(64 + i + 53 * (record % 3));
+    }
+    static const uint8_t windows[] = {10, 16, 24};
+    static const uint32_t depths[] = {1, 4, 4096};
+    static const size_t lengths[] = {
+        PAGE_MAX, 4096, 65531, 65532, 65533, 65534, 65535, PAGE_MAX
+    };
+    for (size_t w = 0; w < sizeof(windows) / sizeof(windows[0]); w++) {
+        size_t shallow_size = 0, deep_size = 0;
+        for (size_t d = 0; d < sizeof(depths) / sizeof(depths[0]); d++) {
+            vv_options_t opts;
+            fast_options(&opts, windows[w], 2);
+            opts.depth_override = depths[d];
+            vv_fast_context_t *ctx = NULL;
+            memset(storage.data, CANARY, storage.cap);
+            allocation_budget(0);
+            int result = vv_fast_context_init(storage.data, storage.cap, PAGE_MAX, &opts, &ctx);
+            int no_allocations = allocation_result(0, 0);
+            CHECK(no_allocations && result == VV_OK && ctx != NULL);
+            for (size_t l = 0; l < sizeof(lengths) / sizeof(lengths[0]); l++) {
+                size_t n = lengths[l];
+                snprintf(test_case, sizeof(test_case),
+                         "high positions wlog=%u depth=%u step=%zu n=%zu",
+                         windows[w], depths[d], l, n);
+                CHECK(parity(ctx, &opts, source.data, n, &output, &reference, &decoded));
+                unsigned high_matches;
+                size_t token_size;
+                CHECK(high_references(&output, n, &high_matches, &token_size));
+                CHECK(n <= 32768 || high_matches > 100);
+                if (l == 0 && d == 0) shallow_size = token_size;
+                if (l == 0 && d == 1) deep_size = token_size;
+                CHECK(guarded_ok(&storage) && guarded_ok(&source));
+            }
+        }
+        /* Ensure the fixture distinguishes deeper chain selection from the
+         * newest-root-only search, beyond merely decoding successfully. */
+        CHECK(shallow_size != deep_size);
+    }
+    free(source.allocation);
+    free(output.allocation);
+    free(reference.allocation);
+    free(decoded.allocation);
+    free(storage.allocation);
     return 1;
 }
 
@@ -389,7 +519,8 @@ static int compression_tests(void) {
 }
 
 int main(void) {
-    if (!hook_tests() || !init_tests() || !compression_tests()) return 1;
+    if (!hook_tests() || !init_tests() || !compression_tests() ||
+        !high_position_tests()) return 1;
     printf("FAST context tests: %u checks, %u legacy byte-parity cases passed",
            checks, parity_cases);
 #ifdef VV_TEST_ALLOC_WRAP

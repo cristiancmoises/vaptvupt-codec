@@ -250,6 +250,8 @@ static inline VV_NO_SANITIZE_INTEGER uint32_t hash3_short(const uint8_t *p) {
 typedef struct {
     int32_t *table;        /* Primary hash5: VV_HC_SIZE entries */
     int32_t *chain;        /* Primary chain: window_size entries */
+    uint16_t *table16;     /* Borrowed roots for independent FAST pages only */
+    uint16_t *chain16;     /* 0xffff is empty; input positions end at 65532 */
     int32_t *table4;       /* Secondary hash4: VV_HC4_SIZE entries */
     int32_t *hash4_chain;  /* Secondary chain (SEPARATE from primary) */
     int32_t *table3;       /* Tertiary hash3 (v2 only): VV_HC3_SIZE entries, NULL on v1 */
@@ -301,7 +303,14 @@ typedef struct {
 static void matcher_prepare(matcher_t *m, uint32_t window_log, uint32_t wsz,
                             uint32_t depth, int use_hash4,
                             const uint8_t *small_src, size_t small_len) {
-    if (small_src) {
+    if (m->table16) {
+        if (small_src) {
+            for (size_t pos = 0; pos + 4 <= small_len; pos++)
+                m->table16[hash_safe(small_src + pos, (int32_t)(small_len - pos))] = UINT16_MAX;
+        } else {
+            memset(m->table16, 0xFF, VV_HC_SIZE * sizeof(uint16_t));
+        }
+    } else if (small_src) {
         /* Include the final four-byte hash variant as well as hash5. */
         for (size_t pos = 0; pos + 4 <= small_len; pos++)
             m->table[hash_safe(small_src + pos, (int32_t)(small_len - pos))] = -1;
@@ -347,6 +356,8 @@ static int matcher_init_for_input(matcher_t *m, uint32_t window_log,
      * call on partial-failure paths. */
     m->table = NULL;
     m->chain = NULL;
+    m->table16 = NULL;
+    m->chain16 = NULL;
     m->table4 = NULL;
     m->hash4_chain = NULL;
     m->table3 = NULL;
@@ -454,6 +465,11 @@ static void matcher_reset(matcher_t *m) {
 static inline void matcher_insert_fast(matcher_t *m, const uint8_t *data,
                                         int32_t pos) {
     uint32_t h = hash5(data + pos);
+    if (m->table16) {
+        m->chain16[pos & m->chain_mask] = m->table16[h];
+        m->table16[h] = (uint16_t)pos;
+        return;
+    }
     m->chain[pos & m->chain_mask] = m->table[h];
     m->table[h] = pos;
     if (m->use_hash4) {
@@ -472,6 +488,11 @@ static inline void matcher_insert(matcher_t *m, const uint8_t *data,
                                    int32_t pos, int32_t end) {
     if (pos + 4 > end) return;
     uint32_t h = hash_safe(data + pos, end - pos);
+    if (m->table16) {
+        m->chain16[pos & m->chain_mask] = m->table16[h];
+        m->table16[h] = (uint16_t)pos;
+        return;
+    }
     m->chain[pos & m->chain_mask] = m->table[h];
     m->table[h] = pos;
     /* PERF: only maintain hash4 table when it's actually being used.
@@ -840,7 +861,9 @@ single_probe_match(const matcher_t *m, const uint8_t *data,
     if (limit < 0) limit = 0;
 
     uint32_t h = hash_safe(data + pos, end - pos);
-    int32_t ref = m->table[h];
+    int compact = m->table16 != NULL;
+    int32_t ref = compact ? m->table16[h] : m->table[h];
+    if (compact && ref == UINT16_MAX) ref = -1;
 
     uint32_t pos4;
     memcpy(&pos4, data + pos, 4);
@@ -852,7 +875,9 @@ single_probe_match(const matcher_t *m, const uint8_t *data,
     int32_t mm = (int32_t)m->max_match;
 
     while (ref >= limit && ref < pos && depth-- > 0) {
-        int32_t next_ref = chain_arr[ref & chain_mask];
+        int32_t next_ref = compact ? m->chain16[ref & chain_mask]
+                                   : chain_arr[ref & chain_mask];
+        if (compact && next_ref == UINT16_MAX) next_ref = -1;
         uint32_t b;
         memcpy(&b, data + ref, 4);
         if (pos4 == b) {
@@ -1955,6 +1980,9 @@ size_t vv_compress_bound(size_t src_len) {
 }
 
 /* Caller storage contains this metadata followed by map, chain and scratch.
+ * The independent 64 KiB input limit leaves 0xffff available as an empty
+ * 16-bit root/link: an inserted position needs at least four input bytes.
+ * Keep all hash bits and chain links so parser choices remain unchanged.
  * Pointer-bearing metadata determines the public alignment query. */
 struct vv_fast_context_s {
     matcher_t m;
@@ -1974,8 +2002,8 @@ static uint32_t fast_chain_slots(size_t max_input) {
 size_t vv_fast_context_size(size_t max_input) {
     if (max_input == 0 || max_input > 65536) return 0;
     return sizeof(vv_fast_context_t)
-         + VV_HC_SIZE * sizeof(int32_t)
-         + fast_chain_slots(max_input) * sizeof(int32_t)
+         + VV_HC_SIZE * sizeof(uint16_t)
+         + fast_chain_slots(max_input) * sizeof(uint16_t)
          + max_input + max_input / 255 + 1024;
 }
 
@@ -2001,9 +2029,9 @@ int vv_fast_context_init(void *storage, size_t storage_cap, size_t max_input,
     ctx->max_input = max_input;
     ctx->chain_slots = fast_chain_slots(max_input);
     ctx->tmp_cap = max_input + max_input / 255 + 1024;
-    ctx->m.table = (int32_t *)(ctx + 1);
-    ctx->m.chain = ctx->m.table + VV_HC_SIZE;
-    ctx->tmp = (uint8_t *)(ctx->m.chain + ctx->chain_slots);
+    ctx->m.table16 = (uint16_t *)(ctx + 1);
+    ctx->m.chain16 = ctx->m.table16 + VV_HC_SIZE;
+    ctx->tmp = (uint8_t *)(ctx->m.chain16 + ctx->chain_slots);
     *out_ctx = ctx;
     return VV_OK;
 }
