@@ -381,20 +381,23 @@ static int measure(struct codec *c, struct cohort *b, const struct config *cfg)
         }
     }
     for (int decoding = 0; decoding < 2; decoding++) {
-        size_t count = 1;
+        /* Every batch visits each page equally, including slow codecs that
+         * reach the timing target in fewer than one cohort's operations. */
+        size_t maximum = MAX_ITERS / b->pages * b->pages;
+        size_t count = b->pages;
         uint64_t elapsed;
         for (;;) {
             if (!batch(c, b, decoding, count, &elapsed)) return 0;
             if (elapsed >= cfg->min_batch_ms * UINT64_C(1000000)) break;
-            if (count >= MAX_ITERS) {
-                fprintf(stderr, "NOT RUN: %s %s batch calibration reached %u iterations\n",
-                        c->variant->name, decoding ? "decode" : "encode", MAX_ITERS);
+            if (count >= maximum) {
+                fprintf(stderr, "NOT RUN: %s %s batch calibration reached %zu iterations\n",
+                        c->variant->name, decoding ? "decode" : "encode", maximum);
                 status_row(c, b, "NOT_RUN", decoding ? "decode_batch" : "encode_batch",
                            0, (count - 1) % b->pages, count, elapsed);
                 count = 0;
                 break;
             }
-            count *= 2;
+            count = count > maximum / 2 ? maximum : count * 2;
         }
         if (!count) continue;
         for (size_t sample = 0; sample < cfg->batch_samples; sample++) {
