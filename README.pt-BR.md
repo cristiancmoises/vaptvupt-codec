@@ -14,13 +14,16 @@ mantendo o mapeamento hash completo, oferece workspaces do chamador para
 decodificação literal Huffman/ANS e inclui uma compilação explicitamente
 escalar. Fast agora ignora `format_v2`: seus tokens simples exigem matches
 mínimos de quatro bytes, e a combinação anterior podia gerar saída corrompida.
-São melhorias de userspace, não evidência de substituição geral de LZ4/Zstd
+Capacidade do footer, caudas do checksum, spans do decoder e os dois históricos
+de prefetch AVX2 são validados antes de avançar ou formar os ponteiros;
+`vv_xxh64(NULL, 0, ...)` também é definido. Os bytes válidos codificados não
+mudam. São melhorias de userspace, não evidência de substituição geral de LZ4/Zstd
 nem de prontidão para o kernel Linux. Os bloqueios de licença, memória e
 validação estão na [documentação técnica](DOCUMENTACAO.pt-BR.md#prontidão-para-o-kernel-linux).
 
 ### Perfil atual limitado a páginas (medido em 06/09/2026)
 
-O commit `0e44ff8` foi medido in-process com 64 páginas independentes de texto
+O commit `a14e09f` foi medido in-process com 64 páginas independentes de texto
 sintético de 4 KiB, fixado na CPU 4. VaptVupt foi compilado sem intrínsecos e
 sem autovetorização do compilador; LZ4 1.10.0 e Zstd 1.5.7 mantiveram as suas
 compilações userspace instaladas. A tabela inclui o framing de cada formato e
@@ -29,9 +32,9 @@ uma medição de kernel, zram nem uma certificação general-register-only.
 
 | API | Razão | Compressão p50 (µs) | Descompressão p50 (µs) | Compressão MB/s | Descompressão MB/s |
 |---|---:|---:|---:|---:|---:|
-| Contexto FAST do VaptVupt, sem checksum | 2,868 | 72,877 | 9,099 | 56,5 | 483,3 |
-| LZ4 extState | 2,454 | 12,514 | 2,848 | 339,7 | 1500,2 |
-| Contexto Zstd, nível 1, sem checksum | 4,927 | 42,075 | 13,372 | 99,7 | 321,3 |
+| Contexto FAST do VaptVupt, sem checksum | 2,868 | 62,536 | 9,206 | 65,7 | 486,2 |
+| LZ4 extState | 2,454 | 12,636 | 2,851 | 339,6 | 1495,0 |
+| Contexto Zstd, nível 1, sem checksum | 4,927 | 42,057 | 13,337 | 99,4 | 320,1 |
 
 Este perfil não sustenta afirmar que VaptVupt substitui LZ4 ou Zstd: LZ4 foi
 mais rápido neste caso, enquanto Zstd obteve a melhor razão. A evidência
@@ -39,21 +42,33 @@ CSV/JSON completa tem 216 perfis de 4/16/64 KiB e seis fixtures sintéticos;
 LZO-RLE e execução no kernel não estavam disponíveis. A reprodução e as
 ressalvas estão em [bench/COMPARISON.md](bench/COMPARISON.md).
 
-O contexto FAST com memória do chamador agora usa posições de 16 bits no
-matcher limitado. O workspace consultado caiu de 1.070.264 para 537.800 bytes
-em 4 KiB, de 1.131.752 para 574.712 em 16 KiB e de 1.377.705 para 722.361 em
-64 KiB. Três pares alternados entre baseline e versão atual preservaram 2.304
-frames byte a byte. Os resultados em lote mais fortes fora dos controles
+Na comparação `9adffc7` → `0e44ff8`, o contexto FAST com memória do chamador
+passou a usar posições de 16 bits no matcher limitado. O workspace consultado
+caiu de 1.070.264 para 537.800 bytes em 4 KiB, de 1.131.752 para 574.712 em
+16 KiB e de 1.377.705 para 722.361 em 64 KiB. Três pares alternados preservaram
+2.304 frames byte a byte. Os resultados em lote mais fortes fora dos controles
 foram −12,69% de latência em registros de 16 KiB e −36,53% em páginas
 aleatórias de 16 KiB; texto de 4 KiB foi instável e não é apresentado como
 ganho repetível.
 
+A comparação final `fa86b27` → `a14e09f` usou seis pares, 216 observações
+pareadas de perfil e preservou novamente os 2.304 frames. Limpar densamente as
+raízes em exatamente 4 KiB reduziu a latência de compressão em lote em 31,71%
+para dados aleatórios, 16,22% para registros e 39,13% para repetições. Texto
+melhorou apenas 1,07% e dividiu os pares em três para cada lado, portanto é uma
+observação pequena e ruidosa. A comparação dos binários completos também
+registrou perda de 2,36% no lote de descompressão de registros de 64 KiB em
+todos os pares e de 12,24% no p95 individual de texto de 4 KiB em cinco deles.
+
 A medição pareada isolando o encoder contra v2.65.10 encontrou compressão
 fast 2,7× mais rápida em texto de 1 KiB e ganho de 10,7% em 4 KiB; os controles
-maiores ficaram dentro de ±0,4%. Em 4 KiB, a cadeia menor deixa de solicitar
-240 KiB na janela padrão, mas o mapa hash principal ainda solicita 1 MiB.
-A saída válida comprimida permaneceu byte-idêntica nos casos medidos.
-Metodologia e controles em [bench/COMPARISON.md](bench/COMPARISON.md).
+maiores ficaram dentro de ±0,4%. No caminho one-shot comum, a cadeia menor
+deixa de solicitar 240 KiB para uma entrada de 4 KiB na janela padrão, mas o
+mapa hash primário de 32 bits desse caminho ainda solicita 1 MiB. Isso é
+separado do contexto fornecido pelo chamador descrito acima, cujo mapa de
+16 bits ocupa 512 KiB. A saída válida comprimida permaneceu byte-idêntica nos
+casos medidos. Metodologia e controles em
+[bench/COMPARISON.md](bench/COMPARISON.md).
 
 No release anterior, v2.65.10, remover o matcher hash4 não utilizado reduziu a memória
 solicitada em 512 KiB na janela padrão e em até 64,25 MiB na maior janela.
@@ -149,7 +164,7 @@ antes de aceitar dados não confiáveis.
 
 `make clean && make SIMD=0` desativa intrinsics e dispatch SIMD do codec.
 `make scalar-test` compila o núcleo com registradores gerais em x86-64/AArch64
-e executa oito suites em userspace; a biblioteca C do sistema continua sendo
+e executa onze suites em userspace; a biblioteca C do sistema continua sendo
 usada. Não é um build de kernel nem uma aprovação dos limites de stack.
 
 ## Segurança e integração
@@ -178,6 +193,11 @@ O decodificador verifica limites, rejeita frames malformados e nunca substitui
 autenticação. O checksum XXH64 detecta corrupção acidental, não adulteração;
 use AEAD na camada chamadora. A API de streaming exige o mesmo buffer de saída
 estável em todas as chamadas.
+
+As regressões novas cobrem endpoints exatos de headers, blocos e footers
+truncados, comprimentos comprimidos/descomprimidos excessivos, fronteiras
+multiframe, nova tentativa após capacidade insuficiente no streaming e as duas
+fases de prefetch AVX2. Essas checagens preservam os bytes de frames válidos.
 
 No streaming, o v2.65.9 aplica a inversa BCJ exatamente uma vez no fim do frame:
 depois de validar o checksum, ou logo após o último bloco quando não há

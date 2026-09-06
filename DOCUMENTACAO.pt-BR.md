@@ -116,7 +116,7 @@ make scalar-test
 
 `make clean && make SIMD=0` oferece um build sem intrinsics/dispatch SIMD do
 codec. O gate `scalar-test` usa registradores gerais para os objetos do núcleo
-em x86-64/AArch64 e roda oito suites em userspace. Ele continua ligado à libc,
+em x86-64/AArch64 e roda onze suites em userspace. Ele continua ligado à libc,
 não testa outro sistema operacional e não aprova orçamento de stack do kernel.
 
 O conjunto inclui round-trip em todos os modos, fuzz diferencial C↔Python,
@@ -128,6 +128,16 @@ ligado/desligado. A tabela direta reduz o scratch das tabelas de sequência por
 bloco de 52 para 48 KiB sem alterar a saída no fio. Execute também ASan+UBSan no
 toolchain de destino; ferramentas formais ausentes no host devem ser
 reportadas, não tratadas como uma aprovação silenciosa.
+
+No v2.65.11, a capacidade do footer do frame, as caudas do checksum e os spans
+do decoder são validados pela extensão restante antes de avançar um ponteiro.
+As duas fases de prefetch AVX2 verificam a capacidade literal e o histórico de
+match antes de formar o ponteiro de lookahead; `vv_xxh64(NULL, 0, ...)` é aceito
+sem aritmética sobre ponteiro nulo. Regressões cobrem headers, blocos e footers
+truncados, comprimentos comprimidos/descomprimidos excessivos, fronteiras
+multiframe, nova tentativa após capacidade insuficiente no streaming e as duas
+fases de prefetch. Essa limpeza de invariantes não é apresentada como correção
+de crash observado; os bytes válidos codificados permanecem iguais.
 
 O v2.65.10 inclui regressões para as transições de formato no reset, extensões
 sem terminador, offsets além da janela e `written` após a conclusão. A escrita
@@ -196,6 +206,9 @@ vazia sem perder posições válidas. O mapa conserva os 18 bits do hash e ocupa
 512 KiB. As APIs one-shot e streaming continuam usando posições de 32 bits.
 O formato e as decisões de matches são preservados; testes comparam a saída
 byte a byte com o encoder one-shot, incluindo referências acima de 32 KiB.
+As raízes são limpas de forma esparsa abaixo de 4 KiB, de forma densa em uma
+entrada de exatamente 4 KiB e já eram densas acima desse limite. Essa escolha
+altera somente o custo de reset, sem mudar formato ou decisões de candidatos.
 
 O tamanho retornado inclui metadados, mapa, cadeia e scratch. Consulte sempre
 as funções de tamanho e alinhamento, pois esses valores não são constantes de
@@ -218,6 +231,20 @@ ANS de contexto legado ainda contém uma matriz local de normalização de
 zram/filesystem. O gate escalar é apenas uma etapa de userspace; as regras
 para uso de registradores FP/SIMD no kernel são mais restritas, conforme a
 [API de ponto flutuante](https://docs.kernel.org/core-api/floating-point.html).
+
+O contexto FAST fornecido pelo chamador também é grande demais para ser
+apresentado como backend de zram sem novo trabalho de projeto. Ele mede 537.800
+bytes para o limite de entrada de 4 KiB e 722.361 bytes para 64 KiB. No zram do
+Linux v7.3-rc1 inspecionado, callbacks de hotplug criam um contexto quando cada
+CPU entra online. Todas as CPUs possíveis podem, portanto, receber um contexto
+por instância do compressor, mas eles não são pré-alocados apenas porque uma CPU
+é possível. Antes do overhead do alocador e dos buffers do próprio zram, o pior
+caso de um contexto com perfil de 4 KiB por CPU online consumiria
+aproximadamente 4,10 MiB para 8 CPUs, 32,82 MiB para 64 ou 131,30 MiB para 256.
+No perfil de 64 KiB, os valores seriam aproximadamente 5,51, 44,09 e 176,36
+MiB. Essas são projeções aritméticas dos tamanhos consultados em userspace, não
+medições de alocação no kernel; elas tornam a redução do workspace um requisito
+de entrada, não uma otimização para depois.
 
 Uma proposta futura precisa demonstrar benefício numa carga do subsistema,
 ter revisão humana, DCO certificado pelo próprio autor humano e atribuição

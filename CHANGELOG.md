@@ -35,8 +35,23 @@ universal superiority over LZ4/Zstd.
 - Add `VV_DISABLE_SIMD=1` and a clean `make SIMD=0` build mode. Scalar copy
   calls bypass runtime dispatch and its mutable state. `make scalar-test`
   separately builds the integer core with general-purpose registers only
-  and runs eight userspace regression suites. The normal x86-64 decoder
+  and runs eleven userspace regression suites. The normal x86-64 decoder
   still uses inline AVX2; it is not a runtime-portable binary for older CPUs.
+- Add a caller-owned FAST context for independent inputs up to 64 KiB. It
+  separates size/alignment/init from compression, performs no hot-path heap
+  allocation, resets history on every call and preserves one-shot output
+  bytes. Compact 16-bit matcher positions reduce queried workspace to 537,800
+  bytes for a 4 KiB limit and 722,361 bytes for 64 KiB. Roots clear sparsely
+  below 4 KiB and densely at and above 4 KiB. Even after this reduction the
+  context is too large for a credible per-CPU zram proposal without more work.
+- Check frame-footer capacity before writing, accept a null zero-length XXH64
+  input without pointer arithmetic, and validate checksum tails and decoder
+  spans by remaining length before advancing input pointers. Both AVX2
+  prefetch phases validate literal capacity and match history before forming a
+  lookahead pointer. New regressions exercise exact/truncated endpoints,
+  oversized frame/block lengths, multiframe boundaries, streaming-capacity
+  retry and both prefetch phases. These are invariant hardening changes, not a
+  claim that an observed crash was repaired; valid encoded bytes are unchanged.
 - Add workspace ownership/capacity/reuse regressions. On Linux, the normal
   test target injects allocation failures to require zero allocations in
   workspace literal calls and exactly one allocation in tested S/T decode
@@ -48,6 +63,14 @@ universal superiority over LZ4/Zstd.
   its original version. Document the remaining licensing, stack, allocator,
   architecture and human-review requirements for a possible kernel port.
   No Linux patch is submitted and no new formal proof is claimed.
+- Final scalar page-profile measurements cover 216 profiles across 4/16/64 KiB
+  and preserve 2,304 frames byte-for-byte. On 4 KiB synthetic text, LZ4 remains
+  substantially faster and Zstd level 1 remains smaller and faster to encode;
+  VaptVupt has the faster decode of the two measured Zstd settings but retains
+  much more context memory. Six paired builds found strong 4 KiB context-encode
+  gains on random, records and repeating inputs, alongside a 2.36% 64 KiB
+  records decode-batch loss and a 12.24% 4 KiB text decode-p95 loss. The release
+  does not claim to supersede LZ4 or Zstd.
 
 ## v2.65.10 — Sprint 140: leaner encoder setup and malformed-stream rejection
 

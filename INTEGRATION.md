@@ -15,6 +15,10 @@ bitstreams are rejected. Changing the streaming encoder's `format_v2` through
 reset no longer produces corrupt long-match frames.
 Fast mode ignores `format_v2` and retains the four-byte minimum match required
 by plain tokens; the previous combination could produce an invalid frame.
+Frame footer capacity, checksum tails and decoder spans are checked by remaining
+length before advancing a pointer. Both AVX2 prefetch phases validate literal
+capacity and match history before forming their lookahead pointer, and
+`vv_xxh64(NULL, 0, ...)` is accepted without null-pointer arithmetic.
 
 License: this codec library is GPL-3.0-or-later. Zupt is a separate userspace
 consumer, not a former name for this library or an interchangeable checkout
@@ -114,6 +118,10 @@ literal frequencies must sum to the full normalization table before it is
 built. Huffman bit writing avoids undefined shifts and reports output overflow;
 decoding rejects truncated bitstreams. The CLI validates complete decimal
 arguments and known modes, and a failed output flush/close returns failure.
+Endpoint regressions cover truncated headers, blocks and footers, oversized
+compressed/decompressed lengths, multiframe boundaries, streaming-capacity
+retry, and both AVX2 prefetch phases. The pointer-invariant cleanup is not
+presented as an observed crash fix; valid encoded bytes remain unchanged.
 
 Since v2.65.10, the encoder skips unused hash4 allocation: 512 KiB less requested memory at
 the default window and up to 64.25 MiB at `window_log=24`. Paired internal
@@ -201,6 +209,9 @@ insert needs at least four bytes within the independent 64 KiB input, leaving
 65535 available as the empty sentinel. The full 18-bit hash mapping, candidate
 order and matching rules are unchanged. The primary map occupies 512 KiB;
 ordinary one-shot and streaming matchers retain their 32-bit storage.
+Roots are cleared sparsely below 4 KiB, densely for an exact 4 KiB input, and
+dense clearing already applies above that boundary. This reset choice changes
+setup cost only; it does not change format or candidate decisions.
 Workspace also contains metadata, an input-bounded power-of-two chain, and
 token scratch. Neither this API nor
 the scalar gate is a freestanding kernel library: the shared translation
@@ -218,7 +229,7 @@ big-endian correctness has not been established.
   Compiler-generated vector operations and system libc implementations are
   separate concerns; this switch alone is not a general-register-only build.
 - `make scalar-test` — general-register-only core objects on x86-64/AArch64,
-  linked to userspace libraries and exercised by ten suites. It retains
+  linked to userspace libraries and exercised by eleven suites. It retains
   stack-usage diagnostics but does not approve a kernel stack budget.
 - `make test` — full suite (C suites, reference decoders, differential fuzzer,
   negative corpus, ratio gate, OOM sweep). It also checks current C output in
@@ -259,6 +270,19 @@ endianness, and worst-case memory budget. SIMD/FP register use has kernel
 context restrictions beyond compiling without intrinsics; consult the
 [floating-point API](https://docs.kernel.org/core-api/floating-point.html).
 The scalar gate is a userspace portability check, not a kernel build.
+
+The current caller-owned FAST context is also too large to present as a zram
+backend without further design work. It measures 537,800 bytes for a 4 KiB
+input limit and 722,361 bytes for 64 KiB. In the inspected Linux v7.3-rc1 zram
+implementation, CPU-hotplug callbacks create a runtime context when each CPU is
+brought online. All possible CPUs can therefore acquire one for each compressor
+instance, but contexts are not preallocated merely because a CPU is possible.
+Before allocator overhead or zram's own buffers, the worst case of one 4 KiB-
+profile context per online CPU would consume about 4.10 MiB for 8 CPUs, 32.82
+MiB for 64, or 131.30 MiB for 256. The 64 KiB-profile figures are about 5.51,
+44.09, and 176.36 MiB. These projections are arithmetic from the queried
+userspace sizes, not measured kernel allocation results, and they make workspace
+reduction an upstream gate rather than a later tuning item.
 
 Any future proposal needs a concrete subsystem use case and realistic
 measurements against the existing codecs, including page-memory cost,

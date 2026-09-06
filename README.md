@@ -21,14 +21,17 @@ v2.65.11 reduces fast-mode setup work for inputs up to 4 KiB while preserving
 the full hash mapping, adds caller-owned workspaces for Huffman/ANS literal
 decoding, and provides an explicitly scalar build. Fast mode now ignores
 `format_v2`, because its plain tokens require a minimum match length of four;
-the previous combination could produce corrupt output. These are userspace
-improvements, not a claim to replace LZ4/Zstd or to be ready for Linux kernel
-inclusion. The [integration guide](INTEGRATION.md#linux-kernel-readiness)
+the previous combination could produce corrupt output. Frame footer capacity,
+checksum tails, decoder spans, and both AVX2 prefetch histories are checked
+before advancing or forming the corresponding pointers; `vv_xxh64(NULL, 0,
+...)` is also defined. Valid encoded bytes remain unchanged. These are
+userspace improvements, not a claim to replace LZ4/Zstd or to be ready for
+Linux kernel inclusion. The [integration guide](INTEGRATION.md#linux-kernel-readiness)
 records the licensing, memory, portability, and validation work still needed.
 
 ### Current bounded page profile (measured 2026-09-06)
 
-Commit `0e44ff8` was measured in-process on 64 independent synthetic 4 KiB
+Commit `a14e09f` was measured in-process on 64 independent synthetic 4 KiB
 text pages, pinned to CPU 4. VaptVupt was built without intrinsics or compiler
 auto-vectorization; LZ4 1.10.0 and Zstd 1.5.7 retained their installed
 userspace builds. The table includes each format's framing and reports p50
@@ -37,9 +40,9 @@ not a kernel, zram, or general-register-only result.
 
 | API | Ratio | Encode p50 (µs) | Decode p50 (µs) | Encode MB/s | Decode MB/s |
 |---|---:|---:|---:|---:|---:|
-| VaptVupt FAST caller context, no checksum | 2.868 | 72.877 | 9.099 | 56.5 | 483.3 |
-| LZ4 extState | 2.454 | 12.514 | 2.848 | 339.7 | 1500.2 |
-| Zstd context, level 1, no checksum | 4.927 | 42.075 | 13.372 | 99.7 | 321.3 |
+| VaptVupt FAST caller context, no checksum | 2.868 | 62.536 | 9.206 | 65.7 | 486.2 |
+| LZ4 extState | 2.454 | 12.636 | 2.851 | 339.6 | 1495.0 |
+| Zstd context, level 1, no checksum | 4.927 | 42.057 | 13.337 | 99.4 | 320.1 |
 
 This profile does not support a claim that VaptVupt supersedes LZ4 or Zstd:
 LZ4 is faster here, while Zstd has the stronger ratio. The complete 216-profile
@@ -47,19 +50,30 @@ CSV/JSON evidence covers 4/16/64 KiB and six synthetic fixtures; LZO-RLE and
 kernel runtime testing were not available. Reproduction details and caveats
 are in [bench/COMPARISON.md](bench/COMPARISON.md).
 
-The caller-owned FAST context now uses 16-bit positions for its bounded
-matcher. Queried workspace fell from 1,070,264 to 537,800 bytes at 4 KiB,
-from 1,131,752 to 574,712 at 16 KiB, and from 1,377,705 to 722,361 at 64 KiB.
-Three alternating baseline/current pairs preserved 2,304 frames byte-for-byte.
+The `9adffc7` to `0e44ff8` caller-context comparison changed the bounded
+matcher to 16-bit positions. Queried workspace fell from 1,070,264 to 537,800
+bytes at 4 KiB, from 1,131,752 to 574,712 at 16 KiB, and from 1,377,705 to
+722,361 at 64 KiB. Three alternating pairs preserved 2,304 frames byte-for-byte.
 The stronger non-bypassed batch observations were −12.69% latency on 16 KiB
 records and −36.53% on 16 KiB random pages; 4 KiB text was unstable and is
 not treated as a repeatable speedup.
 
+A final six-pair `fa86b27` to `a14e09f` comparison covered 216 paired profile
+observations and again preserved all 2,304 frames. Dense root clearing at
+exactly 4 KiB reduced caller-context encode batch latency by 31.71% for random,
+16.22% for records, and 39.13% for repeating pages. Text improved only 1.07%
+and split three pairs each way, so it remains a small, noisy observation. The
+complete-binary comparison also found a 2.36% decode batch loss for 64 KiB
+records in all six pairs and a 12.24% 4 KiB text decode-p95 loss in five; these
+trade-offs are retained rather than hidden behind the favorable encode results.
+
 Paired encoder-only measurements against v2.65.10 found 2.7× fast encoding on
 1 KiB text and +10.7% on 4 KiB text; larger-input controls were within ±0.4%.
-At 4 KiB the shortened chain requests 240 KiB less memory with the default
-window, while the primary hash map still requests 1 MiB. Measured valid
-compressed outputs were byte-identical. Full methodology and controls are in
+In the ordinary one-shot path, the shortened chain requests 240 KiB less memory
+for 4 KiB input with the default window, while that path's 32-bit primary hash
+map still requests 1 MiB. This is separate from the caller-owned context above,
+whose 16-bit primary map occupies 512 KiB. Measured valid compressed outputs
+were byte-identical. Full methodology and controls are in
 [bench/COMPARISON.md](bench/COMPARISON.md).
 
 The preceding v2.65.10 release avoided allocating unused secondary hash4 tables:
@@ -177,10 +191,13 @@ Recent releases, newest first:
   existing 48 KiB sequence-table arena for those literals. Single/four-stream
   ANS literal decoding now builds tables directly, removing its 4 KiB spread
   scratch. This does not make whole-frame decoding allocation-free.
-  `SIMD=0` disables codec intrinsics
-  and dispatch; `make scalar-test` checks a general-register-only core in
-  userspace. `bench/bench_pages.c` compares one-shot APIs on deterministic
-  4/16/64 KiB fixtures, with framing and checksum differences disclosed.
+  The caller-owned FAST context uses compact positions, resets independent
+  page history without allocation, and has exact 4 KiB reset tuning. Footer,
+  checksum, decoder-span and AVX2-prefetch pointer invariants are hardened.
+  `SIMD=0` disables codec intrinsics and dispatch; `make scalar-test` checks a
+  general-register-only core in userspace. `bench/bench_pages.c` compares
+  one-shot/context APIs on deterministic 4/16/64 KiB fixtures, with framing,
+  checksum, retained-memory and measured losses disclosed.
 - **v2.65.10** — avoids unused hash4 allocations and fixes corrupt streaming
   output after changing `format_v2` through `vv_cstream_reset`. Token decoding
   requires the length-extension terminator and enforces the frame's declared
@@ -470,14 +487,14 @@ checksum they apply it once after the final block.
 
 To build without codec SIMD intrinsics or runtime dispatch, use
 `make clean && make SIMD=0`. `make scalar-test` separately compiles the core
-with general-register-only flags on x86-64/AArch64 and runs eight userspace
+with general-register-only flags on x86-64/AArch64 and runs eleven userspace
 suites. Neither command is a kernel build or a kernel stack-budget approval;
 the ordinary scalar build may still use compiler-generated vector operations
 or the system C library's implementations.
 
 `make test` runs:
 
-- 23 C test binaries (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
+- 26 C test binaries (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
   safe-zone, DoS reproducers, BCJ filter, and more).
 - The Python reference decoder against current C output, plus the JavaScript
   reference decoder when a working `node` runtime is available. Current S/T,
@@ -511,6 +528,9 @@ or the system C library's implementations.
   truncated streams and bit-writer bounds, and ANS frequency normalization.
 - Direct-vs-legacy tANS decode-table equivalence and whole/split streaming BCJ
   roundtrips for x86 and ARM64 with checksums both enabled and disabled.
+- Exact decoder endpoints for truncated headers, blocks and footers; oversized
+  compressed/decompressed lengths; multiframe boundaries; streaming-capacity
+  retry; and both AVX2 prefetch phases.
 - `test_seq_v2` 21/21, including rejection and lossless fallback for an
   oversize nonterminal literal run; both reference decoders consume trailing
   LL-only entries with C-equivalent bounds, reject dual-BCJ headers, and invert

@@ -8,7 +8,7 @@ stands, per the project's "honesty over hype" rule.
 
 ## Current scalar page profile (measured 2026-09-06)
 
-Commit `0e44ff8` was measured by `bench/run_page_profile.py` in one pinned
+Commit `a14e09f` was measured by `bench/run_page_profile.py` in one pinned
 userspace process on CPU 4. The VaptVupt objects use `VV_DISABLE_SIMD`, no
 compiler auto-vectorization, and the portable scalar path; this is not a
 kernel build or a general-register-only certification. LZ4 1.10.0 and Zstd
@@ -31,9 +31,9 @@ throughput comes from whole-cohort batches.
 
 | API | Ratio | Mean compressed bytes | Encode p50 µs | Decode p50 µs | Encode MB/s | Decode MB/s |
 |---|---:|---:|---:|---:|---:|---:|
-| VaptVupt FAST caller context | 2.868 | 1428.172 | 72.877 | 9.099 | 56.5 | 483.3 |
-| LZ4 extState | 2.454 | 1668.938 | 12.514 | 2.848 | 339.7 | 1500.2 |
-| Zstd context level 1 | 4.927 | 831.391 | 42.075 | 13.372 | 99.7 | 321.3 |
+| VaptVupt FAST caller context | 2.868 | 1428.172 | 62.536 | 9.206 | 65.7 | 486.2 |
+| LZ4 extState | 2.454 | 1668.938 | 12.636 | 2.851 | 339.6 | 1495.0 |
+| Zstd context level 1 | 4.927 | 831.391 | 42.057 | 13.337 | 99.4 | 320.1 |
 
 Thus this measurement shows LZ4 faster and Zstd smaller for this workload; it
 does not establish that VaptVupt can replace either codec. The raw CSV, JSON,
@@ -45,16 +45,16 @@ and Zstd discoverable through `pkg-config` and run:
 ```sh
 CC=gcc python3 bench/run_page_profile.py --run --scalar --cpu 4 \
   --output /path/outside/the/repository --pages 64 --samples 101 \
-  --batch-samples 7 --min-batch-ms 5
+  --batch-samples 7 --min-batch-ms 10
 ```
 
 The runner fails a completed measurement if its source hashes change and
 marks incomplete/missing data as `FAIL`, `BLOCKED`, or `NOT_RUN` rather than
 reporting a partial success.
 
-The same source was also measured against `9adffc7` in three alternating
-before/after pairs. The bounded context's workspace changed as follows; these
-are queried bytes, excluding allocator overhead and RSS:
+An earlier `9adffc7` to `0e44ff8` comparison used three alternating pairs. The
+bounded context's workspace changed as follows; these are queried bytes,
+excluding allocator overhead and RSS:
 
 | Maximum input | Before | Current | Reduction |
 |---|---:|---:|---:|
@@ -69,6 +69,18 @@ latency fell 12.69% for 16 KiB records and 36.53% for 16 KiB random pages.
 The 4 KiB text ratios varied from 0.805 to 1.127, so its apparent median gain
 is not treated as repeatable. The paired run records small one-shot-control
 losses and all other trade-offs rather than subtracting them as noise.
+
+The final `fa86b27` to `a14e09f` comparison used six alternating pairs, 201
+individual calls and five batches of at least 5 ms per profile. Its 216 paired
+profile observations preserved all 2,304 exported frames byte-for-byte. For
+4 KiB caller-context encoding, median paired batch latency fell 31.71% on
+random, 16.22% on records and 39.13% on repeating pages. Text fell only 1.07%
+and split three pairs each way, so it is a small, noisy observation rather than
+the separate dense prototype's 14.21% result. The complete-binary comparison
+also recorded losses: 64 KiB records decode batches rose 2.36% in all six pairs,
+and 4 KiB text individual decode p95 rose 12.24% in five. These measurements do
+not isolate every timing movement to one changed line and do not establish a
+general decoder improvement.
 
 ## v2.65.11 small-input fast setup (measured 2026-09-06)
 
@@ -100,14 +112,16 @@ within noise. The 64-byte fixture expands to 95 bytes, so its large relative
 speedup is not a compression-ratio win. Fixtures retain the xorshift32 seed
 1234567 and word/period definitions documented in the historical section below.
 
-Only one-shot fast inputs of at most 4096 bytes use the new setup. The exact
-18-bit primary map still requests 1 MiB, but only buckets reachable from
-input positions with at least four bytes are initialized. Parsing keeps the
-same hash5/hash4 mapping and candidate choices. The chain capacity becomes
-the smaller of the advertised window and the next power of two covering the
-input. At 4 KiB with the default window, this requests 16 KiB instead of
-256 KiB for the chain: 240 KiB less, not a measured RSS reduction. Larger
-inputs, streaming, balanced, and extreme retain ordinary initialization.
+Only ordinary one-shot fast inputs of at most 4096 bytes use this setup. That
+path's exact 18-bit, 32-bit-position primary map still requests 1 MiB, but only
+buckets reachable from input positions with at least four bytes are
+initialized. It is distinct from the newer caller-owned context, whose bounded
+16-bit-position map occupies 512 KiB. Parsing keeps the same hash5/hash4 mapping
+and candidate choices. The ordinary one-shot chain capacity becomes the smaller
+of the advertised window and the next power of two covering the input. At 4 KiB
+with the default window, this requests 16 KiB instead of 256 KiB for the chain:
+240 KiB less, not a measured RSS reduction. Larger inputs, streaming, balanced,
+and extreme retain ordinary initialization.
 
 A separate v2.65.11 decoder change uses the existing direct-table builder for
 single/four-stream ANS literals, removing a 4 KiB spread array from each path.
