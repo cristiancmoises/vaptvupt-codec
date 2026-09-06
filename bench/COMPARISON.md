@@ -6,6 +6,52 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
+## Current scalar page profile (measured 2026-09-06)
+
+Commit `2e454c2` was measured by `bench/run_page_profile.py` in one pinned
+userspace process on CPU 4. The VaptVupt objects use `VV_DISABLE_SIMD`, no
+compiler auto-vectorization, and the portable scalar path; this is not a
+kernel build or a general-register-only certification. LZ4 1.10.0 and Zstd
+1.5.7 use their installed userspace libraries. CPU 4 used the `intel_pstate`
+driver with the `powersave` governor and SMT enabled, so this is a reproducible
+data point rather than a portable performance promise.
+
+The full matrix has 216 profiles: 4/16/64 KiB, six deterministic synthetic
+fixtures, twelve one-shot/context variants, 64 independently generated pages
+per profile, 101 individual latency samples, and seven throughput samples.
+All successful decodes were checked against the requested page length and
+contents. Sizes include native framing; the zero and same-filled controls are
+kept separate because consumers may bypass codecs for them. LZO-RLE was not
+installed and is `NOT_RUN`; no kernel runtime was used.
+
+The 4 KiB text subset below is deliberately illustrative, not a cherry-picked
+replacement claim. It includes no checksum for all three rows, and setup is
+reported separately by the raw evidence. Latencies are p50 individual calls;
+throughput comes from whole-cohort batches.
+
+| API | Ratio | Mean compressed bytes | Encode p50 µs | Decode p50 µs | Encode MB/s | Decode MB/s |
+|---|---:|---:|---:|---:|---:|---:|
+| VaptVupt FAST caller context | 2.868 | 1428.172 | 73.173 | 9.192 | 56.3 | 485.8 |
+| LZ4 extState | 2.454 | 1668.938 | 12.543 | 2.852 | 340.3 | 1499.1 |
+| Zstd context level 1 | 4.927 | 831.391 | 41.959 | 13.304 | 99.8 | 321.5 |
+
+Thus this measurement shows LZ4 faster and Zstd smaller for this workload; it
+does not establish that VaptVupt can replace either codec. The raw CSV, JSON,
+commands, compiler identity, source hashes, affinity, and before/after CPU
+configuration are retained outside the source tree as release evidence. To
+reproduce without publishing generated results in the repository, make LZ4
+and Zstd discoverable through `pkg-config` and run:
+
+```sh
+CC=gcc python3 bench/run_page_profile.py --run --scalar --cpu 4 \
+  --output /path/outside/the/repository --pages 64 --samples 101 \
+  --batch-samples 7 --min-batch-ms 5
+```
+
+The runner fails a completed measurement if its source hashes change and
+marks incomplete/missing data as `FAIL`, `BLOCKED`, or `NOT_RUN` rather than
+reporting a partial success.
+
 ## v2.65.11 small-input fast setup (measured 2026-09-06)
 
 The retained `bench/bench_encode.c` harness compared v2.65.10 (`658e226`)
