@@ -8,7 +8,7 @@ stands, per the project's "honesty over hype" rule.
 
 ## Current scalar page profile (measured 2026-09-06)
 
-Commit `2e454c2` was measured by `bench/run_page_profile.py` in one pinned
+Commit `0e44ff8` was measured by `bench/run_page_profile.py` in one pinned
 userspace process on CPU 4. The VaptVupt objects use `VV_DISABLE_SIMD`, no
 compiler auto-vectorization, and the portable scalar path; this is not a
 kernel build or a general-register-only certification. LZ4 1.10.0 and Zstd
@@ -31,9 +31,9 @@ throughput comes from whole-cohort batches.
 
 | API | Ratio | Mean compressed bytes | Encode p50 µs | Decode p50 µs | Encode MB/s | Decode MB/s |
 |---|---:|---:|---:|---:|---:|---:|
-| VaptVupt FAST caller context | 2.868 | 1428.172 | 73.173 | 9.192 | 56.3 | 485.8 |
-| LZ4 extState | 2.454 | 1668.938 | 12.543 | 2.852 | 340.3 | 1499.1 |
-| Zstd context level 1 | 4.927 | 831.391 | 41.959 | 13.304 | 99.8 | 321.5 |
+| VaptVupt FAST caller context | 2.868 | 1428.172 | 72.877 | 9.099 | 56.5 | 483.3 |
+| LZ4 extState | 2.454 | 1668.938 | 12.514 | 2.848 | 339.7 | 1500.2 |
+| Zstd context level 1 | 4.927 | 831.391 | 42.075 | 13.372 | 99.7 | 321.3 |
 
 Thus this measurement shows LZ4 faster and Zstd smaller for this workload; it
 does not establish that VaptVupt can replace either codec. The raw CSV, JSON,
@@ -51,6 +51,24 @@ CC=gcc python3 bench/run_page_profile.py --run --scalar --cpu 4 \
 The runner fails a completed measurement if its source hashes change and
 marks incomplete/missing data as `FAIL`, `BLOCKED`, or `NOT_RUN` rather than
 reporting a partial success.
+
+The same source was also measured against `9adffc7` in three alternating
+before/after pairs. The bounded context's workspace changed as follows; these
+are queried bytes, excluding allocator overhead and RSS:
+
+| Maximum input | Before | Current | Reduction |
+|---|---:|---:|---:|
+| 4 KiB | 1,070,264 | 537,800 | 49.75% |
+| 16 KiB | 1,131,752 | 574,712 | 49.22% |
+| 64 KiB | 1,377,705 | 722,361 | 47.57% |
+
+Both builds exported 2,304 complete frames across the API/fixture/size matrix;
+their SHA-256 hashes match. Each timed run also checked context output against
+the ordinary one-shot encoder. For non-bypassed inputs, median paired batch
+latency fell 12.69% for 16 KiB records and 36.53% for 16 KiB random pages.
+The 4 KiB text ratios varied from 0.805 to 1.127, so its apparent median gain
+is not treated as repeatable. The paired run records small one-shot-control
+losses and all other trade-offs rather than subtracting them as noise.
 
 ## v2.65.11 small-input fast setup (measured 2026-09-06)
 
