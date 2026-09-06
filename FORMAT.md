@@ -92,6 +92,10 @@ A decoder MAY reject a frame with:
 The reference decoder enforces the window range because a frame header is the
 bound used to validate LZ offsets, and rejects the contradictory dual-BCJ
 combination in one-shot decode, streaming decode, and frame-info parsing.
+The maximum match offset is `min(2^window_log, 65535)` for windows up to
+16 bits, or `min(2^window_log, 16777215)` for larger windows. The exact
+limit is allowed. This bound applies to classic tokens, legacy stripped
+tokens, and resolved SEQ/SEQ_V2 offsets, including repeat offsets.
 Reserved flag bits remain tolerated for forward compatibility; new encoders
 MUST leave them clear. A conforming encoder MUST set at most one BCJ
 architecture bit. The v2.65.9 `vv_compress` API enforces this by returning
@@ -287,6 +291,12 @@ Wire format for `lit_fmt = 4`:
   back into the output by reading one symbol from each stream in
   turn (`stream0[i], stream1[i], stream2[i], stream3[i], ...`).
 
+Every decoded Huffman symbol requires its complete code bits to be present
+in its own stream. Unused bits in the final byte may be padding, but an
+exhausted stream cannot supply synthetic zero bits or borrow bytes from
+another stream. This also applies to single-stream Huffman (`lit_fmt = 3`
+and legacy tag `'H'`); v2.65.10 rejects truncated codes in both decoders.
+
 Decoder implementation: `src/vv_huffman.c::vvh_decode4`. The
 decoder runs 4 independent bit-readers using a single shared decode
 table. The hot loop performs 4 lookups per iteration with no
@@ -378,8 +388,12 @@ output — each frame is independently decodable.
 If `current_position - offset < 0` (match would read before
 `dst_base`), the bitstream is corrupt and decoding MUST error.
 
-A token stream ends when the cumulative output reaches the
-block header's `decompressed_size`.
+A token stream occupies exactly its declared compressed payload and must
+produce exactly the block header's `decompressed_size`. Literal runs,
+offsets, and extensions cannot read into the next block or frame footer;
+literal and match copies cannot exceed the declared output size. The final
+token may omit its match when its literal run ends at the token-stream
+boundary; in that case no offset or match-length extension follows.
 
 ### 5.1 Extension-Length Varint Format
 
