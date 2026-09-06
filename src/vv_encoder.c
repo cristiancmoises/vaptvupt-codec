@@ -1184,7 +1184,9 @@ static int opt_collect(const matcher_t *m, const uint8_t *data,
     return n;
 }
 
-static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
+/* Keep the optimal parser's price/histogram arrays out of emit_block's
+ * shared stack frame: FAST callers never execute this parser. */
+static VV_NOINLINE size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
                                      size_t block_len, uint8_t *dst,
                                      size_t dst_cap, matcher_t *m, int min_match) {
     uint8_t *op = dst;
