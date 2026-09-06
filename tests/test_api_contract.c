@@ -19,6 +19,69 @@
     else { printf("  ✗ FAIL: %s\n", msg); fails++; } \
 } while(0)
 
+static int footer_capacity_cases(void)
+{
+    uint8_t input[4096];
+    size_t bound = vv_compress_bound(sizeof(input));
+    uint8_t *reference = malloc(bound);
+    uint8_t *output = malloc(bound + 32);
+    if (!reference || !output) {
+        free(reference);
+        free(output);
+        return 0;
+    }
+
+    for (int fixture = 0; fixture < 3; fixture++) {
+        uint32_t state = 0x6d2b79f5u;
+        size_t input_size = fixture == 2 ? 64 : sizeof(input);
+        for (size_t i = 0; i < input_size; i++) {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            input[i] = fixture == 1 ? (uint8_t)state : (uint8_t)(i % 43);
+        }
+        for (int mode = 0; mode < 3; mode++) {
+            for (int window = 16; window <= 17; window++) {
+                for (int filter = 0; filter < 3; filter++) {
+                    for (int checksum = 0; checksum <= 1; checksum++) {
+                        vv_options_t opts;
+                        vv_default_options(&opts);
+                        opts.mode = (vv_mode_t)mode;
+                        opts.window_log = (uint8_t)window;
+                        opts.filter_x86 = filter == 1;
+                        opts.filter_arm64 = filter == 2;
+                        opts.checksum = checksum;
+                        int64_t size = vv_compress(input, input_size, reference, bound, &opts);
+                        if (size < 12) goto fail;
+
+                        for (size_t cap = (size_t)size - 12; cap <= (size_t)size + 1; cap++) {
+                            memset(output, 0xa5, bound + 32);
+                            int64_t result = vv_compress(input, input_size, output, cap, &opts);
+                            for (size_t i = 0; i < 32; i++) {
+                                if (output[cap + i] != 0xa5) goto fail;
+                            }
+                            /* Existing entry points require at least 44 bytes
+                             * even when the resulting frame would be smaller. */
+                            if (cap < (size_t)size || cap < 44) {
+                                if (result != VV_ERR_OVERFLOW) goto fail;
+                            } else if (result != size || memcmp(output, reference, (size_t)size)) {
+                                goto fail;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    free(reference);
+    free(output);
+    return 1;
+fail:
+    free(reference);
+    free(output);
+    return 0;
+}
+
 int main(void) {
     int fails = 0;
     uint8_t buf[1024];
@@ -26,6 +89,8 @@ int main(void) {
     int64_t r;
     int ir;
     vv_options_t opts;
+
+    CHECK(footer_capacity_cases(), "exact footer capacities preserve output bounds and valid frame bytes");
     
     /* === vv_compress NULL/bad-arg checks === */
     printf("vv_compress edge cases:\n");

@@ -2298,6 +2298,11 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
 
     if (opts->checksum) {
         vv_frame_footer_t ff;
+        /* A block may fit while leaving too little room for the footer. */
+        if (sizeof(ff) > dst_cap - (size_t)(op - dst)) {
+            matcher_free(&m);
+            return VV_ERR_OVERFLOW;
+        }
         ff.checksum = vv_xxh64(src, src_len, 0);
         ff.footer_magic = 0x56564E44u;
         memcpy(op, &ff, sizeof(ff)); op += sizeof(ff);
