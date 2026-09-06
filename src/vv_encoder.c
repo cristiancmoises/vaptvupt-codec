@@ -2053,8 +2053,10 @@ int64_t vv_fast_context_compress(vv_fast_context_t *ctx,
     /* Avoid NULL pointer arithmetic in hashing an empty input. */
     const uint8_t empty = 0;
     const uint8_t *input = src ? src : &empty;
+    /* With the compact roots, clearing the map is faster for a full 4 KiB
+     * page. Keep sparse reset for smaller inputs, where it avoids that cost. */
     matcher_prepare(&ctx->m, wlog, slots, depth, 0,
-                    src_len <= 4096 ? input : NULL, src_len);
+                    src_len < 4096 ? input : NULL, src_len);
     ctx->m.single_probe = 1;
     ctx->m.accel = effective_accel(opts);
     ctx->m.no_rep = opts->no_rep ? 1 : 0;
