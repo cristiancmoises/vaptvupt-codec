@@ -92,9 +92,9 @@ static inline uint32_t vv_bh_pack(vv_block_type_t t, int last, uint32_t sz) {
 /* ═══════════════════════════════════════════════════════════════
  * TOKEN TYPES (in the sequence stream)
  *
- * Each token is: [type:2][litlen:6] [optional litlen ext]
+ * Each plain token is: [litlen:4][matchlen:4] [optional litlen ext]
  *                [literal bytes]
- *                [matchlen ext] [offset bytes]
+ *                [offset bytes] [optional matchlen ext]
  *
  * The decoder reads a compact token byte, copies literals,
  * then copies a match. This is LZ4-like for speed.
@@ -107,7 +107,7 @@ static inline uint32_t vv_bh_pack(vv_block_type_t t, int last, uint32_t sz) {
  * Followed by:
  *   [extended literal length varint, if litlen==15]
  *   [literal bytes]
- *   [offset: 2 bytes LE (or 3 bytes if high bit set)]
+ *   [offset: 2 bytes LE for window_log <= 16, otherwise 3 bytes LE]
  *   [extended match length varint, if matchlen==15]
  */
 
@@ -314,6 +314,46 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
 
 /* Compute upper bound on compressed size for src_len input bytes. */
 size_t vv_compress_bound(size_t src_len);
+
+/* Caller-owned FAST contexts for independent inputs up to 64 KiB.
+ * These additive APIs do not change the defaults of vv_compress(). */
+typedef struct vv_fast_context_s vv_fast_context_t;
+
+/* Storage includes context metadata, a full 1 MiB primary hash map,
+ * an input-sized chain and token scratch. Size returns zero unless
+ * max_input is in 1..65536. Use the queried alignment, not a fixed ABI
+ * assumption. No allocation is performed by these APIs. */
+size_t vv_fast_context_size(size_t max_input);
+size_t vv_fast_context_alignment(void);
+
+/* Initialize aligned caller storage and return its context through out_ctx.
+ * opts is required, copied by value, and must select VV_MODE_ULTRA_FAST.
+ * Windows 0 (auto=16) and 10..24 are accepted; all BCJ/auto-filter options
+ * must be zero. Other options retain their existing FAST semantics.
+ * Invalid arguments/alignment return PARAM; insufficient storage returns
+ * OVERFLOW. On failure, *out_ctx is NULL when out_ctx is non-NULL, and the
+ * supplied storage is unchanged. Storage must not overlap opts/out_ctx.
+ *
+ * The caller owns storage for the context's entire lifetime. Moving or
+ * modifying it invalidates the context. No destroy/free call is required.
+ * An uninitialized, corrupted or invalidated context must not be used. */
+int vv_fast_context_init(void *storage, size_t storage_cap, size_t max_input,
+                         const vv_options_t *opts, vv_fast_context_t **out_ctx);
+
+/* Compress one independent frame with no allocation or heap fallback.
+ * src_len must be <= the initialized max_input (otherwise PARAM); src may
+ * be NULL only for zero length. dst is required and dst_cap must be at
+ * least vv_compress_bound(src_len), otherwise OVERFLOW before output writes.
+ * src, dst and context storage must not overlap. The context is exclusive
+ * to one call at a time; separate contexts have independent matcher state.
+ * Every frame starts with reset dictionary/repeat history, including when
+ * the context is reused after errors.
+ * Token scratch is cleared after parsing. Caller storage remains reusable
+ * after any return, but output is not guaranteed to be atomic on errors.
+ * Returns the frame byte count, or a negative error code. */
+int64_t vv_fast_context_compress(vv_fast_context_t *ctx,
+                                const uint8_t *src, size_t src_len,
+                                uint8_t *dst, size_t dst_cap);
 
 /* ═══════════════════════════════════════════════════════════════
  * MULTI-THREADED COMPRESSION

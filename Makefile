@@ -128,6 +128,8 @@ TEST22_BIN = test_exact_buffer_decode
 
 TEST23_SRC = tests/test_entropy_workspace.c $(CORE_SRC)
 TEST23_BIN = test_entropy_workspace
+TEST24_SRC = tests/test_fast_workspace.c $(CORE_SRC)
+TEST24_BIN = test_fast_workspace
 ENTROPY_TEST_FLAGS :=
 ENTROPY_TEST_LDFLAGS :=
 ifeq ($(shell uname -s),Linux)
@@ -138,7 +140,7 @@ endif
 # A public-header change (including the release version) must rebuild every
 # consumer even when none of its .c files changed.
 $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN): $(CORE_HEADERS)
-$(TEST23_BIN): $(CORE_HEADERS)
+$(TEST23_BIN) $(TEST24_BIN): $(CORE_HEADERS)
 
 .PHONY: all clean test python-test fuzz fuzz-libfuzzer test-fuzz fuzz-clean bench-update speed-update speed-baseline speed-profile run_roundtrip run_huffman bench check-debug perf pgo
 
@@ -321,7 +323,13 @@ $(TEST23_BIN): $(TEST23_SRC)
 	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t23.o
 	$(CC) $(CFLAGS) $(ENTROPY_TEST_FLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST23_SRC)) build_obj/vv_simd_t23.o build_obj/vv_decoder_t23.o $(LDFLAGS) $(ENTROPY_TEST_LDFLAGS) -o $(TEST23_BIN)
 
-test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TARGET)
+$(TEST24_BIN): $(TEST24_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t24.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t24.o
+	$(CC) $(CFLAGS) $(ENTROPY_TEST_FLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST24_SRC)) build_obj/vv_simd_t24.o build_obj/vv_decoder_t24.o $(LDFLAGS) $(ENTROPY_TEST_LDFLAGS) -o $(TEST24_BIN)
+
+test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TEST24_BIN) $(TARGET)
 	./$(TEST1_BIN)
 	./$(TEST2_BIN)
 	./$(TEST3_BIN)
@@ -345,6 +353,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST21_BIN)
 	./$(TEST22_BIN)
 	./$(TEST23_BIN)
+	./$(TEST24_BIN)
 	@echo ""
 	@echo "OOM-robustness sweep (no crash on any single allocation failure):"
 	@VV_BIN=./$(TARGET) CC="$(CC)" sh tests/oom_sweep.sh
@@ -415,7 +424,7 @@ fuzz: $(TARGET)
 # ─────────────────────────────────────────────────────────────────────
 # libFuzzer harnesses (Sprint 123, v2.48.5)
 # ─────────────────────────────────────────────────────────────────────
-# Three coverage-guided harnesses statically linking the codec sources
+# Four coverage-guided harnesses statically linking the codec sources
 # with -fsanitize=fuzzer,address,undefined. Requires clang.
 #
 #   make fuzz-libfuzzer       — build all harnesses
@@ -459,11 +468,15 @@ build_obj/fuzz_roundtrip: tests/fuzz/fuzz_roundtrip.c $(FUZZ_SIMD_O) $(FUZZ_CORE
 	@mkdir -p build_obj
 	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
 
-fuzz-libfuzzer: build_obj/fuzz_decompress build_obj/fuzz_dstream build_obj/fuzz_roundtrip
+build_obj/fuzz_fast_context: tests/fuzz/fuzz_fast_context.c $(FUZZ_SIMD_O) $(FUZZ_CORE) $(CORE_HEADERS)
+	@mkdir -p build_obj
+	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
+
+fuzz-libfuzzer: build_obj/fuzz_decompress build_obj/fuzz_dstream build_obj/fuzz_roundtrip build_obj/fuzz_fast_context
 
 test-fuzz: fuzz-libfuzzer
 	@command -v clang >/dev/null 2>&1 || { echo "test-fuzz: skipped (clang required)"; exit 0; }
-	@mkdir -p build_obj/corpus_decompress build_obj/corpus_dstream build_obj/corpus_roundtrip
+	@mkdir -p build_obj/corpus_decompress build_obj/corpus_dstream build_obj/corpus_roundtrip build_obj/corpus_fast_context
 	@echo "[fuzz_decompress] 30s smoke"
 	@build_obj/fuzz_decompress -max_total_time=30 -print_final_stats=0 build_obj/corpus_decompress >build_obj/fuzz_decompress.log 2>&1; rc=$$?; \
 	grep -E "Done|crash" build_obj/fuzz_decompress.log || true; test $$rc -eq 0
@@ -473,11 +486,14 @@ test-fuzz: fuzz-libfuzzer
 	@echo "[fuzz_roundtrip] 30s smoke"
 	@build_obj/fuzz_roundtrip  -max_total_time=30 -print_final_stats=0 build_obj/corpus_roundtrip >build_obj/fuzz_roundtrip.log 2>&1; rc=$$?; \
 	grep -E "Done|crash" build_obj/fuzz_roundtrip.log || true; test $$rc -eq 0
+	@echo "[fuzz_fast_context] 30s smoke"
+	@build_obj/fuzz_fast_context -max_total_time=30 -max_len=65538 -print_final_stats=0 build_obj/corpus_fast_context >build_obj/fuzz_fast_context.log 2>&1; rc=$$?; \
+	grep -E "Done|crash" build_obj/fuzz_fast_context.log || true; test $$rc -eq 0
 
 fuzz-clean:
-	rm -f build_obj/fuzz_decompress build_obj/fuzz_dstream build_obj/fuzz_roundtrip
+	rm -f build_obj/fuzz_decompress build_obj/fuzz_dstream build_obj/fuzz_roundtrip build_obj/fuzz_fast_context
 	rm -f build_obj/vv_simd_fuzz.o
-	rm -rf build_obj/corpus_decompress build_obj/corpus_dstream build_obj/corpus_roundtrip
+	rm -rf build_obj/corpus_decompress build_obj/corpus_dstream build_obj/corpus_roundtrip build_obj/corpus_fast_context
 	rm -f crash-* leak-* timeout-* oom-*
 
 # ─────────────────────────────────────────────────────────────────────
@@ -590,7 +606,7 @@ bench: $(TARGET)
 	fi
 
 clean:
-	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) *.vv *.zupt *.orig
+	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TEST24_BIN) *.vv *.zupt *.orig
 	rm -rf tests/corpus_bad
 
 amalg:

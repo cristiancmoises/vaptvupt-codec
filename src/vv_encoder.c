@@ -296,6 +296,31 @@ typedef struct {
                             * output byte-identical. */
 } matcher_t;
 
+/* Initialize borrowed or allocated matcher tables identically. Chain entries
+ * are reachable only through initialized map roots, so need no clearing. */
+static void matcher_prepare(matcher_t *m, uint32_t window_log, uint32_t wsz,
+                            uint32_t depth, int use_hash4,
+                            const uint8_t *small_src, size_t small_len) {
+    if (small_src) {
+        /* Include the final four-byte hash variant as well as hash5. */
+        for (size_t pos = 0; pos + 4 <= small_len; pos++)
+            m->table[hash_safe(small_src + pos, (int32_t)(small_len - pos))] = -1;
+    } else {
+        memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));
+    }
+    if (m->table4) memset(m->table4, 0xFF, VV_HC4_SIZE * sizeof(int32_t));
+    m->chain_mask = wsz - 1;
+    m->chain_depth = depth;
+    m->rep[0] = m->rep[1] = m->rep[2] = 0;
+    m->wlog = (uint8_t)window_log;
+    m->use_hash4 = use_hash4 ? 1 : 0;
+    m->use_hash3 = 0;
+    m->single_probe = 0;
+    m->accel = 0;
+    m->no_rep = 0;
+    m->max_match = VV_MAX_MATCH;
+}
+
 /* SPRINT 93 audit: returns 1 on success, 0 on allocation failure.
  * Callers MUST check the return value — on failure m is left in a
  * partially-initialized state with all pointers either valid or NULL,
@@ -344,32 +369,8 @@ static int matcher_init_for_input(matcher_t *m, uint32_t window_log,
         m->table3 = m->hash3_chain = NULL;
         return 0;
     }
-    /* hash3 tables allocated lazily only when use_hash3 is enabled.
-     * On v1 path (the default), they stay NULL and cost nothing. */
-    /* PERF: only the table arrays need to be cleared. chain/hash4_chain
-     * are only read via table entries (which are now -1), so stale
-     * data in them is unreachable. See matcher_reset for rationale. */
-    if (small_src) {
-        /* Every map lookup or insertion hashes one of these positions.
-         * Initialize those buckets before parsing, including the final
-         * four-byte hash variant. Unvisited buckets remain unreachable.
-         * The unchanged full-width hash preserves candidate chains exactly. */
-        for (size_t pos = 0; pos + 4 <= small_len; pos++)
-            m->table[hash_safe(small_src + pos, (int32_t)(small_len - pos))] = -1;
-    } else {
-        memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));
-    }
-    if (m->table4) memset(m->table4, 0xFF, VV_HC4_SIZE * sizeof(int32_t));
-    m->chain_mask = wsz - 1;
-    m->chain_depth = depth;
-    m->rep[0] = m->rep[1] = m->rep[2] = 0;
-    m->wlog = (uint8_t)window_log;
-    m->use_hash4 = use_hash4 ? 1 : 0;
-    m->use_hash3 = 0;  /* Disabled by default — enabled for format v2 */
-    m->single_probe = 0; /* Disabled by default — set only for ULTRA_FAST encode */
-    m->accel = 0;        /* Resolved from the public automatic/default setting later. */
-    m->no_rep = 0;       /* rep-match probing on by default (opt-in --no-rep) */
-    m->max_match = VV_MAX_MATCH;  /* v1 default, see matcher_set_format_v2 */
+    /* hash3 tables remain NULL until enabled separately. */
+    matcher_prepare(m, window_log, wsz, depth, use_hash4, small_src, small_len);
     return 1;
 }
 
@@ -1949,6 +1950,121 @@ static size_t emit_block(const uint8_t *src, size_t block_start, size_t braw,
 size_t vv_compress_bound(size_t src_len) {
     return src_len + src_len / 255 + 256
          + sizeof(vv_frame_header_t) + sizeof(vv_frame_footer_t);
+}
+
+/* Caller storage contains this metadata followed by map, chain and scratch.
+ * Pointer-bearing metadata determines the public alignment query. */
+struct vv_fast_context_s {
+    matcher_t m;
+    vv_options_t opts;
+    size_t max_input;
+    size_t tmp_cap;
+    uint8_t *tmp;
+    uint32_t chain_slots;
+};
+
+static uint32_t fast_chain_slots(size_t max_input) {
+    uint32_t slots = 1;
+    while (slots < max_input) slots <<= 1;
+    return slots;
+}
+
+size_t vv_fast_context_size(size_t max_input) {
+    if (max_input == 0 || max_input > 65536) return 0;
+    return sizeof(vv_fast_context_t)
+         + VV_HC_SIZE * sizeof(int32_t)
+         + fast_chain_slots(max_input) * sizeof(int32_t)
+         + max_input + max_input / 255 + 1024;
+}
+
+size_t vv_fast_context_alignment(void) {
+    return _Alignof(vv_fast_context_t);
+}
+
+int vv_fast_context_init(void *storage, size_t storage_cap, size_t max_input,
+                         const vv_options_t *opts, vv_fast_context_t **out_ctx) {
+    if (!out_ctx) return VV_ERR_PARAM;
+    *out_ctx = NULL;
+    size_t required = vv_fast_context_size(max_input);
+    if (!required || !storage || !opts ||
+        opts->mode != VV_MODE_ULTRA_FAST ||
+        (opts->window_log && (opts->window_log < 10 || opts->window_log > 24)) ||
+        opts->filter_x86 || opts->filter_arm64 || opts->filter_auto ||
+        (uintptr_t)storage % vv_fast_context_alignment()) return VV_ERR_PARAM;
+    if (storage_cap < required) return VV_ERR_OVERFLOW;
+
+    vv_fast_context_t *ctx = (vv_fast_context_t *)storage;
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->opts = *opts;
+    ctx->max_input = max_input;
+    ctx->chain_slots = fast_chain_slots(max_input);
+    ctx->tmp_cap = max_input + max_input / 255 + 1024;
+    ctx->m.table = (int32_t *)(ctx + 1);
+    ctx->m.chain = ctx->m.table + VV_HC_SIZE;
+    ctx->tmp = (uint8_t *)(ctx->m.chain + ctx->chain_slots);
+    *out_ctx = ctx;
+    return VV_OK;
+}
+
+int64_t vv_fast_context_compress(vv_fast_context_t *ctx,
+                                const uint8_t *src, size_t src_len,
+                                uint8_t *dst, size_t dst_cap) {
+    if (!ctx || !dst || (!src && src_len) || src_len > ctx->max_input)
+        return VV_ERR_PARAM;
+    /* Bounded input makes this addition safe. Reserve the footer before
+     * block emission even though the required bound already has slack. */
+    if (dst_cap < vv_compress_bound(src_len)) return VV_ERR_OVERFLOW;
+    const vv_options_t *opts = &ctx->opts;
+    uint32_t wlog = opts->window_log ? opts->window_log : 16;
+    uint32_t slots = 1u << wlog;
+    if (slots > ctx->chain_slots) slots = ctx->chain_slots;
+    uint32_t depth = opts->depth_override ? opts->depth_override : 4;
+    if (depth > 4096) depth = 4096;
+    /* Avoid NULL pointer arithmetic in hashing an empty input. */
+    const uint8_t empty = 0;
+    const uint8_t *input = src ? src : &empty;
+    matcher_prepare(&ctx->m, wlog, slots, depth, 0,
+                    src_len <= 4096 ? input : NULL, src_len);
+    ctx->m.single_probe = 1;
+    ctx->m.accel = effective_accel(opts);
+    ctx->m.no_rep = opts->no_rep ? 1 : 0;
+
+    vv_frame_header_t fh;
+    memset(&fh, 0, sizeof(fh));
+    fh.magic = VV_MAGIC;
+    fh.version = 1;
+    fh.flags = opts->checksum ? 1 : 0;
+    fh.mode_hint = VV_MODE_ULTRA_FAST;
+    fh.window_log = (uint8_t)wlog;
+    fh.content_size = src_len;
+    memcpy(dst, &fh, sizeof(fh));
+    size_t written = sizeof(fh);
+    size_t footer = opts->checksum ? sizeof(vv_frame_footer_t) : 0;
+    if (src_len) {
+        size_t block_size = emit_block(input, 0, src_len, 1, &ctx->m,
+                                      VV_MODE_ULTRA_FAST, (uint8_t)wlog,
+                                      ctx->tmp, ctx->tmp_cap, NULL, 0,
+                                      NULL, NULL, 0, dst + written,
+                                      dst_cap - written - footer,
+                                      VV_MIN_MATCH, opts->compat_v246_5_decoder, NULL);
+        /* A failed parse may have written scratch before returning zero.
+         * Clear the whole bounded section, not only a success watermark. */
+        vv_secure_zero(ctx->tmp, ctx->tmp_cap);
+        if (!block_size) return VV_ERR_OVERFLOW;
+        written += block_size;
+    } else {
+        uint32_t bh = vv_bh_pack(VV_BLOCK_RAW, 1, 0);
+        memcpy(dst + written, &bh, sizeof(bh));
+        written += sizeof(bh);
+    }
+    if (opts->checksum) {
+        vv_frame_footer_t ff;
+        ff.checksum = vv_xxh64(input, src_len, 0);
+        ff.footer_magic = 0x56564E44u;
+        memcpy(dst + written, &ff, sizeof(ff));
+        written += sizeof(ff);
+    }
+    return (int64_t)written;
 }
 
 /* Public vv_compress: select and apply a reversible BCJ branch filter, then

@@ -16,8 +16,10 @@ reset no longer produces corrupt long-match frames.
 Fast mode ignores `format_v2` and retains the four-byte minimum match required
 by plain tokens; the previous combination could produce an invalid frame.
 
-License: this codec library is GPL-3.0-or-later; the VaptVupt tool (formerly
-Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
+License: this codec library is GPL-3.0-or-later. Zupt is a separate userspace
+consumer, not a former name for this library or an interchangeable checkout
+of the broader VaptVupt application. A kernel adaptation belongs in
+vaptvupt-linux; Zupt does not require a kernel module to keep working.
 
 ---
 
@@ -167,6 +169,41 @@ mapping is preserved. At 4 KiB with the default window this avoids requesting
 streaming retain the full matcher setup. Paired timings and their controls
 are in [bench/COMPARISON.md](bench/COMPARISON.md).
 
+## Caller-owned FAST contexts (development API)
+
+`vv_fast_context_size(max_input)` and `vv_fast_context_alignment()` describe
+caller-owned storage for independent inputs of at most 64 KiB. Initialize
+it with `vv_fast_context_init`, then reuse it through
+`vv_fast_context_compress`. Initialization copies explicit FAST options;
+NULL options, other modes, and BCJ/auto-filter requests are rejected.
+The storage must be aligned, remain at a stable address, and be exclusive
+to one operation at a time. It must not overlap input, output, or the
+initialization arguments. There is no destroy operation: the caller frees
+its storage when no call can still access it.
+
+Each compression resets dictionary and repeat-offset state, including after
+an error. It allocates nothing and has no heap fallback. Supply at least
+`vv_compress_bound(src_len)` output bytes; smaller capacities are rejected
+before output writes. The original one-shot capacity contract is unchanged.
+Token scratch is cleared after parsing. This is not a guarantee that every
+byte of caller storage is cleared; callers needing that policy must clear
+their entire allocation before releasing it.
+
+The output uses the existing v1 frame and RAW/plain-block grammar, without
+entropy coding, BCJ, streaming state, or dictionaries shared between inputs.
+FAST continues to ignore `format_v2`. The reuse API is intended to preserve
+the corresponding one-shot encoder's bytes, not merely produce another
+decodable representation. Its size and alignment queries are not fixed ABI
+constants; existing public structures and entry points remain unchanged.
+
+The primary hash map still occupies 1 MiB. Caller ownership removes repeated
+allocation, not that memory requirement. Workspace also contains metadata,
+an input-bounded power-of-two chain, and token scratch. Neither this API nor
+the scalar gate is a freestanding kernel library: the shared translation
+units retain libc and excluded codec paths. The existing C implementation
+also uses native-endian loads/stores for fields specified as little-endian;
+big-endian correctness has not been established.
+
 ---
 
 ## Build targets
@@ -177,7 +214,7 @@ are in [bench/COMPARISON.md](bench/COMPARISON.md).
   Compiler-generated vector operations and system libc implementations are
   separate concerns; this switch alone is not a general-register-only build.
 - `make scalar-test` — general-register-only core objects on x86-64/AArch64,
-  linked to userspace libraries and exercised by eight suites. It retains
+  linked to userspace libraries and exercised by nine suites. It retains
   stack-usage diagnostics but does not approve a kernel stack budget.
 - `make test` — full suite (C suites, reference decoders, differential fuzzer,
   negative corpus, ratio gate, OOM sweep). It also checks current C output in
