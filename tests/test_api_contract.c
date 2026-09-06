@@ -297,8 +297,13 @@ int main(void) {
     /* NULL data with len=0 should be OK (per most hash APIs) */
     h1 = vv_xxh64(NULL, 0, 0);
     printf("  ✓ NULL data with len=0 returned 0x%lx\n", (unsigned long)h1);
+    vv_xxh64_state_t hash_state;
+    vv_xxh64_init(&hash_state, 0);
+    vv_xxh64_update(&hash_state, NULL, 0);
+    CHECK(vv_xxh64_finalize(&hash_state) == h1,
+          "NULL zero-length streaming update is a no-op");
     
     printf("\n%s: %d fails / %d total\n", fails ? "FAIL" : "PASS",
-           fails, 35);
+           fails, 36);
     return fails ? 1 : 0;
 }
