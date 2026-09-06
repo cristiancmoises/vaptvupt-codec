@@ -15,7 +15,8 @@ endif
 # For maximum performance on a known target CPU, build with:
 #   make clean && make perf
 # which adds -march=native. Native binaries are NOT portable across
-# CPU generations; the default -O3 -flto build is.
+# CPU generations. On x86-64 the default decoder also requires AVX2;
+# use a clean SIMD=0 build for the baseline/scalar implementation.
 ifneq ($(filter undefined default,$(origin CFLAGS)),)
 CFLAGS = -Wall -Wextra -Werror -Wno-unused-parameter -O3 -flto -std=c11 -Iinclude -D_POSIX_C_SOURCE=199309L
 endif
@@ -33,12 +34,24 @@ ifeq ($(ENABLE_THREADS),1)
   LDFLAGS += -lpthread
 endif
 
-# AVX2 is applied ONLY to vv_simd.c (and via runtime dispatch).
-# All other sources compile baseline; SSE2 is baseline on x86-64.
+# The default x86-64 decoder has inline AVX2 code, not runtime dispatch.
+# SIMD=0 removes explicit vector code and uses direct scalar copy helpers.
+# Compiler-generated vector instructions require separate compiler flags;
+# scalar-test checks the core with general-purpose registers only.
 ARCH := $(shell uname -m)
+SIMD ?= 1
+ifneq ($(SIMD),0)
+ifneq ($(SIMD),1)
+$(error SIMD must be 0 or 1)
+endif
+endif
 SIMD_FLAGS :=
+ifeq ($(SIMD),0)
+override CFLAGS += -DVV_DISABLE_SIMD=1
+else
 ifeq ($(ARCH),x86_64)
   SIMD_FLAGS := -mavx2
+endif
 endif
 
 CORE_SRC = src/vv_encoder.c src/vv_decoder.c src/vv_simd.c src/vv_xxh64.c src/vv_huffman.c src/vv_ans.c src/vv_bcj.c src/vaptvupt_api.c
@@ -113,13 +126,27 @@ TEST21_BIN = test_phase1_overflow
 TEST22_SRC = tests/test_exact_buffer_decode.c $(CORE_SRC)
 TEST22_BIN = test_exact_buffer_decode
 
+TEST23_SRC = tests/test_entropy_workspace.c $(CORE_SRC)
+TEST23_BIN = test_entropy_workspace
+ENTROPY_TEST_FLAGS :=
+ENTROPY_TEST_LDFLAGS :=
+ifeq ($(shell uname -s),Linux)
+ENTROPY_TEST_FLAGS := -DVV_TEST_ALLOC_WRAP
+ENTROPY_TEST_LDFLAGS := -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
+endif
+
 # A public-header change (including the release version) must rebuild every
 # consumer even when none of its .c files changed.
 $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN): $(CORE_HEADERS)
+$(TEST23_BIN): $(CORE_HEADERS)
 
 .PHONY: all clean test python-test fuzz fuzz-libfuzzer test-fuzz fuzz-clean bench-update speed-update speed-baseline speed-profile run_roundtrip run_huffman bench check-debug perf pgo
 
 all: $(TARGET)
+
+.PHONY: scalar-test
+scalar-test:
+	@CC="$(CC)" sh verification/scalar_gate.sh
 
 # Fail if any debug fopen/fprintf sneaks into core source files.
 # Sprint 22 lesson: stale debug calls in hot paths cost 100× performance.
@@ -288,7 +315,13 @@ $(TEST22_BIN): $(TEST22_SRC)
 	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t22.o
 	$(CC) $(CFLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST22_SRC)) build_obj/vv_simd_t22.o build_obj/vv_decoder_t22.o $(LDFLAGS) -o $(TEST22_BIN)
 
-test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TARGET)
+$(TEST23_BIN): $(TEST23_SRC)
+	@mkdir -p build_obj
+	$(CC) $(CFLAGS) -c src/vv_simd.c $(SIMD_FLAGS) -o build_obj/vv_simd_t23.o
+	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t23.o
+	$(CC) $(CFLAGS) $(ENTROPY_TEST_FLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST23_SRC)) build_obj/vv_simd_t23.o build_obj/vv_decoder_t23.o $(LDFLAGS) $(ENTROPY_TEST_LDFLAGS) -o $(TEST23_BIN)
+
+test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TARGET)
 	./$(TEST1_BIN)
 	./$(TEST2_BIN)
 	./$(TEST3_BIN)
@@ -311,6 +344,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST20_BIN)
 	./$(TEST21_BIN)
 	./$(TEST22_BIN)
+	./$(TEST23_BIN)
 	@echo ""
 	@echo "OOM-robustness sweep (no crash on any single allocation failure):"
 	@VV_BIN=./$(TARGET) CC="$(CC)" sh tests/oom_sweep.sh
@@ -403,9 +437,9 @@ FUZZ_SIMD_O = build_obj/vv_simd_fuzz.o
 
 # Match the release decoder path on x86-64. The default build already uses
 # AVX2 for vv_decoder.c, so fuzzing a scalar-only decoder leaves coverage gaps.
-FUZZ_ARCH_FLAGS :=
-ifeq ($(ARCH),x86_64)
-FUZZ_ARCH_FLAGS := -mavx2
+FUZZ_ARCH_FLAGS := $(SIMD_FLAGS)
+ifeq ($(SIMD),0)
+FUZZ_ARCH_FLAGS += -DVV_DISABLE_SIMD=1
 endif
 
 build_obj/vv_simd_fuzz.o: src/vv_simd.c $(CORE_HEADERS)
@@ -556,7 +590,7 @@ bench: $(TARGET)
 	fi
 
 clean:
-	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) *.vv *.zupt *.orig
+	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) *.vv *.zupt *.orig
 	rm -rf tests/corpus_bad
 
 amalg:

@@ -624,9 +624,14 @@ vva_error_t vva_encode(const uint8_t *src, size_t src_len,
  * SINGLE-STREAM DECODE (tag 'A', backward compat)
  * ═══════════════════════════════════════════════════════════════ */
 
-vva_error_t vva_decode(const uint8_t *src, size_t src_len,
+static void release_literal_table(vva_dec_entry_t *dec, const void *workspace) {
+    if (!workspace) free(dec);
+}
+
+static vva_error_t vva_decode_impl(const uint8_t *src, size_t src_len,
                        uint8_t *dst, size_t dst_cap,
-                       size_t num_literals, size_t *src_consumed) {
+                       size_t num_literals, size_t *src_consumed,
+                       vva_dec_entry_t *workspace) {
     if (!num_literals) { *src_consumed = 0; return VVA_OK; }
     if (num_literals > dst_cap) return VVA_ERR_OVERFLOW;
 
@@ -643,15 +648,14 @@ vva_error_t vva_decode(const uint8_t *src, size_t src_len,
         return VVA_OK;
     }
 
-    uint8_t sp[ANS_L];  /* PERF: scratch for build_dec; stack, not per-block malloc */
-    vva_dec_entry_t *dec = (vva_dec_entry_t *)malloc(ANS_L * sizeof(*dec));
+    vva_dec_entry_t *dec = workspace ? workspace :
+        (vva_dec_entry_t *)malloc(ANS_L * sizeof(*dec));
     if (!dec) { return VVA_ERR_NOMEM; }
-    spread_symbols(norm, sp);
-    build_dec(norm, sp, dec);
+    build_dec_direct(norm, dec);
 
-    if (hdr + 2 > src_len) { free(dec); return VVA_ERR_CORRUPT; }
+    if (hdr + 2 > src_len) { release_literal_table(dec, workspace); return VVA_ERR_CORRUPT; }
     uint32_t state = (uint32_t)src[hdr] | ((uint32_t)src[hdr + 1] << 8);
-    if (state >= (uint32_t)ANS_L) { free(dec); return VVA_ERR_CORRUPT; }
+    if (state >= (uint32_t)ANS_L) { release_literal_table(dec, workspace); return VVA_ERR_CORRUPT; }
 
     ans_br_t r;
     ans_br_init(&r, src + hdr + 2, src_len - hdr - 2);
@@ -670,7 +674,7 @@ vva_error_t vva_decode(const uint8_t *src, size_t src_len,
         r.a >>= nb;
         r.n -= nb;
         state = (uint32_t)e.baseline + bits;
-        if (state >= (uint32_t)ANS_L) { free(dec); return VVA_ERR_CORRUPT; }
+        if (state >= (uint32_t)ANS_L) { release_literal_table(dec, workspace); return VVA_ERR_CORRUPT; }
     }
 
     *src_consumed = hdr + 2 + r.p;
@@ -679,7 +683,7 @@ vva_error_t vva_decode(const uint8_t *src, size_t src_len,
         if (*src_consumed >= ov) *src_consumed -= ov;
     }
 
-    free(dec);
+    release_literal_table(dec, workspace);
     return VVA_OK;
 }
 
@@ -818,9 +822,10 @@ vva_error_t vva_encode4(const uint8_t *src, size_t src_len,
  * Output is interleaved: dst[0]=lane0, dst[1]=lane1, dst[2]=lane2, dst[3]=lane3
  * ═══════════════════════════════════════════════════════════════ */
 
-vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
+static vva_error_t vva_decode4_impl(const uint8_t *src, size_t src_len,
                         uint8_t *dst, size_t dst_cap,
-                        size_t num_literals, size_t *src_consumed) {
+                        size_t num_literals, size_t *src_consumed,
+                        vva_dec_entry_t *workspace) {
     if (!num_literals) { *src_consumed = 0; return VVA_OK; }
     if (num_literals > dst_cap) return VVA_ERR_OVERFLOW;
 
@@ -838,22 +843,21 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
     }
 
     /* Build shared decode table */
-    uint8_t sp[ANS_L];  /* PERF: scratch for build_dec; stack, not per-block malloc */
-    vva_dec_entry_t *dec = (vva_dec_entry_t *)malloc(ANS_L * sizeof(*dec));
+    vva_dec_entry_t *dec = workspace ? workspace :
+        (vva_dec_entry_t *)malloc(ANS_L * sizeof(*dec));
     if (!dec) { return VVA_ERR_NOMEM; }
-    spread_symbols(norm, sp);
-    build_dec(norm, sp, dec);
+    build_dec_direct(norm, dec);
 
     /* Read 4 states (2B) + 4 bitstream sizes (4B) */
     const uint8_t *p = src + hdr;
-    if (p + 8 + 16 > src + src_len) { free(dec); return VVA_ERR_CORRUPT; }
+    if (p + 8 + 16 > src + src_len) { release_literal_table(dec, workspace); return VVA_ERR_CORRUPT; }
 
     uint32_t s[4];
     size_t bsz[4];
     for (int i = 0; i < 4; i++) {
         s[i] = (uint32_t)p[0] | ((uint32_t)p[1] << 8);
         p += 2;
-        if (s[i] >= (uint32_t)ANS_L) { free(dec); return VVA_ERR_CORRUPT; }
+        if (s[i] >= (uint32_t)ANS_L) { release_literal_table(dec, workspace); return VVA_ERR_CORRUPT; }
     }
     for (int i = 0; i < 4; i++) {
         bsz[i] = (size_t)p[0] | ((size_t)p[1] << 8)
@@ -865,7 +869,7 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
     ans_br_t r[4];
     const uint8_t *bp = p;
     for (int i = 0; i < 4; i++) {
-        if (bp + bsz[i] > src + src_len) { free(dec); return VVA_ERR_CORRUPT; }
+        if (bp + bsz[i] > src + src_len) { release_literal_table(dec, workspace); return VVA_ERR_CORRUPT; }
         ans_br_init(&r[i], bp, bsz[i]);
         ans_br_fill(&r[i]);
         bp += bsz[i];
@@ -916,14 +920,14 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
         { int nb=e3.nbits; uint32_t b=(uint32_t)(r[3].a & (((uint64_t)1<<nb)-1)); r[3].a>>=nb; r[3].n-=nb; s[3]=(uint32_t)e3.baseline+b; }
 
         if (VV_UNLIKELY((s[0] | s[1] | s[2] | s[3]) >= (uint32_t)ANS_L)) {
-            free(dec); return VVA_ERR_CORRUPT;
+            release_literal_table(dec, workspace); return VVA_ERR_CORRUPT;
         }
     }
 
     /* Scalar tail for remaining 0-3 symbols */
     for (size_t i = full_quads * 4; i < num_literals; i++) {
         int lane = (int)(i & 3);
-        if (VV_UNLIKELY(s[lane] >= (uint32_t)ANS_L)) { free(dec); return VVA_ERR_CORRUPT; }
+        if (VV_UNLIKELY(s[lane] >= (uint32_t)ANS_L)) { release_literal_table(dec, workspace); return VVA_ERR_CORRUPT; }
         if (r[lane].n < ANS_LOG) ans_br_fill(&r[lane]);
         vva_dec_entry_t e = dec[s[lane]];
         dst[i] = e.symbol;
@@ -931,8 +935,65 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
     }
 
     *src_consumed = (size_t)(bp - src);
-    free(dec);
+    release_literal_table(dec, workspace);
     return VVA_OK;
+}
+
+size_t vva_decode_workspace_size(void) {
+    return ANS_L * sizeof(vva_dec_entry_t);
+}
+
+size_t vva_decode_workspace_alignment(void) {
+    return _Alignof(vva_dec_entry_t);
+}
+
+static vva_error_t check_literal_workspace(void *workspace, size_t cap) {
+    if (!workspace || (uintptr_t)workspace % _Alignof(vva_dec_entry_t))
+        return VVA_ERR_PARAM;
+    if (cap < ANS_L * sizeof(vva_dec_entry_t)) return VVA_ERR_OVERFLOW;
+    return VVA_OK;
+}
+
+vva_error_t vva_decode(const uint8_t *src, size_t src_len,
+                       uint8_t *dst, size_t dst_cap,
+                       size_t num_literals, size_t *src_consumed) {
+    return vva_decode_impl(src, src_len, dst, dst_cap, num_literals,
+                           src_consumed, NULL);
+}
+
+vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
+                        uint8_t *dst, size_t dst_cap,
+                        size_t num_literals, size_t *src_consumed) {
+    return vva_decode4_impl(src, src_len, dst, dst_cap, num_literals,
+                            src_consumed, NULL);
+}
+
+vva_error_t vva_decode_with_workspace(const uint8_t *src, size_t src_len,
+                                      uint8_t *dst, size_t dst_cap,
+                                      size_t num_literals, size_t *src_consumed,
+                                      void *workspace, size_t workspace_cap) {
+    if (!src_consumed || (!src && src_len) || (!dst && dst_cap)) return VVA_ERR_PARAM;
+    if (!num_literals) { *src_consumed = 0; return VVA_OK; }
+    if (!src || !dst) return VVA_ERR_PARAM;
+    if (num_literals > dst_cap) return VVA_ERR_OVERFLOW;
+    vva_error_t err = check_literal_workspace(workspace, workspace_cap);
+    if (err != VVA_OK) return err;
+    return vva_decode_impl(src, src_len, dst, dst_cap, num_literals,
+                           src_consumed, (vva_dec_entry_t *)workspace);
+}
+
+vva_error_t vva_decode4_with_workspace(const uint8_t *src, size_t src_len,
+                                       uint8_t *dst, size_t dst_cap,
+                                       size_t num_literals, size_t *src_consumed,
+                                       void *workspace, size_t workspace_cap) {
+    if (!src_consumed || (!src && src_len) || (!dst && dst_cap)) return VVA_ERR_PARAM;
+    if (!num_literals) { *src_consumed = 0; return VVA_OK; }
+    if (!src || !dst) return VVA_ERR_PARAM;
+    if (num_literals > dst_cap) return VVA_ERR_OVERFLOW;
+    vva_error_t err = check_literal_workspace(workspace, workspace_cap);
+    if (err != VVA_OK) return err;
+    return vva_decode4_impl(src, src_len, dst, dst_cap, num_literals,
+                            src_consumed, (vva_dec_entry_t *)workspace);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2466,6 +2527,11 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
     size_t tab_sec = 3 * (ANS_L * sizeof(vva_dec_entry_t));
     uint8_t *lit_buf = (uint8_t *)malloc(lit_sec + tab_sec);
     if (!lit_buf) return VVA_ERR_NOMEM;
+    /* The sequence tables are built only after literal decoding returns.
+     * Reuse that region for the literal table first: the 48 KiB section
+     * accommodates both the ANS and Huffman workspaces, avoiding a nested
+     * allocation while keeping the literal bytes in their own section. */
+    void *literal_workspace = lit_buf + lit_sec;
 
     if (total_lits > 0 && lit_enc_len > 0) {
         vva_error_t lerr = VVA_ERR_CORRUPT;
@@ -2473,25 +2539,25 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
 
         if (lit_fmt == 1) {
             /* ANS 4-way interleaved */
-            lerr = vva_decode4(p, lit_enc_len, lit_buf, total_lits,
-                                total_lits, &lit_consumed);
+            lerr = vva_decode4_with_workspace(p, lit_enc_len, lit_buf, total_lits,
+                                total_lits, &lit_consumed, literal_workspace, tab_sec);
         } else if (lit_fmt == 2) {
             /* ANS single-stream */
-            lerr = vva_decode(p, lit_enc_len, lit_buf, total_lits,
-                               total_lits, &lit_consumed);
+            lerr = vva_decode_with_workspace(p, lit_enc_len, lit_buf, total_lits,
+                               total_lits, &lit_consumed, literal_workspace, tab_sec);
         } else if (lit_fmt == 3) {
             /* SPRINT 71 (v2.46): Huffman-coded literals within SEQ. */
-            vvh_error_t herr = vvh_decode(p, lit_enc_len, lit_buf,
+            vvh_error_t herr = vvh_decode_with_workspace(p, lit_enc_len, lit_buf,
                                            total_lits, total_lits,
-                                           &lit_consumed);
+                                           &lit_consumed, literal_workspace, tab_sec);
             lerr = (herr == VVH_OK) ? VVA_OK : VVA_ERR_CORRUPT;
         } else if (lit_fmt == 4) {
             /* SPRINT 104 (v2.47): 4-stream interleaved Huffman literals.
              * Faster decode (1.8-2.2× via ILP across 4 independent
              * streams). Same ratio as lit_fmt=3 modulo +10B header. */
-            vvh_error_t herr = vvh_decode4(p, lit_enc_len, lit_buf,
+            vvh_error_t herr = vvh_decode4_with_workspace(p, lit_enc_len, lit_buf,
                                             total_lits, total_lits,
-                                            &lit_consumed);
+                                            &lit_consumed, literal_workspace, tab_sec);
             lerr = (herr == VVH_OK) ? VVA_OK : VVA_ERR_CORRUPT;
         } else {
             /* Raw literals (lit_fmt == 0) */

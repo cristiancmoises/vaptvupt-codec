@@ -23,8 +23,8 @@ extern "C" {
 
 #define VV_VERSION_MAJOR  2
 #define VV_VERSION_MINOR  65
-#define VV_VERSION_PATCH  10
-#define VV_VERSION_STRING "2.65.10"
+#define VV_VERSION_PATCH  11
+#define VV_VERSION_STRING "2.65.11"
 
 #define VV_MAGIC          0x56560100u  /* "VV\x01\x00" */
 #define VV_MAX_BLOCK_SIZE (1u << 20)   /* 1 MB per block */
@@ -188,9 +188,11 @@ typedef struct {
     uint8_t   window_log;    /* 0 = auto; explicit values are 10..24 */
     int       checksum;      /* 1 = compute XXH64 */
     int       verbose;
-    int       format_v2;     /* 1 = produce 'T' tag blocks (min_match=3) for
-                              *     better real-binary ratio. Requires decoder
-                              *     v2.33.0+. Default 0 for back-compat. */
+    int       format_v2;     /* 1 = allow 'T' tag blocks (min_match=3) in
+                              *     balanced/extreme for better binary ratio.
+                              *     FAST keeps v1 tokens; a stream retains this
+                              *     request for later mode changes via reset.
+                              *     Requires decoder v2.33.0+. Default 0. */
     int       compat_v246_5_decoder;
                              /* 1 = suppress lit_fmt=4 (4-stream Huffman) in
                               *     SEQ block encode race. Required when

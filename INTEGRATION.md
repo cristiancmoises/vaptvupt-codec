@@ -5,15 +5,16 @@ as the compression layer beneath an application's encryption envelope (for
 example, a backup tool that wraps each frame in AES-256-GCM or an ML-KEM + AEAD
 construction). It covers the API, the build, the flags that matter, and the
 threat-model boundary. Numbers here point to measured data, not headline
-claims — see `bench/COMPARISON.md` for the paired v2.65.10 allocation
-microbenchmark, the v2.65.10 deterministic suite measured on 2026-09-06, and the historical
-11-file corpus.
+claims — see `bench/COMPARISON.md` for the page-sized one-shot API harness,
+paired encoder measurements, and separately labeled historical CLI/corpus data.
 
-Release alignment: **v2.65.10**. The wire layout is unchanged from v2.65.9;
+Release alignment: **v2.65.11**. The wire layout is unchanged from v2.65.10;
 valid encoded streams remain compatible. Malformed token extensions, offsets
 beyond the declared window, invalid ANS normalization and truncated Huffman
 bitstreams are rejected. Changing the streaming encoder's `format_v2` through
 reset no longer produces corrupt long-match frames.
+Fast mode ignores `format_v2` and retains the four-byte minimum match required
+by plain tokens; the previous combination could produce an invalid frame.
 
 License: this codec library is GPL-3.0-or-later; the VaptVupt tool (formerly
 Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
@@ -24,8 +25,9 @@ Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
 
 1. **Link against the amalgamation.** `make amalg` emits
    `build/vaptvupt.c` + `build/vaptvupt.h` — a single translation unit, no
-   Makefile wiring required. Compile `build/vaptvupt.c` with `-mavx2` (or your
-   target's SIMD flag) and include `build/vaptvupt.h`.
+   Makefile wiring required. Include `build/vaptvupt.h`; define
+   `VV_DISABLE_SIMD=1` for a build without codec intrinsics/dispatch. An
+   amalgamation compiled with `-mavx2` instead requires an AVX2-capable target.
 
 2. **Skip the checksum on decode when an AEAD already authenticates the bytes.**
    If the host wraps the compressed frame in an AEAD (GCM, ChaCha20-Poly1305),
@@ -43,7 +45,8 @@ Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
    balanced/extreme, where it is a measured ratio win; text keeps 'S'. You
    only need `opts.format_v2 = 1` to *force* it for data the detector
    misses, and `opts.compat_v246_5_decoder = 1` to *suppress* it when your
-   decode side may be older than v2.33.0. Measure per data class.
+   decode side may be older than v2.33.0. Fast mode always uses plain tokens
+   with min_match=4 and ignores `format_v2`. Measure per data class.
 
 5. **Treat any non-OK decode return as a frame-level reject.** Do not attempt
    recovery inside the codec boundary. Propagate the error to the host's
@@ -110,7 +113,7 @@ built. Huffman bit writing avoids undefined shifts and reports output overflow;
 decoding rejects truncated bitstreams. The CLI validates complete decimal
 arguments and known modes, and a failed output flush/close returns failure.
 
-The encoder skips unused hash4 allocation: 512 KiB less requested memory at
+Since v2.65.10, the encoder skips unused hash4 allocation: 512 KiB less requested memory at
 the default window and up to 64.25 MiB at `window_log=24`. Paired internal
 measurements against v2.65.9 found +32.3% throughput for 1 KiB fast text and
 +17.2%/+39.6% for 1 MiB random input in fast/balanced mode; 1 MiB text was
@@ -132,10 +135,50 @@ valid wire output is unchanged.
 
 ---
 
+## Literal-decoder workspaces
+
+The lower-level headers `include/vv_huffman.h` and `include/vv_ans.h` expose
+`*_decode_with_workspace` and `*_decode4_with_workspace`. Query the required
+size/alignment with `vvh_decode_workspace_size()`,
+`vvh_decode_workspace_alignment()`, `vva_decode_workspace_size()`, and
+`vva_decode_workspace_alignment()`. The caller must provide exclusive storage
+that meets those requirements and does not overlap compressed input or decoded
+output. Workspace contents are unspecified after return; reuse is allowed
+after either success or failure. NULL/misaligned storage returns `PARAM`,
+insufficient capacity returns `OVERFLOW`, and `src_consumed` is mandatory.
+The headers describe the zero-literal exception and complete pointer contract.
+
+These helpers allocate no decode table. Existing wrappers retain their
+signatures and allocate their own storage. The legacy order-1 ANS context
+decoder is not covered. S/T block decoding reuses its existing 48 KiB
+sequence-table arena for the literal stage before rebuilding sequence tables;
+whole-frame decoding still allocates buffers. Single/four-stream ANS literal
+decoding now uses the existing direct-table builder, removing its 4 KiB spread
+scratch. GCC 14.3 `-O3` without LTO reports individual function frames dropping
+from 4704 to 608 bytes and from 5024 to 960 bytes. Those figures exclude nested
+callee frames and do not establish a kernel stack budget; the legacy ANS
+context encoder still has a 128 KiB local normalization array.
+
+For one-shot fast inputs up to 4 KiB, the encoder initializes only buckets
+reachable from input positions and sizes the chain to the next power of two
+covering the input, capped by the selected window. The full 18-bit hash
+mapping is preserved. At 4 KiB with the default window this avoids requesting
+240 KiB of chain storage; it is not an RSS measurement. Larger inputs and
+streaming retain the full matcher setup. Paired timings and their controls
+are in [bench/COMPARISON.md](bench/COMPARISON.md).
+
+---
+
 ## Build targets
 
 - `make amalg` — single-file `build/vaptvupt.{c,h}` for drop-in embedding.
 - `make` — the `vaptvupt` CLI and the static library pieces, `-Wall -Wextra -Werror`.
+- `make clean && make SIMD=0` — no codec SIMD intrinsics or runtime dispatch.
+  Compiler-generated vector operations and system libc implementations are
+  separate concerns; this switch alone is not a general-register-only build.
+- `make scalar-test` — general-register-only core objects on x86-64/AArch64,
+  linked to userspace libraries and exercised by eight suites. It retains
+  stack-usage diagnostics but does not approve a kernel stack budget.
 - `make test` — full suite (C suites, reference decoders, differential fuzzer,
   negative corpus, ratio gate, OOM sweep). It also checks current C output in
   Python/JavaScript, including checksum-on/off x86/AArch64 BCJ frames. Allow
@@ -156,6 +199,36 @@ certify the modified reader; regression and sanitizer tests cover the change
 dynamically. No new full formal-tool rerun is claimed. The historical evidence
 remains limited to its recorded implementations and bounds in `FORMAL_AUDIT.md`
 and `verification/README.md`.
+
+---
+
+## Linux kernel readiness
+
+v2.65.11 is not ready for upstream kernel inclusion. The public
+GPL-3.0-or-later license does not provide the GPL-2.0-only-compatible rights
+required for kernel code. A compatible licensing option needs authorization
+from all relevant rights holders; the release changes no license. See the
+[kernel licensing rules](https://docs.kernel.org/process/license-rules.html).
+
+The implementation still depends on libc and dynamic allocation. Heap and
+stack limits need explicit design and measurement: the legacy ANS context
+encoder alone retains a 128 KiB local normalization array. There is no Kbuild/
+Kconfig integration, KUnit coverage, or validated cross-architecture,
+endianness, and worst-case memory budget. SIMD/FP register use has kernel
+context restrictions beyond compiling without intrinsics; consult the
+[floating-point API](https://docs.kernel.org/core-api/floating-point.html).
+The scalar gate is a userspace portability check, not a kernel build.
+
+Any future proposal needs a concrete subsystem use case and realistic
+measurements against the existing codecs, including page-memory cost,
+compression/decompression latency, incompressible data, and failure handling.
+Synthetic cache-warm userspace throughput does not establish a zram or
+filesystem benefit. A human must review the work, certify the DCO with their
+own sign-off, and retain `Assisted-by` attribution for AI assistance; an agent
+cannot certify on their behalf. Submission is a reviewable patch series to
+the relevant maintainers, not a direct push to the mainline tree. Follow
+[AI coding assistants](https://docs.kernel.org/process/coding-assistants.html)
+and [submitting patches](https://docs.kernel.org/process/submitting-patches.html).
 
 ---
 

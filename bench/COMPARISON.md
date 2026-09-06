@@ -6,7 +6,126 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
-## v2.65.10 encoder allocation microbenchmark (measured 2026-09-06)
+## v2.65.11 small-input fast setup (measured 2026-09-06)
+
+The retained `bench/bench_encode.c` harness compared v2.65.10 (`658e226`)
+with the v2.65.11 encoder changes, keeping the remaining codec sources at
+that baseline. GCC 14.3.0 used `-O3 -flto -std=c11`, with `-mavx2` only for
+decoder/SIMD objects. The Intel Core i7-13700HX host ran Linux 7.2.3, pinned to
+CPU 4. Seven before/after pairs alternated execution order; each process
+doubled its batch until reaching at least 80 ms. Values below are medians of
+the seven batches for each variant. All compressed byte counts and rolling
+hashes matched, with roundtrip checks outside timing. These isolated encoder
+measurements are not comparisons with LZ4/Zstd or kernel workloads.
+
+| Input | Mode | v2.65.10 µs/call | v2.65.11 µs/call | Throughput change | Compressed bytes |
+|---|---|---:|---:|---:|---:|
+| 64 B varying words | fast | 14.681 | 0.582 | 25.2× | 95 |
+| 256 B varying words | fast | 15.179 | 1.838 | 8.3× | 167 |
+| 1 KiB varying words | fast | 18.298 | 6.837 | 2.7× | 407 |
+| 4 KiB varying words | fast | 28.515 | 25.769 | +10.7% | 1271 |
+| 4 KiB random | fast | 18.514 | 15.953 | +16.1% | 4128 |
+| 4 KiB 43-byte period | fast | 14.983 | 12.506 | +19.8% | 100 |
+| 4097 B varying words (control) | fast | 28.104 | 28.069 | +0.1% | 1271 |
+| 64 KiB varying words (control) | fast | 269.215 | 268.733 | +0.2% | 18918 |
+| 1 MiB varying words (control) | fast | 4578.685 | 4595.134 | −0.4% | 301764 |
+| 4 KiB varying words (control) | balanced | 197.422 | 197.915 | −0.2% | 863 |
+
+Setup dominates the smallest inputs; the four ordinary-setup controls are
+within noise. The 64-byte fixture expands to 95 bytes, so its large relative
+speedup is not a compression-ratio win. Fixtures retain the xorshift32 seed
+1234567 and word/period definitions documented in the historical section below.
+
+Only one-shot fast inputs of at most 4096 bytes use the new setup. The exact
+18-bit primary map still requests 1 MiB, but only buckets reachable from
+input positions with at least four bytes are initialized. Parsing keeps the
+same hash5/hash4 mapping and candidate choices. The chain capacity becomes
+the smaller of the advertised window and the next power of two covering the
+input. At 4 KiB with the default window, this requests 16 KiB instead of
+256 KiB for the chain: 240 KiB less, not a measured RSS reduction. Larger
+inputs, streaming, balanced, and extreme retain ordinary initialization.
+
+A separate v2.65.11 decoder change uses the existing direct-table builder for
+single/four-stream ANS literals, removing a 4 KiB spread array from each path.
+GCC 14.3 `-O3` without LTO reports individual frames of 608/960 bytes instead
+of 4704/5024 bytes. These are compiler-reported function frames, not complete
+call-chain stack bounds or kernel measurements; the legacy context encoder's
+128 KiB normalization array remains. This change is not included in the
+encoder-only timings above.
+
+The measured options use `format_v2=0`. Separately, v2.65.11 fixes a preexisting
+fast+`format_v2` corruption case by retaining plain-token min_match=4; fast
+cannot emit T blocks. Requested-v2 output that was previously invalid is
+intentionally repaired, so byte identity is claimed for valid baseline
+output, not for those malformed frames.
+
+To repeat the isolated comparison, use the historical build recipe below
+with baseline `v2.65.10` and candidate `v2.65.11`. Replace its `cases` list
+with `[(64,0,0), (256,0,0), (1024,0,0), (4096,0,0), (4096,0,1),
+(4096,0,2), (4097,0,0), (65536,0,0), (1048576,0,0), (4096,1,0)]`.
+Keep baseline headers, all non-encoder sources, compiler flags, CPU pinning,
+alternating order, and calibration unchanged.
+
+## Page-sized one-shot API comparison (pages-v1)
+
+`bench/bench_pages.c` provides an in-process comparison of `vv_compress` /
+`vv_decompress`, `LZ4_compress_default` / `LZ4_decompress_safe`, and
+`ZSTD_compress` / `ZSTD_decompress` at levels 1 and 3. It uses deterministic
+text, mixed binary records, random bytes, and a 43-byte period at 4/16/64 KiB.
+The fixtures are synthetic, repeated, cache-warm inputs, not captured kernel
+pages. The xorshift32 seed is `0x6d2b79f5`; CSV includes each input's FNV-1a
+fingerprint and compressed byte count.
+
+Default results are medians of seven samples after three warmup calls per
+operation. Encode and decode batch counts are independently doubled until a
+calibration batch takes at least 50 ms. Calibration is excluded from medians;
+encode/decode order alternates per sample and codec order rotates across
+inputs. Every API call checks the returned size. The final output of every
+completed batch is checked byte-for-byte outside timing, with roundtrip
+validation for compressed data.
+
+Caller buffers are allocated outside timing, but allocations performed
+inside each codec's one-shot API remain included; no codec contexts are
+reused. VV uses a v1 frame with its default XXH64 footer, LZ4 a raw block with
+no checksum, and Zstd a frame with its default checksum disabled. Compressed
+sizes therefore include different framing overhead, and decode speeds include
+different integrity work. These are comparisons of the named APIs, not
+equivalent kernel configurations, pure inner loops, or proof that one codec
+can replace another. General-purpose kernel adoption also needs the work
+listed in [INTEGRATION.md](../INTEGRATION.md#linux-kernel-readiness).
+
+The benchmark alone needs the LZ4/Zstd development headers and libraries;
+they are not codec-library dependencies. From the repository root on a POSIX
+host with `pkg-config` metadata for both libraries:
+
+```sh
+pages_build=$(mktemp -d)
+pages_flags='-O3 -flto -std=c11 -D_POSIX_C_SOURCE=200809L'
+pages_simd=
+case $(uname -m) in x86_64) pages_simd=-mavx2 ;; esac
+cc $pages_flags -Iinclude $pages_simd -c src/vv_simd.c \
+  -o "$pages_build/vv_simd.o"
+cc $pages_flags -Iinclude $pages_simd -c src/vv_decoder.c \
+  -o "$pages_build/vv_decoder.o"
+cc $pages_flags -Iinclude $(pkg-config --cflags liblz4 libzstd) \
+  '-DVV_BENCH_BUILD_FLAGS="-O3 -flto; AVX2 only SIMD/decoder on x86_64"' \
+  bench/bench_pages.c src/vv_encoder.c src/vv_xxh64.c src/vv_huffman.c \
+  src/vv_ans.c src/vv_bcj.c src/vaptvupt_api.c \
+  "$pages_build/vv_simd.o" "$pages_build/vv_decoder.o" \
+  $(pkg-config --libs liblz4 libzstd) -o "$pages_build/bench_pages"
+"$pages_build/bench_pages" --self-test
+taskset -c 2 "$pages_build/bench_pages" > pages-v1.csv
+```
+
+`taskset` is Linux-specific; use the host's equivalent pinning tool elsewhere.
+Set library search paths if the libraries are outside the system search path.
+The CSV preamble records codec/compiler versions, build flags, host kernel/
+architecture, calibration, and comparison caveats. Retain the exact source
+revision and build command as well. `--size`, `--fixture`, and `--codec` select
+subsets; `--help` describes numeric bounds. `--self-test` verifies roundtrips
+without publishing timing results.
+
+## Historical v2.65.10 encoder allocation microbenchmark (measured 2026-09-06)
 
 The C harness now retained as `bench/bench_encode.c` compared v2.65.9
 (`1bf8a92`) with the v2.65.10 encoder changes while linking the remaining
@@ -54,8 +173,9 @@ deliberately an encoder-only comparison; a full release build also includes
 the decoder and entropy fixes. The commands use a private build directory:
 
 ```sh
-mkdir -p build/encode-pair/baseline
+mkdir -p build/encode-pair/baseline build/encode-pair/candidate
 git archive 1bf8a92 src include | tar -x -C build/encode-pair/baseline
+git archive v2.65.10 src/vv_encoder.c | tar -x -C build/encode-pair/candidate
 bench_base=build/encode-pair/baseline
 bench_flags='-O3 -flto -std=c11 -D_POSIX_C_SOURCE=199309L'
 gcc $bench_flags -I"$bench_base/include" -mavx2 \
@@ -64,7 +184,9 @@ gcc $bench_flags -I"$bench_base/include" -mavx2 \
   -c "$bench_base/src/vv_decoder.c" -o build/encode-pair/vv_decoder.o
 for variant in before after; do
   bench_encoder="$bench_base/src/vv_encoder.c"
-  if [ "$variant" = after ]; then bench_encoder=src/vv_encoder.c; fi
+  if [ "$variant" = after ]; then
+    bench_encoder=build/encode-pair/candidate/src/vv_encoder.c
+  fi
   gcc $bench_flags -I"$bench_base/include" bench/bench_encode.c \
     "$bench_encoder" "$bench_base/src/vv_xxh64.c" \
     "$bench_base/src/vv_huffman.c" "$bench_base/src/vv_ans.c" \
@@ -116,7 +238,7 @@ outputs matched byte-for-byte. The independently generated CLI matrix below
 used `fast`, and this microbenchmark used the API mode enum, so neither
 measurement is affected by that correction.
 
-## v2.65.10 deterministic generated-v1 suite (measured 2026-09-06)
+## Historical v2.65.10 deterministic generated-v1 suite (measured 2026-09-06)
 
 These CLI timings measure v2.65.10 from clean commit `9d9433d`. This
 corpus-free release measurement is separate from the internal microbenchmarks
@@ -127,6 +249,7 @@ Each cell is the median of 7 subprocess runs after 1 warm-up. Competitors were
 zstd 1.5.6 in single-thread mode and lz4 1.10. Every measured decode was
 SHA-256-checked against its deterministic generated input. Cells are
 `ratio @ encode/decode MB/s`, where ratio is raw bytes / compressed bytes.
+They remain historical v2.65.10 timings, not measurements of v2.65.11.
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|

@@ -1,15 +1,31 @@
 # VaptVupt
 
-Codec de compressão LZ + tANS em C11, sem dependências de runtime, com
+Codec de compressão LZ + tANS em C11, sem dependências de runtime de terceiros, com
 formato aberto e decodificadores de referência em Python e JavaScript que
-reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.10**.
+reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.11**.
 
 Leia também a [documentação técnica em português](DOCUMENTACAO.pt-BR.md) e a
 [documentação normativa em inglês](FORMAT.md). **[English README](README.md)**.
 
 ## Situação atual
 
-O v2.65.10 evita alocar o matcher hash4 quando não é usado: reduz a memória
+O v2.65.11 reduz o trabalho inicial do modo fast em entradas de até 4 KiB,
+mantendo o mapeamento hash completo, oferece workspaces do chamador para
+decodificação literal Huffman/ANS e inclui uma compilação explicitamente
+escalar. Fast agora ignora `format_v2`: seus tokens simples exigem matches
+mínimos de quatro bytes, e a combinação anterior podia gerar saída corrompida.
+São melhorias de userspace, não evidência de substituição geral de LZ4/Zstd
+nem de prontidão para o kernel Linux. Os bloqueios de licença, memória e
+validação estão na [documentação técnica](DOCUMENTACAO.pt-BR.md#prontidão-para-o-kernel-linux).
+
+A medição pareada isolando o encoder contra v2.65.10 encontrou compressão
+fast 2,7× mais rápida em texto de 1 KiB e ganho de 10,7% em 4 KiB; os controles
+maiores ficaram dentro de ±0,4%. Em 4 KiB, a cadeia menor deixa de solicitar
+240 KiB na janela padrão, mas o mapa hash principal ainda solicita 1 MiB.
+A saída válida comprimida permaneceu byte-idêntica nos casos medidos.
+Metodologia e controles em [bench/COMPARISON.md](bench/COMPARISON.md).
+
+No release anterior, v2.65.10, remover o matcher hash4 não utilizado reduziu a memória
 solicitada em 512 KiB na janela padrão e em até 64,25 MiB na maior janela.
 Microbenchmarks internos pareados contra v2.65.9 mediram +32,3% de throughput
 em texto de 1 KiB no modo fast, +19,7% em 4 KiB e +17,2%/+39,6% em 1 MiB
@@ -19,7 +35,7 @@ São medições in-process, com limites e metodologia em
 [bench/COMPARISON.md](bench/COMPARISON.md); a redução de alocação não implica
 igual redução de RSS.
 
-### Suite determinística generated-v1 do v2.65.10 (medida em 06/09/2026)
+### Suite histórica generated-v1 do v2.65.10 (medida em 06/09/2026)
 
 Medição do v2.65.10 a partir do commit limpo `9d9433d`, em 06/09/2026,
 por subprocesso em Intel Core i7-13700HX, Linux 7.2.3 e gcc 14.3,
@@ -27,6 +43,7 @@ fixada no core 2. Cada célula é a mediana de 7 execuções após 1 aquecimento
 zstd 1.5.6 usou uma thread e lz4 é 1.10. Todas as saídas decodificadas foram
 verificadas por SHA-256. As células mostram
 `razão @ compressão/decodificação MB/s`.
+São tempos históricos do v2.65.10, não medições do v2.65.11.
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
@@ -100,7 +117,22 @@ balanced/extreme=1); `-D N` ajusta a profundidade
 do encadeamento. Consulte a [documentação técnica](DOCUMENTACAO.pt-BR.md)
 antes de aceitar dados não confiáveis.
 
+`make clean && make SIMD=0` desativa intrinsics e dispatch SIMD do codec.
+`make scalar-test` compila o núcleo com registradores gerais em x86-64/AArch64
+e executa oito suites em userspace; a biblioteca C do sistema continua sendo
+usada. Não é um build de kernel nem uma aprovação dos limites de stack.
+
 ## Segurança e integração
+
+No v2.65.11, os helpers literais Huffman/ANS de um e quatro streams aceitam
+workspaces exclusivos do chamador, com consultas de tamanho/alinhamento. Os
+blocos S/T reutilizam a arena de 48 KiB das tabelas de sequência durante a
+decodificação literal. Isso elimina essa alocação de tabela, não todas as
+alocações do decodificador. ANS literal de um/quatro streams agora constrói
+as tabelas diretamente, removendo 4 KiB de scratch de espalhamento da stack;
+isso não aprova o orçamento total de stack para o kernel.
+Consulte os contratos em `include/vv_huffman.h`
+e `include/vv_ans.h` antes de usar essas APIs de nível inferior.
 
 O v2.65.10 corrige corrupção ao alternar `format_v2` em `vv_cstream_reset`.
 O decodificador exige o byte terminador das extensões de comprimento dos

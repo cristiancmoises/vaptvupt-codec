@@ -45,6 +45,7 @@ typedef enum {
     VVH_ERR_CORRUPT = -2,
     VVH_ERR_NOMEM   = -3,
     VVH_ERR_OVERFLOW= -4,
+    VVH_ERR_PARAM   = -6,
 } vvh_error_t;
 #else
 #include "vaptvupt.h"
@@ -53,6 +54,7 @@ typedef vv_error_t vvh_error_t;
 #define VVH_ERR_CORRUPT  VV_ERR_CORRUPT
 #define VVH_ERR_NOMEM    VV_ERR_NOMEM
 #define VVH_ERR_OVERFLOW VV_ERR_OVERFLOW
+#define VVH_ERR_PARAM    VV_ERR_PARAM
 #endif
 
 /* ═══════════════════════════════════════════════════════════════
@@ -155,6 +157,26 @@ vvh_error_t vvh_encode4(const uint8_t *src, size_t src_len,
 vvh_error_t vvh_decode4(const uint8_t *src, size_t src_len,
                         uint8_t *dst, size_t dst_cap,
                         size_t num_literals, size_t *src_consumed);
+
+/* Allocation-free variants of the literal decoders. The workspace must
+ * have at least the queried size and alignment, must not overlap src/dst,
+ * and must be exclusive to this call. It can be reused after any return;
+ * its contents are unspecified. NULL/misaligned workspace returns PARAM,
+ * insufficient capacity returns OVERFLOW. src_consumed is always required.
+ * Nonempty decode also requires non-NULL src/dst. num_literals == 0 succeeds
+ * without a workspace, and permits NULL src/dst with zero src_len/dst_cap.
+ * Existing decoders above allocate their own tables. */
+size_t vvh_decode_workspace_size(void);
+size_t vvh_decode_workspace_alignment(void);
+
+vvh_error_t vvh_decode_with_workspace(const uint8_t *src, size_t src_len,
+                                      uint8_t *dst, size_t dst_cap,
+                                      size_t num_literals, size_t *src_consumed,
+                                      void *workspace, size_t workspace_cap);
+vvh_error_t vvh_decode4_with_workspace(const uint8_t *src, size_t src_len,
+                                       uint8_t *dst, size_t dst_cap,
+                                       size_t num_literals, size_t *src_consumed,
+                                       void *workspace, size_t workspace_cap);
 
 /*
  * Upper bound on compressed size for src_len literal bytes.

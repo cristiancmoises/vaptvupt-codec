@@ -3,7 +3,7 @@
 **Version**: 1 (frame format version field = `0x01`)
 **Endianness**: Little-endian for all multi-byte integers
 **Status**: Stable since v1.0.0 of the reference encoder
-**Reference implementation alignment**: v2.65.10 (no wire-layout change)
+**Reference implementation alignment**: v2.65.11 (no wire-layout change)
 
 This document specifies the on-wire format produced by `vv_compress`,
 `vv_compress_mt`, and `vv_cstream_*`. It is sufficient to implement

@@ -114,8 +114,11 @@ static void test_cstream_format_reset(vv_mode_t mode, int records) {
     }
     stream = vv_cstream_create(&opts);
     if (!stream) { error = "stream create failed"; goto done; }
-    const int formats[] = {1, 0, 1, 0};
+    /* Finish by switching fast <-> the entropy mode while retaining the
+     * v2 request. Reused contexts must resolve it like freshly created ones. */
+    const int formats[] = {1, 0, 1, 0, 1, 1, 1, 1};
     for (size_t pass = 0; pass < sizeof(formats) / sizeof(formats[0]); pass++) {
+        opts.mode = pass >= 4 && !(pass & 1) ? VV_MODE_ULTRA_FAST : mode;
         opts.format_v2 = (uint8_t)formats[pass];
         if (vv_cstream_reset(stream, &opts) != VV_OK) {
             error = "stream reset failed";
@@ -146,6 +149,87 @@ static void test_cstream_format_reset(vv_mode_t mode, int records) {
 done:
     vv_cstream_destroy(stream);
     free(src); free(reused); free(fresh); free(decoded);
+    if (error) { FAIL(error); } else { PASS(); }
+}
+
+/* Streaming retains the fully initialized matcher. For a single v1 chunk,
+ * its block/footer bytes must equal the one-shot small-input setup, including
+ * boundary hashes and circular chains narrower than the advertised window. */
+static void test_small_fast_setup(uint8_t window_log) {
+    char label[96];
+    snprintf(label, sizeof(label), "Small fast setup vs full matcher (w=%u)",
+             (unsigned)window_log);
+    TEST(label);
+    static const size_t sizes[] = {
+        0, 1, 2, 3, 4, 5, 6, 14, 15, 16, 18, 19, 20, 31, 32, 33,
+        255, 256, 257, 1023, 1024, 1025, 2047, 2048, 2049, 4095, 4096, 4097
+    };
+    vv_options_t opts;
+    vv_default_options(&opts);
+    opts.mode = VV_MODE_ULTRA_FAST;
+    opts.window_log = window_log;
+    vv_cstream_t *stream = vv_cstream_create(&opts);
+    if (!stream) { FAIL("stream create failed"); return; }
+    const char *error = NULL;
+    for (int kind = 0; kind < 3 && !error; kind++) {
+        opts.depth_override = kind ? 9 : 0;
+        opts.accel = kind ? 64 : 0;
+        opts.no_rep = kind ? 1 : 0;
+        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+            size_t n = sizes[s], cap = vv_compress_bound(n);
+            uint8_t *src = (uint8_t *)malloc(n ? n : 1);
+            uint8_t *one = (uint8_t *)malloc(cap);
+            uint8_t *full = (uint8_t *)malloc(cap);
+            uint8_t *decoded = (uint8_t *)malloc(n ? n : 1);
+            if (!src || !one || !full || !decoded) {
+                error = "allocation failed";
+            } else {
+                uint32_t rng = 1234567;
+                for (size_t i = 0; i < n; i++) {
+                    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                    src[i] = kind == 1 ? (uint8_t)rng : kind == 2 ? (uint8_t)(i % 43) :
+                        (uint8_t)(i % 11 == 0 ? rng : i % 43);
+                }
+                size_t full_len = 0;
+                int64_t one_len = vv_compress(src, n, one, cap, &opts);
+                if (one_len < (int64_t)sizeof(vv_frame_header_t) ||
+                    vv_cstream_reset(stream, &opts) != VV_OK ||
+                    vv_cstream_compress_chunk(stream, src, n, full, cap,
+                                              &full_len, 1) != VV_OK) {
+                    error = "compression failed";
+                } else if ((size_t)one_len != full_len ||
+                           memcmp(one + sizeof(vv_frame_header_t),
+                                  full + sizeof(vv_frame_header_t),
+                                  full_len - sizeof(vv_frame_header_t)) != 0) {
+                    /* Only content_size in the frame header differs. */
+                    error = "small setup changed encoded block bytes";
+                } else if (vv_decompress(one, (size_t)one_len, decoded, n) !=
+                           (int64_t)n || memcmp(src, decoded, n) != 0) {
+                    error = "small setup roundtrip failed";
+                }
+                if (!error) {
+                    /* FAST cannot emit T tags, so requesting v2 must retain
+                     * the same v1 tokens. The 255-byte periodic case used
+                     * to encode a +3 match bias that the decoder read as +4. */
+                    opts.format_v2 = 1;
+                    one_len = vv_compress(src, n, one, cap, &opts);
+                    opts.format_v2 = 0;
+                    if (one_len < 0 ||
+                        vv_decompress(one, (size_t)one_len, decoded, n) !=
+                        (int64_t)n || memcmp(src, decoded, n) != 0)
+                        error = "small v2 setup roundtrip failed";
+                    else if ((size_t)one_len != full_len ||
+                             memcmp(one + sizeof(vv_frame_header_t),
+                                    full + sizeof(vv_frame_header_t),
+                                    full_len - sizeof(vv_frame_header_t)) != 0)
+                        error = "FAST v2 request changed plain token output";
+                }
+            }
+            free(src); free(one); free(full); free(decoded);
+            if (error) break;
+        }
+    }
+    vv_cstream_destroy(stream);
     if (error) { FAIL(error); } else { PASS(); }
 }
 
@@ -225,6 +309,10 @@ int main(void) {
         test_cstream_format_reset((vv_mode_t)mode, 0);
         test_cstream_format_reset((vv_mode_t)mode, 1);
     }
+
+    test_small_fast_setup(10);
+    test_small_fast_setup(16);
+    test_small_fast_setup(24);
 
     fprintf(stderr, "\n═══════════════════════════════════════════\n");
     fprintf(stderr, "  Results: %d/%d passed\n", tests_passed, tests_run);

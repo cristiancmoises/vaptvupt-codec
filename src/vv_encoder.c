@@ -22,7 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__x86_64__) && defined(__AVX2__)
+#if VV_HAS_AVX2
 #include <immintrin.h>
 #define VV_ENC_AVX2 1
 #else
@@ -82,6 +82,13 @@ static inline uint32_t effective_accel(const vv_options_t *opts) {
     if (accel == 0)
         accel = (opts->mode >= VV_MODE_BALANCED) ? 1u : 2u;
     return accel > 64 ? 64 : accel;
+}
+
+/* Only entropy-capable modes emit T-tagged blocks. FAST writes plain token
+ * blocks, whose wire match-length bias is always four. Keep the requested
+ * option in stream contexts so a later mode reset can enable format v2. */
+static inline int effective_format_v2(const vv_options_t *opts) {
+    return opts->format_v2 && opts->mode >= VV_MODE_BALANCED;
 }
 
 static inline int valid_mode(vv_mode_t mode) {
@@ -299,10 +306,18 @@ typedef struct {
  * the NULL pointer would crash. Sprint 92 audit identified this as a
  * real defect. The fix tolerates allocator failure cleanly. */
 static void matcher_free(matcher_t *m); /* fwd decl for cleanup-on-failure */
-static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth,
-                        int use_hash4) {
+static int matcher_init_for_input(matcher_t *m, uint32_t window_log,
+                                  uint32_t depth, int use_hash4,
+                                  const uint8_t *small_src, size_t small_len) {
     if (window_log < 10 || window_log > 24) return 0;
     uint32_t wsz = 1u << window_log;
+    /* A one-shot page cannot reference positions outside its own input.
+     * Keep the advertised window and matching rules, but avoid allocating
+     * chain slots that no position can address. This path is never used
+     * by streaming matchers, whose future input length is unknown. */
+    if (small_src) {
+        while (wsz > 1 && (wsz >> 1) >= small_len) wsz >>= 1;
+    }
     /* Initialize ALL pointers to NULL first so matcher_free is safe to
      * call on partial-failure paths. */
     m->table = NULL;
@@ -334,7 +349,16 @@ static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth,
     /* PERF: only the table arrays need to be cleared. chain/hash4_chain
      * are only read via table entries (which are now -1), so stale
      * data in them is unreachable. See matcher_reset for rationale. */
-    memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));
+    if (small_src) {
+        /* Every map lookup or insertion hashes one of these positions.
+         * Initialize those buckets before parsing, including the final
+         * four-byte hash variant. Unvisited buckets remain unreachable.
+         * The unchanged full-width hash preserves candidate chains exactly. */
+        for (size_t pos = 0; pos + 4 <= small_len; pos++)
+            m->table[hash_safe(small_src + pos, (int32_t)(small_len - pos))] = -1;
+    } else {
+        memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));
+    }
     if (m->table4) memset(m->table4, 0xFF, VV_HC4_SIZE * sizeof(int32_t));
     m->chain_mask = wsz - 1;
     m->chain_depth = depth;
@@ -347,6 +371,11 @@ static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth,
     m->no_rep = 0;       /* rep-match probing on by default (opt-in --no-rep) */
     m->max_match = VV_MAX_MATCH;  /* v1 default, see matcher_set_format_v2 */
     return 1;
+}
+
+static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth,
+                        int use_hash4) {
+    return matcher_init_for_input(m, window_log, depth, use_hash4, NULL, 0);
 }
 
 /* Apply format v2 matcher constraints. Must be called whenever the
@@ -2077,8 +2106,8 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
      * ratio and decode speed (more, shorter sequences). Auto-enable
      * exactly where it wins: binary-detected inputs. Suppressed by
      * the compat flag because 'T' blocks require a v2.33.0+ decoder.
-     * Explicit opts->format_v2 still forces it for any input. */
-    int use_v2_fmt = opts->format_v2 ||
+     * Explicit opts->format_v2 forces it in balanced/extreme for any input. */
+    int use_v2_fmt = effective_format_v2(opts) ||
                      (enable_hash4 && opts->mode >= VV_MODE_BALANCED &&
                       !opts->compat_v246_5_decoder);
 
@@ -2145,7 +2174,10 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
     /* Matcher */
     matcher_t m;
     /* SPRINT 93 audit: handle allocation failure cleanly */
-    if (!matcher_init(&m, wlog, depth, enable_hash4)) {
+    const uint8_t *small_src =
+        opts->mode == VV_MODE_ULTRA_FAST && src_len <= 4096 ? src : NULL;
+    if (!matcher_init_for_input(&m, wlog, depth, enable_hash4,
+                                small_src, src_len)) {
         return VV_ERR_NOMEM;
     }
     /* SPRINT 58: enable the single-probe match finder for ULTRA_FAST.
@@ -2358,20 +2390,20 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
     ctx->m.single_probe = (ctx->opts.mode == VV_MODE_ULTRA_FAST) ? 1 : 0;
     ctx->m.accel = effective_accel(&ctx->opts);
     ctx->m.no_rep = ctx->opts.no_rep ? 1 : 0;
-    /* Format v2 matchlen cap applies to every match — set whenever
-     * streaming opts has format_v2 on, not just when hash3 fires.
+    /* Format v2 matchlen cap applies to every match in an entropy-capable
+     * mode with format_v2 on, not just when hash3 fires.
      *
      * Sprint 89 audit: read from ctx->opts (populated above with either
      * the caller's opts or default values) rather than the raw opts
      * pointer, which can be NULL when caller wants defaults. The prior
      * code dereferenced NULL when called as vv_cstream_create(NULL). */
-    if (ctx->opts.format_v2) {
+    if (effective_format_v2(&ctx->opts)) {
         matcher_set_format_v2(&ctx->m);
     }
     /* SPRINT 45: enable hash3 for format v2 streaming. Must free
      * ctx before returning NULL — callers use NULL-check semantics
      * here, not error codes. */
-    if (ctx->opts.format_v2) {
+    if (effective_format_v2(&ctx->opts)) {
         if (!matcher_enable_hash3(&ctx->m)) {
             matcher_free(&ctx->m);
             free(ctx);
@@ -2446,12 +2478,13 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
      * so an allocation failure leaves the current stream configuration
      * usable. Retain hash3 storage when switching back to v1 for reuse. */
     const vv_options_t *next_opts = opts ? opts : &ctx->opts;
-    if (next_opts->format_v2 && !ctx->m.table3 &&
+    int use_v2 = effective_format_v2(next_opts);
+    if (use_v2 && !ctx->m.table3 &&
         !matcher_enable_hash3(&ctx->m)) return VV_ERR_NOMEM;
     if (opts) ctx->opts = *opts;
-    ctx->m.use_hash3 = ctx->opts.format_v2 ? 1 : 0;
+    ctx->m.use_hash3 = (uint8_t)use_v2;
     ctx->m.max_match = VV_MAX_MATCH;
-    if (ctx->opts.format_v2) matcher_set_format_v2(&ctx->m);
+    if (use_v2) matcher_set_format_v2(&ctx->m);
 
     /* Update chain_depth in case the mode changed */
     uint32_t depth;
@@ -2580,7 +2613,7 @@ int vv_cstream_compress_chunk(vv_cstream_t *ctx,
         memcpy(op, &bh, 4); op += 4; cap_left -= 4;
     } else if (chunk_len > 0) {
         size_t block_start = ctx->src_len - chunk_len;
-        int stream_min_match = ctx->opts.format_v2 ? 3 : (int)VV_MIN_MATCH;
+        int stream_min_match = effective_format_v2(&ctx->opts) ? 3 : (int)VV_MIN_MATCH;
         size_t block_sz = emit_block(ctx->src_buf, block_start, chunk_len, is_last,
                                      &ctx->m, ctx->opts.mode, ctx->wlog,
                                      ctx->tmp, ctx->tcap,
