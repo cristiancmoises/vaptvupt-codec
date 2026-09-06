@@ -1,6 +1,6 @@
 # VaptVupt — Makefile
 # Build: make
-# Test:  make test        (runs both test suites)
+# Test:  make test        (runs the full test suite)
 # Bench: make bench
 
 ifeq ($(origin CC), default)
