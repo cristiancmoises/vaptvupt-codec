@@ -319,7 +319,7 @@ size_t vv_compress_bound(size_t src_len);
  * These additive APIs do not change the defaults of vv_compress(). */
 typedef struct vv_fast_context_s vv_fast_context_t;
 
-/* Storage includes context metadata, a full 1 MiB primary hash map,
+/* Storage includes context metadata, a 512 KiB primary hash map,
  * an input-sized chain and token scratch. Size returns zero unless
  * max_input is in 1..65536. Use the queried alignment, not a fixed ABI
  * assumption. No allocation is performed by these APIs. */

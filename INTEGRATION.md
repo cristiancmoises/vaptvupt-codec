@@ -196,9 +196,13 @@ the corresponding one-shot encoder's bytes, not merely produce another
 decodable representation. Its size and alignment queries are not fixed ABI
 constants; existing public structures and entry points remain unchanged.
 
-The primary hash map still occupies 1 MiB. Caller ownership removes repeated
-allocation, not that memory requirement. Workspace also contains metadata,
-an input-bounded power-of-two chain, and token scratch. Neither this API nor
+The context stores roots and chain links as unsigned 16-bit positions. Every
+insert needs at least four bytes within the independent 64 KiB input, leaving
+65535 available as the empty sentinel. The full 18-bit hash mapping, candidate
+order and matching rules are unchanged. The primary map occupies 512 KiB;
+ordinary one-shot and streaming matchers retain their 32-bit storage.
+Workspace also contains metadata, an input-bounded power-of-two chain, and
+token scratch. Neither this API nor
 the scalar gate is a freestanding kernel library: the shared translation
 units retain libc and excluded codec paths. The existing C implementation
 also uses native-endian loads/stores for fields specified as little-endian;
@@ -214,7 +218,7 @@ big-endian correctness has not been established.
   Compiler-generated vector operations and system libc implementations are
   separate concerns; this switch alone is not a general-register-only build.
 - `make scalar-test` — general-register-only core objects on x86-64/AArch64,
-  linked to userspace libraries and exercised by nine suites. It retains
+  linked to userspace libraries and exercised by ten suites. It retains
   stack-usage diagnostics but does not approve a kernel stack budget.
 - `make test` — full suite (C suites, reference decoders, differential fuzzer,
   negative corpus, ratio gate, OOM sweep). It also checks current C output in
