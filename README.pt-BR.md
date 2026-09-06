@@ -20,7 +20,7 @@ validação estão na [documentação técnica](DOCUMENTACAO.pt-BR.md#prontidão
 
 ### Perfil atual limitado a páginas (medido em 06/09/2026)
 
-O commit `2e454c2` foi medido in-process com 64 páginas independentes de texto
+O commit `0e44ff8` foi medido in-process com 64 páginas independentes de texto
 sintético de 4 KiB, fixado na CPU 4. VaptVupt foi compilado sem intrínsecos e
 sem autovetorização do compilador; LZ4 1.10.0 e Zstd 1.5.7 mantiveram as suas
 compilações userspace instaladas. A tabela inclui o framing de cada formato e
@@ -29,15 +29,24 @@ uma medição de kernel, zram nem uma certificação general-register-only.
 
 | API | Razão | Compressão p50 (µs) | Descompressão p50 (µs) | Compressão MB/s | Descompressão MB/s |
 |---|---:|---:|---:|---:|---:|
-| Contexto FAST do VaptVupt, sem checksum | 2,868 | 73,173 | 9,192 | 56,3 | 485,8 |
-| LZ4 extState | 2,454 | 12,543 | 2,852 | 340,3 | 1499,1 |
-| Contexto Zstd, nível 1, sem checksum | 4,927 | 41,959 | 13,304 | 99,8 | 321,5 |
+| Contexto FAST do VaptVupt, sem checksum | 2,868 | 72,877 | 9,099 | 56,5 | 483,3 |
+| LZ4 extState | 2,454 | 12,514 | 2,848 | 339,7 | 1500,2 |
+| Contexto Zstd, nível 1, sem checksum | 4,927 | 42,075 | 13,372 | 99,7 | 321,3 |
 
 Este perfil não sustenta afirmar que VaptVupt substitui LZ4 ou Zstd: LZ4 foi
 mais rápido neste caso, enquanto Zstd obteve a melhor razão. A evidência
 CSV/JSON completa tem 216 perfis de 4/16/64 KiB e seis fixtures sintéticos;
 LZO-RLE e execução no kernel não estavam disponíveis. A reprodução e as
 ressalvas estão em [bench/COMPARISON.md](bench/COMPARISON.md).
+
+O contexto FAST com memória do chamador agora usa posições de 16 bits no
+matcher limitado. O workspace consultado caiu de 1.070.264 para 537.800 bytes
+em 4 KiB, de 1.131.752 para 574.712 em 16 KiB e de 1.377.705 para 722.361 em
+64 KiB. Três pares alternados entre baseline e versão atual preservaram 2.304
+frames byte a byte. Os resultados em lote mais fortes fora dos controles
+foram −12,69% de latência em registros de 16 KiB e −36,53% em páginas
+aleatórias de 16 KiB; texto de 4 KiB foi instável e não é apresentado como
+ganho repetível.
 
 A medição pareada isolando o encoder contra v2.65.10 encontrou compressão
 fast 2,7× mais rápida em texto de 1 KiB e ganho de 10,7% em 4 KiB; os controles

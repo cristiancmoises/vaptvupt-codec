@@ -28,7 +28,7 @@ records the licensing, memory, portability, and validation work still needed.
 
 ### Current bounded page profile (measured 2026-09-06)
 
-Commit `2e454c2` was measured in-process on 64 independent synthetic 4 KiB
+Commit `0e44ff8` was measured in-process on 64 independent synthetic 4 KiB
 text pages, pinned to CPU 4. VaptVupt was built without intrinsics or compiler
 auto-vectorization; LZ4 1.10.0 and Zstd 1.5.7 retained their installed
 userspace builds. The table includes each format's framing and reports p50
@@ -37,15 +37,23 @@ not a kernel, zram, or general-register-only result.
 
 | API | Ratio | Encode p50 (µs) | Decode p50 (µs) | Encode MB/s | Decode MB/s |
 |---|---:|---:|---:|---:|---:|
-| VaptVupt FAST caller context, no checksum | 2.868 | 73.173 | 9.192 | 56.3 | 485.8 |
-| LZ4 extState | 2.454 | 12.543 | 2.852 | 340.3 | 1499.1 |
-| Zstd context, level 1, no checksum | 4.927 | 41.959 | 13.304 | 99.8 | 321.5 |
+| VaptVupt FAST caller context, no checksum | 2.868 | 72.877 | 9.099 | 56.5 | 483.3 |
+| LZ4 extState | 2.454 | 12.514 | 2.848 | 339.7 | 1500.2 |
+| Zstd context, level 1, no checksum | 4.927 | 42.075 | 13.372 | 99.7 | 321.3 |
 
 This profile does not support a claim that VaptVupt supersedes LZ4 or Zstd:
 LZ4 is faster here, while Zstd has the stronger ratio. The complete 216-profile
 CSV/JSON evidence covers 4/16/64 KiB and six synthetic fixtures; LZO-RLE and
 kernel runtime testing were not available. Reproduction details and caveats
 are in [bench/COMPARISON.md](bench/COMPARISON.md).
+
+The caller-owned FAST context now uses 16-bit positions for its bounded
+matcher. Queried workspace fell from 1,070,264 to 537,800 bytes at 4 KiB,
+from 1,131,752 to 574,712 at 16 KiB, and from 1,377,705 to 722,361 at 64 KiB.
+Three alternating baseline/current pairs preserved 2,304 frames byte-for-byte.
+The stronger non-bypassed batch observations were −12.69% latency on 16 KiB
+records and −36.53% on 16 KiB random pages; 4 KiB text was unstable and is
+not treated as a repeatable speedup.
 
 Paired encoder-only measurements against v2.65.10 found 2.7× fast encoding on
 1 KiB text and +10.7% on 4 KiB text; larger-input controls were within ±0.4%.
