@@ -186,11 +186,14 @@ decode_block_tokens_impl(
         if (VV_UNLIKELY((size_t)(ip_end - ip) < ll || (size_t)(op_end - op) < ll))
             return -1;
 
-        if (VV_LIKELY(ll <= 14 && ip + ll + 2 <= ip_end)) {
+        if (VV_LIKELY(ll <= 14 && (size_t)(ip_end - ip) >= (size_t)ll + 2)) {
             uint16_t off_raw;
             memcpy(&off_raw, ip + ll, 2);
-            if (off_raw > 0)
-                VV_PREFETCH(op + ll - off_raw);
+            /* ll fits the output above; validate history before forming
+             * a prefetch pointer, even though a bad offset is rejected later. */
+            uint8_t *lit_end = op + ll;
+            if (off_raw > 0 && off_raw <= (size_t)(lit_end - dst_base))
+                VV_PREFETCH(lit_end - off_raw);
         }
 
         /* SPRINT 125: wildcopy for the dominant ll <= 14 case. The loop
@@ -291,11 +294,12 @@ decode_block_tokens_impl(
         if (VV_UNLIKELY((size_t)(ip_end - ip) < ll || (size_t)(op_end - op) < ll))
             return -1;
 
-        if (VV_LIKELY(ll <= 14 && ip + ll + 2 <= ip_end)) {
+        if (VV_LIKELY(ll <= 14 && (size_t)(ip_end - ip) >= (size_t)ll + 2)) {
             uint16_t off_raw;
             memcpy(&off_raw, ip + ll, 2);
-            if (off_raw > 0)
-                VV_PREFETCH(op + ll - off_raw);
+            uint8_t *lit_end = op + ll;
+            if (off_raw > 0 && off_raw <= (size_t)(lit_end - dst_base))
+                VV_PREFETCH(lit_end - off_raw);
         }
 
         /* SPRINT 125: wildcopy for the dominant ll <= 14 case. The loop
@@ -720,7 +724,9 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
      * (useful for parallel encode, multi-frame archives, append-mode
      * writes). We decode frames in a loop until input is exhausted. */
     while (ip < ip_end) {
-        if (ip + sizeof(vv_frame_header_t) > ip_end) return VV_ERR_CORRUPT;
+        /* Compare lengths before forming an advanced pointer: malformed
+         * sizes must not create a pointer beyond the input object. */
+        if ((size_t)(ip_end - ip) < sizeof(vv_frame_header_t)) return VV_ERR_CORRUPT;
 
         vv_frame_header_t fh;
         memcpy(&fh, ip, sizeof(fh));
@@ -745,7 +751,7 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
         uint8_t *frame_out_start = op;
 
         for (;;) {
-            if (ip + 4 > ip_end) return VV_ERR_CORRUPT;
+            if ((size_t)(ip_end - ip) < 4) return VV_ERR_CORRUPT;
             uint32_t bh_packed;
             memcpy(&bh_packed, ip, 4); ip += 4;
 
@@ -754,20 +760,19 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
             uint32_t dsz = vv_bh_size(bh_packed);
 
             if (dsz > VV_MAX_BLOCK_SIZE) return VV_ERR_OVERFLOW;
-            if ((size_t)(op - dst) + dsz > dst_cap) return VV_ERR_OVERFLOW;
-            (void)op_end;
+            if ((size_t)dsz > (size_t)(op_end - op)) return VV_ERR_OVERFLOW;
 
             if (btype == VV_BLOCK_RAW) {
-                if (ip + dsz > ip_end) return VV_ERR_CORRUPT;
+                if ((size_t)dsz > (size_t)(ip_end - ip)) return VV_ERR_CORRUPT;
                 memcpy(op, ip, dsz); ip += dsz; op += dsz;
             } else if (btype == VV_BLOCK_RLE) {
                 if (ip >= ip_end) return VV_ERR_CORRUPT;
                 memset(op, *ip++, dsz); op += dsz;
             } else if (btype == VV_BLOCK_COMPRESSED) {
-                if (ip + 3 > ip_end) return VV_ERR_CORRUPT;
+                if ((size_t)(ip_end - ip) < 3) return VV_ERR_CORRUPT;
                 uint32_t csz = (uint32_t)ip[0] | ((uint32_t)ip[1] << 8) | ((uint32_t)ip[2] << 16);
                 ip += 3;
-                if (ip + csz > ip_end) return VV_ERR_CORRUPT;
+                if ((size_t)csz > (size_t)(ip_end - ip)) return VV_ERR_CORRUPT;
 
                 size_t actual = 0;
                 vv_error_t err = decode_block_tokens(ip, csz, op, dsz, &actual, off_bytes, frame_out_start, max_offset);
@@ -775,10 +780,10 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
                 if (actual != dsz) return VV_ERR_CORRUPT;
                 ip += csz; op += dsz;
             } else if (btype == VV_BLOCK_ENTROPY) {
-                if (ip + 3 > ip_end) return VV_ERR_CORRUPT;
+                if ((size_t)(ip_end - ip) < 3) return VV_ERR_CORRUPT;
                 uint32_t csz = (uint32_t)ip[0] | ((uint32_t)ip[1] << 8) | ((uint32_t)ip[2] << 16);
                 ip += 3;
-                if (csz < 1 || ip + csz > ip_end) return VV_ERR_CORRUPT;
+                if (csz < 1 || (size_t)csz > (size_t)(ip_end - ip)) return VV_ERR_CORRUPT;
 
                 uint8_t tag = ip[0];
                 const uint8_t *bdata = ip + 1;
@@ -817,7 +822,7 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
         }
 
         if (has_checksum) {
-            if (ip + sizeof(vv_frame_footer_t) > ip_end) return VV_ERR_CORRUPT;
+            if ((size_t)(ip_end - ip) < sizeof(vv_frame_footer_t)) return VV_ERR_CORRUPT;
             vv_frame_footer_t ff;
             memcpy(&ff, ip, sizeof(ff));
             if (ff.footer_magic != 0x56564E44u) return VV_ERR_CORRUPT;
@@ -1059,7 +1064,7 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
             uint32_t dsz = vv_bh_size(bh_packed);
 
             if (dsz > VV_MAX_BLOCK_SIZE) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_OVERFLOW; }
-            if ((size_t)(op - dst) + dsz > dst_cap) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_OVERFLOW; }
+            if ((size_t)dsz > dst_cap - ctx->output_pos) { ctx->state = VV_DSTREAM_ERROR; return VV_ERR_OVERFLOW; }
 
             /* Determine how many bytes this block occupies */
             size_t block_header_sz = 4;
