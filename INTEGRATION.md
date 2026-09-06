@@ -6,7 +6,7 @@ example, a backup tool that wraps each frame in AES-256-GCM or an ML-KEM + AEAD
 construction). It covers the API, the build, the flags that matter, and the
 threat-model boundary. Numbers here point to measured data, not headline
 claims — see `bench/COMPARISON.md` for the paired v2.65.10 allocation
-microbenchmark, the dated v2.65.9 deterministic suite, and the historical
+microbenchmark, the v2.65.10 deterministic suite measured on 2026-09-06, and the historical
 11-file corpus.
 
 Release alignment: **v2.65.10**. The wire layout is unchanged from v2.65.9;

@@ -116,12 +116,13 @@ outputs matched byte-for-byte. The independently generated CLI matrix below
 used `fast`, and this microbenchmark used the API mode enum, so neither
 measurement is affected by that correction.
 
-## Historical v2.65.9 deterministic generated-v1 suite (measured 2026-09-01)
+## v2.65.10 deterministic generated-v1 suite (measured 2026-09-06)
 
-These CLI timings belong to v2.65.9; they have not been relabeled as v2.65.10
-results. This corpus-free release measurement is separate from the
+These CLI timings measure v2.65.10 from clean commit `9d9433d`. This
+corpus-free release measurement is separate from the internal microbenchmarks
+and the
 historical 11-file tables below. The host was an Intel Core i7-13700HX running
-Linux 7.2.2; VaptVupt was built with gcc 14.3. The process was pinned to core 2.
+Linux 7.2.3; VaptVupt was built with gcc 14.3. The process was pinned to core 2.
 Each cell is the median of 7 subprocess runs after 1 warm-up. Competitors were
 zstd 1.5.6 in single-thread mode and lz4 1.10. Every measured decode was
 SHA-256-checked against its deterministic generated input. Cells are
@@ -129,10 +130,10 @@ SHA-256-checked against its deterministic generated input. Cells are
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
-| text.txt | 3.707 @143.4/395.7 | 7.055 @61.9/343.7 | 2.907 @288.8/387.9 | 5.768 @206.2/342.5 | 6.198 @187.6/348.9 |
-| records.jsonl | 3.142 @139.2/424.0 | 5.707 @53.9/355.7 | 3.505 @279.6/398.6 | 7.071 @221.2/354.5 | 6.521 @190.8/354.8 |
-| records.bin | 1.347 @80.3/408.4 | 2.016 @18.7/253.7 | 1.371 @267.1/402.5 | 1.934 @193.9/343.6 | 2.183 @127.2/307.2 |
-| random.bin | 1.000 @360.1/445.2 | 1.000 @267.2/438.2 | 1.000 @397.9/374.6 | 1.000 @332.3/351.6 | 1.000 @296.6/355.8 |
+| text.txt | 3.707 @141.3/397.5 | 7.055 @62.3/346.3 | 2.907 @280.6/381.4 | 5.768 @202.5/346.2 | 6.198 @185.6/356.1 |
+| records.jsonl | 3.142 @138.8/419.6 | 5.707 @53.8/353.6 | 3.505 @285.5/405.4 | 7.071 @216.8/344.5 | 6.521 @187.6/339.2 |
+| records.bin | 1.347 @79.8/414.5 | 2.016 @18.6/249.5 | 1.371 @255.4/414.2 | 1.934 @191.9/348.5 | 2.183 @126.5/308.9 |
+| random.bin | 1.000 @383.3/443.8 | 1.000 @265.5/437.3 | 1.000 @397.3/385.8 | 1.000 @323.3/357.2 | 1.000 @280.3/343.9 |
 
 The findings are modest and workload-dependent. On these fixtures,
 `vv-balanced` leads ratio on generated text and narrowly leads zstd-1/3 on
@@ -140,8 +141,10 @@ generated-JSON decode, while zstd compresses both text families much faster and
 leads JSON ratio. On binary records, balanced falls between zstd-1 and zstd-3
 on ratio and trails both on throughput. `vv-fast` leads lz4-1 on text ratio,
 loses on JSON and binary-record ratio, and generally compresses more slowly.
-All five tools store the random fixture effectively raw. This small
-deterministic suite is a
+All five tools store the random fixture effectively raw; fast encoding reaches
+383.3 MB/s versus lz4-1's 397.3 MB/s, while balanced reaches 265.5 MB/s.
+Those subprocess timings do not isolate the allocation change measured above.
+This small deterministic suite is a
 reproducible comparison anchor, not evidence that one codec universally
 supersedes another; production decisions require production data.
 
@@ -159,12 +162,19 @@ PATH=/path/to/lz4-1.10/bin:$PATH taskset -c 2 \
 ```
 
 The recorded host used this exact command and immutable lz4 store path from
-clean commit `3be9a7a2bc60f5ad1a5f5c0209899b8a7546966d`
+clean commit `9d9433d32abe913ad278558a18e00401bab9e9c0`
 (`tracked_dirty=false` in the JSON provenance):
 
 ```sh
-PATH=/gnu/store/25bwzp99xib0855l878dws7rb6yg5zn0-lz4-1.10.0/bin:$PATH taskset -c 2 python3 bench/competitive.py --generated-suite --vv ./vaptvupt --runs 7 --warmups 1 --csv /tmp/vaptvupt-2.65.9-competitive-final.csv --json /tmp/vaptvupt-2.65.9-competitive-final.json
+PATH=/gnu/store/25bwzp99xib0855l878dws7rb6yg5zn0-lz4-1.10.0/bin:$PATH taskset -c 2 python3 bench/competitive.py --generated-suite --vv ./vaptvupt --runs 7 --warmups 1 --csv /tmp/vaptvupt-2.65.10-competitive-final.csv --json /tmp/vaptvupt-2.65.10-competitive-final.json
 ```
+
+The measured executable's SHA-256 is
+`0129987fd65d990ee8866e059c29fab4553341616b9cfaac4ba51808ed362399`.
+The GCC release rebuild after the unused-helper cleanup in `dd79894` has the
+same hash, so that cleanup did not change the measured binary.
+
+### Historical v2.65.9 sequence-table microbenchmark
 
 Separately, a paired pinned **in-process** decoder comparison measured the
 v2.65.9 direct sequence-tANS table builder. Baseline and patched
@@ -1292,7 +1302,7 @@ not deeper or shallower matching. Decode, by contrast, is already competitive
 
 ## Reproduce
 
-Use `--generated-suite` and the pinned command in the dated v2.65.9 section to
+Use `--generated-suite` and the pinned command in the v2.65.10 section to
 rerun the deterministic matrix on the current binary. The historical
 arbitrary-file interface remains
 available for an external corpus:

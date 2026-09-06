@@ -26,10 +26,10 @@ approximately unchanged, and all measured compressed sizes and hashes matched.
 These are in-process microbenchmarks; methodology and allocation-versus-RSS
 limits are in [bench/COMPARISON.md](bench/COMPARISON.md).
 
-### Historical v2.65.9 deterministic generated-v1 suite (measured 2026-09-01)
+### v2.65.10 deterministic generated-v1 suite (measured 2026-09-06)
 
-The following subprocess measurements belong to v2.65.9, dated 2026-09-01;
-they are not v2.65.10 timings. They used an Intel Core i7-13700HX, Linux 7.2.2,
+These subprocess measurements used v2.65.10 from clean commit `9d9433d` on
+2026-09-06, on an Intel Core i7-13700HX, Linux 7.2.3,
 gcc 14.3, pinned to core 2. Each cell is the median of 7 measured runs after
 1 warm-up; zstd 1.5.6 ran single-threaded and lz4 is 1.10. Every decode was
 verified against the generated input by SHA-256. Cells are
@@ -37,10 +37,10 @@ verified against the generated input by SHA-256. Cells are
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
-| text.txt | 3.707 @143.4/395.7 | 7.055 @61.9/343.7 | 2.907 @288.8/387.9 | 5.768 @206.2/342.5 | 6.198 @187.6/348.9 |
-| records.jsonl | 3.142 @139.2/424.0 | 5.707 @53.9/355.7 | 3.505 @279.6/398.6 | 7.071 @221.2/354.5 | 6.521 @190.8/354.8 |
-| records.bin | 1.347 @80.3/408.4 | 2.016 @18.7/253.7 | 1.371 @267.1/402.5 | 1.934 @193.9/343.6 | 2.183 @127.2/307.2 |
-| random.bin | 1.000 @360.1/445.2 | 1.000 @267.2/438.2 | 1.000 @397.9/374.6 | 1.000 @332.3/351.6 | 1.000 @296.6/355.8 |
+| text.txt | 3.707 @141.3/397.5 | 7.055 @62.3/346.3 | 2.907 @280.6/381.4 | 5.768 @202.5/346.2 | 6.198 @185.6/356.1 |
+| records.jsonl | 3.142 @138.8/419.6 | 5.707 @53.8/353.6 | 3.505 @285.5/405.4 | 7.071 @216.8/344.5 | 6.521 @187.6/339.2 |
+| records.bin | 1.347 @79.8/414.5 | 2.016 @18.6/249.5 | 1.371 @255.4/414.2 | 1.934 @191.9/348.5 | 2.183 @126.5/308.9 |
+| random.bin | 1.000 @383.3/443.8 | 1.000 @265.5/437.3 | 1.000 @397.3/385.8 | 1.000 @323.3/357.2 | 1.000 @280.3/343.9 |
 
 These four deterministic fixtures show workload-dependent trade-offs, not a
 universal ordering. On this run `vv-balanced` has the best text ratio and a
@@ -49,6 +49,8 @@ text families much faster and has the better JSON ratio. Record-binary results
 split by level, while all codecs store the random fixture effectively raw.
 `vv-fast` beats lz4-1 on text ratio but not on JSON or record-binary ratio, and lz4
 compresses those fixtures substantially faster. Measure the intended workload.
+On random input, fast encoding reaches 383.3 MB/s versus lz4-1's 397.3 MB/s;
+all five tools produce approximately raw-sized output.
 
 The suite is generated without external corpus files and requires the full
 vv-fast/vv-balanced/lz4-1/zstd-1/zstd-3 matrix. JSON records host/tool

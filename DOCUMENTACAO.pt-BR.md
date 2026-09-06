@@ -124,7 +124,7 @@ suite determinística `generated-v1`, exige por padrão a matriz completa
 vv-fast/vv-balanced/lz4-1/zstd-1/zstd-3 e verifica cada decodificação por
 SHA-256. Use `--runs 7 --warmups 1 --csv ... --json ...`; o JSON registra a
 proveniência do host e das ferramentas, e o CSV registra hashes e medições.
-As tabelas comparativas de 01/09/2026 ainda identificam v2.65.9. Separadamente,
+As tabelas comparativas atuais medem v2.65.10 em 06/09/2026. Separadamente,
 o microbenchmark interno de alocação do v2.65.10 contra v2.65.9 mediu +32,3%
 em texto fast de 1 KiB e +17,2%/+39,6% em dados aleatórios de 1 MiB nos modos
 fast/balanced, com saída comprimida idêntica. A remoção do hash4 não utilizado

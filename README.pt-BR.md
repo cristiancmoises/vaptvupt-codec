@@ -19,10 +19,10 @@ São medições in-process, com limites e metodologia em
 [bench/COMPARISON.md](bench/COMPARISON.md); a redução de alocação não implica
 igual redução de RSS.
 
-### Suite histórica generated-v1 do v2.65.9 (medida em 01/09/2026)
+### Suite determinística generated-v1 do v2.65.10 (medida em 06/09/2026)
 
-Os números abaixo são do v2.65.9 em 01/09/2026, não uma medição do v2.65.10.
-Medição por subprocesso em Intel Core i7-13700HX, Linux 7.2.2 e gcc 14.3,
+Medição do v2.65.10 a partir do commit limpo `9d9433d`, em 06/09/2026,
+por subprocesso em Intel Core i7-13700HX, Linux 7.2.3 e gcc 14.3,
 fixada no core 2. Cada célula é a mediana de 7 execuções após 1 aquecimento;
 zstd 1.5.6 usou uma thread e lz4 é 1.10. Todas as saídas decodificadas foram
 verificadas por SHA-256. As células mostram
@@ -30,17 +30,18 @@ verificadas por SHA-256. As células mostram
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
-| text.txt | 3.707 @143.4/395.7 | 7.055 @61.9/343.7 | 2.907 @288.8/387.9 | 5.768 @206.2/342.5 | 6.198 @187.6/348.9 |
-| records.jsonl | 3.142 @139.2/424.0 | 5.707 @53.9/355.7 | 3.505 @279.6/398.6 | 7.071 @221.2/354.5 | 6.521 @190.8/354.8 |
-| records.bin | 1.347 @80.3/408.4 | 2.016 @18.7/253.7 | 1.371 @267.1/402.5 | 1.934 @193.9/343.6 | 2.183 @127.2/307.2 |
-| random.bin | 1.000 @360.1/445.2 | 1.000 @267.2/438.2 | 1.000 @397.9/374.6 | 1.000 @332.3/351.6 | 1.000 @296.6/355.8 |
+| text.txt | 3.707 @141.3/397.5 | 7.055 @62.3/346.3 | 2.907 @280.6/381.4 | 5.768 @202.5/346.2 | 6.198 @185.6/356.1 |
+| records.jsonl | 3.142 @138.8/419.6 | 5.707 @53.8/353.6 | 3.505 @285.5/405.4 | 7.071 @216.8/344.5 | 6.521 @187.6/339.2 |
+| records.bin | 1.347 @79.8/414.5 | 2.016 @18.6/249.5 | 1.371 @255.4/414.2 | 1.934 @191.9/348.5 | 2.183 @126.5/308.9 |
+| random.bin | 1.000 @383.3/443.8 | 1.000 @265.5/437.3 | 1.000 @397.3/385.8 | 1.000 @323.3/357.2 | 1.000 @280.3/343.9 |
 
 O resultado é modesto e depende da carga, não estabelece uma ordem universal.
 Nesta suite, `vv-balanced` obtém a melhor razão em texto e pequena vantagem de
 decodificação sobre zstd-1/3 no JSON gerado, mas zstd comprime esses dados muito
 mais rápido e tem razão melhor no JSON. `vv-fast` supera lz4-1 em razão no
 texto, mas não no JSON nem nos registros binários; lz4 comprime mais rápido.
-Meça os dados reais.
+Em dados aleatórios, fast alcança 383,3 MB/s na compressão contra 397,3 MB/s
+do lz4-1; todos produzem saída de tamanho próximo ao original. Meça os dados reais.
 
 Para reproduzir, coloque lz4 1.10 no início de `PATH`:
 
