@@ -55,8 +55,19 @@ uint64_t xxh_merge_round(uint64_t acc, uint64_t val) {
     return acc;
 }
 
+static inline VV_NO_SANITIZE_INTEGER
+uint64_t xxh_avalanche(uint64_t h64) {
+    h64 ^= h64 >> 33; h64 *= XXH_PRIME64_2;
+    h64 ^= h64 >> 29; h64 *= XXH_PRIME64_3;
+    h64 ^= h64 >> 32;
+    return h64;
+}
+
 VV_NO_SANITIZE_INTEGER
 uint64_t vv_xxh64(const void *data, size_t len, uint64_t seed) {
+    /* Empty input has a defined hash and needs no storage. Avoid forming
+     * an end pointer from the NULL pointer permitted with zero length. */
+    if (len == 0) return xxh_avalanche(seed + XXH_PRIME64_5);
     const uint8_t *p = (const uint8_t *)data;
     const uint8_t *end = p + len;
     uint64_t h64;
@@ -103,10 +114,7 @@ uint64_t vv_xxh64(const void *data, size_t len, uint64_t seed) {
         p++;
     }
 
-    h64 ^= h64 >> 33; h64 *= XXH_PRIME64_2;
-    h64 ^= h64 >> 29; h64 *= XXH_PRIME64_3;
-    h64 ^= h64 >> 32;
-    return h64;
+    return xxh_avalanche(h64);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -125,6 +133,8 @@ void vv_xxh64_init(vv_xxh64_state_t *s, uint64_t seed) {
 
 VV_NO_SANITIZE_INTEGER
 void vv_xxh64_update(vv_xxh64_state_t *s, const void *data, size_t len) {
+    /* A zero-length update is a no-op and permits a NULL data pointer. */
+    if (len == 0) return;
     const uint8_t *p = (const uint8_t *)data;
     const uint8_t *end = p + len;
     s->total_len += (uint64_t)len;
