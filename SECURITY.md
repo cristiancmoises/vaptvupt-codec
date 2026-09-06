@@ -1,14 +1,44 @@
 # VaptVupt Security Posture
 
-**Document version**: 2.15 (v2.65.10)
-**Codebase audited**: v2.65.10 release delta, subject to the evidence scope below
+**Document version**: 2.16 (v2.65.11)
+**Codebase audited**: v2.65.11 release delta, subject to the evidence scope below
 **License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
 
 ---
 
-## v2.65.10 security and correctness delta
+## v2.65.11 scope and kernel-port limitations
+
+Small fast-mode inputs initialize only the hash buckets their positions can
+reach. The full-width hash is unchanged, and the shortened circular chain
+still covers every possible input position within the advertised window.
+Exact-buffer comparisons against the full streaming matcher and MemorySanitizer
+checks cover this initialization invariant. Explicit `format_v2` in fast mode
+now keeps the four-byte match bias of plain compressed blocks; the old
+three-byte bias could produce undecodable output. The option still selects
+T-tagged entropy blocks in balanced/extreme modes.
+
+The new literal-decoder workspace entry points validate size and alignment;
+callers must keep workspace separate from input/output and exclusive to the
+call. Reusing the SEQ table arena during literal decoding avoids nested table
+allocation without extending the arena's lifetime. Workspace contents are
+unspecified after a call and are not a security boundary between tenants.
+These interfaces do not make the entire framed decoder allocation-free.
+
+`VV_DISABLE_SIMD=1` removes explicit vector paths and mutable SIMD dispatch
+state. `make scalar-test` separately compiles the core using general-purpose
+registers only, then runs userspace regressions. Compiler flags, external libc
+routines, stack limits, and allocator behavior remain the integrator's concern.
+The default x86-64 build uses inline AVX2 and requires an AVX2-capable host.
+
+This release is not a Linux kernel port. GPL-3.0-or-later licensing, userspace
+allocation/headers, remaining large stack frames, and unverified kernel
+execution contexts block direct inclusion. See [INTEGRATION.md](INTEGRATION.md)
+for the requirements and submission boundary. No new formal-proof claim is
+made for the new workspace or sparse-initialization code.
+
+## v2.65.10 security and correctness delta (historical)
 
 The decoder rejects unterminated length extensions and classic/legacy
 entropy match offsets outside the advertised frame window. Checks apply to

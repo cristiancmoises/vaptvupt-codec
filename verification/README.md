@@ -7,7 +7,28 @@ input). They are small, pure or bounded, which makes them tractable to verify
 rather than merely fuzz. This directory contains CBMC harnesses that
 machine-check their safety and correctness.
 
-## v2.65.10 currency and scope
+## v2.65.11 currency and scalar portability gate
+
+`make scalar-test` builds all core translation units with
+`VV_DISABLE_SIMD=1`, `-ffreestanding`, `-fno-builtin`, and
+`-mgeneral-regs-only` on x86-64/AArch64. It checks that SIMD dispatch state
+is absent and runs copy, roundtrip, streaming, Huffman, ANS, API-contract,
+exact-buffer and entropy-workspace tests. The temporary build retains `.su`
+stack-usage diagnostics.
+The core objects are linked to userspace libc for the tests; this is not a
+kernel build or evidence that the entire call chain avoids FP/SIMD registers.
+
+The separate default build still exercises the AVX2 decoder on x86-64.
+Use a clean `make SIMD=0` build to disable explicit SIMD in the normal CLI;
+that switch alone does not disable compiler auto-vectorization.
+
+Current delta checks cover sparse matcher initialization, fast-mode format
+selection and entropy workspaces. These are dynamic regressions. The formal
+harnesses have not changed, and the v2.65.10 proof-currency limitation below
+remains in force. No Linux kernel acceptance or new formal certification is
+claimed.
+
+## v2.65.10 currency and scope (historical)
 
 The `read_ext_len` implementation now returns `SIZE_MAX` for an extension
 that reaches the compressed-input boundary without a byte below 255. Its

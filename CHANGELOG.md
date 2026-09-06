@@ -2,6 +2,53 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.11 — Sprint 141: page-sized setup, entropy workspace reuse and scalar builds
+
+This release improves small-input encoding and makes entropy-table ownership
+explicit. The wire layout and existing public entry points remain compatible.
+It is a userspace codec release, not a Linux kernel port or a claim of
+universal superiority over LZ4/Zstd.
+
+- Fast one-shot inputs up to 4 KiB initialize only reachable full-width hash
+  buckets and allocate a circular chain sized to the input. A 4 KiB input
+  avoids 240 KiB of chain allocation at the default window; the 1 MiB primary
+  map allocation remains. Streaming and larger-input setup are unchanged.
+  Seven paired in-process runs measured about 2.7x faster encoding for 1 KiB
+  text and +10.7% throughput for 4 KiB text, with identical compressed bytes.
+  These allocation-sensitive measurements are separate from CLI/page-API
+  comparisons; large-input controls were approximately unchanged.
+- Fix explicit `format_v2` with fast mode. Plain compressed blocks always
+  decode matches with a four-byte minimum, but this combination previously
+  emitted a three-byte bias and could produce undecodable data. Fast mode
+  now uses ordinary v1 tokens; balanced/extreme retain the requested v2
+  entropy format. Creation, chunk compression and reset apply the same
+  rule, including mode changes while the requested format remains enabled.
+- Add checked caller-owned workspace entry points for single/four-stream
+  Huffman and ANS literal decoding, with size/alignment queries. Existing
+  allocating wrappers remain available. SEQ/S/T decoding reuses its existing
+  48 KiB sequence-table region during the earlier literal phase, removing
+  one nested allocation and up to 17,412 bytes of peak table storage. Whole
+  frame decoding still allocates, and legacy context tables are unchanged.
+  Single/four-stream ANS literal decoding also uses the existing direct-table
+  builder, removing its separate 4 KiB spread array from the stack. This
+  reduces those individual frames, not the whole codec's worst-case stack.
+- Add `VV_DISABLE_SIMD=1` and a clean `make SIMD=0` build mode. Scalar copy
+  calls bypass runtime dispatch and its mutable state. `make scalar-test`
+  separately builds the integer core with general-purpose registers only
+  and runs eight userspace regression suites. The normal x86-64 decoder
+  still uses inline AVX2; it is not a runtime-portable binary for older CPUs.
+- Add workspace ownership/capacity/reuse regressions. On Linux, the normal
+  test target injects allocation failures to require zero allocations in
+  workspace literal calls and exactly one allocation in tested S/T decode
+  paths. Exact-buffer, sanitizer and MemorySanitizer checks cover the new
+  small-input initialization and format-selection paths.
+- Add a reproducible page-sized in-process comparison harness with explicit
+  one-shot API, framing, checksum and allocation caveats. Refresh English
+  and Portuguese documentation while retaining historical evidence under
+  its original version. Document the remaining licensing, stack, allocator,
+  architecture and human-review requirements for a possible kernel port.
+  No Linux patch is submitted and no new formal proof is claimed.
+
 ## v2.65.10 — Sprint 140: leaner encoder setup and malformed-stream rejection
 
 Performance and correctness maintenance. The wire layout is unchanged, and

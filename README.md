@@ -2,7 +2,7 @@
 
 **[Português (Brasil)](README.pt-BR.md)**
 
-An LZ + tANS compression codec in C11. Zero runtime dependencies, an open
+An LZ + tANS compression codec in C11. No third-party runtime dependencies, an open
 wire format with [Python](reference/vv_decoder.py) and
 [JavaScript](reference/vv_decoder.js) decoders that reproduce current/default
 encoder output byte-exactly, and a test suite that gates every release on
@@ -10,14 +10,30 @@ byte-identical output and sanitizer-clean corrupt-input handling. The C decoder
 remains canonical for the full legacy H/A/I/C entropy surface; Python retains
 limited A-tag coverage, while JavaScript intentionally omits legacy tags.
 
-Version 2.65.10. The codec library and CLI are available under
+Version 2.65.11. The codec library and CLI are available under
 GPL-3.0-or-later or, for controlled first-party rights, a separate signed
 commercial agreement. The broader VaptVupt application uses a distinct AGPL
 public option. See `NOTICE`; `LICENSE-COMMERCIAL` is not itself a grant.
 
 ## Where it stands
 
-v2.65.10 avoids allocating the secondary hash4 matcher when it is unused:
+v2.65.11 reduces fast-mode setup work for inputs up to 4 KiB while preserving
+the full hash mapping, adds caller-owned workspaces for Huffman/ANS literal
+decoding, and provides an explicitly scalar build. Fast mode now ignores
+`format_v2`, because its plain tokens require a minimum match length of four;
+the previous combination could produce corrupt output. These are userspace
+improvements, not a claim to replace LZ4/Zstd or to be ready for Linux kernel
+inclusion. The [integration guide](INTEGRATION.md#linux-kernel-readiness)
+records the licensing, memory, portability, and validation work still needed.
+
+Paired encoder-only measurements against v2.65.10 found 2.7× fast encoding on
+1 KiB text and +10.7% on 4 KiB text; larger-input controls were within ±0.4%.
+At 4 KiB the shortened chain requests 240 KiB less memory with the default
+window, while the primary hash map still requests 1 MiB. Measured valid
+compressed outputs were byte-identical. Full methodology and controls are in
+[bench/COMPARISON.md](bench/COMPARISON.md).
+
+The preceding v2.65.10 release avoided allocating unused secondary hash4 tables:
 512 KiB less requested memory at the default window, up to 64.25 MiB at the
 largest window. Paired internal encoding measurements against v2.65.9 found
 +32.3% throughput on 1 KiB fast text, +19.7% on 4 KiB fast text, and
@@ -26,7 +42,7 @@ approximately unchanged, and all measured compressed sizes and hashes matched.
 These are in-process microbenchmarks; methodology and allocation-versus-RSS
 limits are in [bench/COMPARISON.md](bench/COMPARISON.md).
 
-### v2.65.10 deterministic generated-v1 suite (measured 2026-09-06)
+### Historical v2.65.10 deterministic generated-v1 suite (measured 2026-09-06)
 
 These subprocess measurements used v2.65.10 from clean commit `9d9433d` on
 2026-09-06, on an Intel Core i7-13700HX, Linux 7.2.3,
@@ -34,6 +50,7 @@ gcc 14.3, pinned to core 2. Each cell is the median of 7 measured runs after
 1 warm-up; zstd 1.5.6 ran single-threaded and lz4 is 1.10. Every decode was
 verified against the generated input by SHA-256. Cells are
 `ratio @ encode/decode MB/s`; ratio = raw / compressed.
+These are historical v2.65.10 timings, not measurements of v2.65.11.
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
@@ -123,6 +140,18 @@ suite above.
 
 Recent releases, newest first:
 
+- **v2.65.11** — fast one-shot inputs up to 4 KiB initialize only reachable
+  hash buckets and use a smaller match chain, preserving the 18-bit hash
+  mapping. Fast mode keeps plain-token minimum matches at four even when
+  `format_v2` is requested. New single/four-stream Huffman and ANS literal
+  workspace helpers let callers supply table storage; S/T blocks reuse their
+  existing 48 KiB sequence-table arena for those literals. Single/four-stream
+  ANS literal decoding now builds tables directly, removing its 4 KiB spread
+  scratch. This does not make whole-frame decoding allocation-free.
+  `SIMD=0` disables codec intrinsics
+  and dispatch; `make scalar-test` checks a general-register-only core in
+  userspace. `bench/bench_pages.c` compares one-shot APIs on deterministic
+  4/16/64 KiB fixtures, with framing and checksum differences disclosed.
 - **v2.65.10** — avoids unused hash4 allocations and fixes corrupt streaming
   output after changing `format_v2` through `vv_cstream_reset`. Token decoding
   requires the length-extension terminator and enforces the frame's declared
@@ -241,11 +270,14 @@ make            # -O3 -flto, default build
 make test       # full suite (see Testing)
 ```
 
-Requires a C11 compiler with AVX2 (gcc 13+/clang). Build variants:
+Requires a C11 compiler (gcc/clang). The default x86-64 decoder uses AVX2;
+use a clean `SIMD=0` build for targets without it. Build variants:
 
 ```sh
 make ENABLE_THREADS=1   # multi-threaded encode
 make pgo                # profile-guided build (needs a corpus in /tmp/silesia)
+make clean && make SIMD=0  # codec SIMD intrinsics/dispatch disabled
+make scalar-test          # general-register-only core, userspace tests
 ```
 
 Debian/Ubuntu: `apt install build-essential`. Arch: `pacman -S base-devel`.
@@ -328,7 +360,9 @@ as binary — measured +19% ratio on float-record data and +8% on struct
 records. Output produced this way requires a v2.33.0+ decoder; library users
 who must stay readable by older decoders can set
 `vv_options_t::compat_v246_5_decoder`, which suppresses the auto-enable (and
-lit_fmt=4). Explicit `--format-v2` still forces min_match=3 for any input.
+lit_fmt=4). Explicit `--format-v2` forces min_match=3 for balanced/extreme
+input. Fast mode ignores this option and keeps min_match=4, as required by
+its plain-token format.
 
 `--no-rep` disables rep-match probing in the parser. In fast mode (which has no
 entropy stage, so a rep match's short-offset code is not actually cheaper) the
@@ -377,6 +411,13 @@ int64_t m = vv_decompress(dst, (size_t)n, out, out_cap);
 (`vv_cstream_*`), multi-threaded (`vv_compress_mt`), and context-reuse APIs
 are declared in `include/vaptvupt.h`.
 
+For lower-level literal decoding, `include/vv_huffman.h` and
+`include/vv_ans.h` expose `*_decode_with_workspace` and
+`*_decode4_with_workspace`, with size/alignment queries. The caller owns the
+exclusive, non-overlapping workspace. These helpers avoid their own table
+allocation; the complete frame decoder still allocates memory. See
+[INTEGRATION.md](INTEGRATION.md#literal-decoder-workspaces).
+
 ## Wire format
 
 The format is specified in [FORMAT.md](FORMAT.md): a 16-byte frame header
@@ -398,9 +439,16 @@ checksum they apply it once after the final block.
 
 ## Testing
 
+To build without codec SIMD intrinsics or runtime dispatch, use
+`make clean && make SIMD=0`. `make scalar-test` separately compiles the core
+with general-register-only flags on x86-64/AArch64 and runs eight userspace
+suites. Neither command is a kernel build or a kernel stack-budget approval;
+the ordinary scalar build may still use compiler-generated vector operations
+or the system C library's implementations.
+
 `make test` runs:
 
-- 22 C test binaries (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
+- 23 C test binaries (roundtrip, Huffman, tANS, streaming, edge cases, adversarial
   safe-zone, DoS reproducers, BCJ filter, and more).
 - The Python reference decoder against current C output, plus the JavaScript
   reference decoder when a working `node` runtime is available. Current S/T,
@@ -425,6 +473,10 @@ checksum they apply it once after the final block.
   SHA-256, and emits reproducibility metadata.
 - CLI contract regressions for malformed options and failed output writes;
   every Python subcommand in `make test` propagates its failure to the target.
+- Literal-workspace size/alignment, malformed-stream and wrapper-equivalence
+  checks; Linux allocation interposition verifies allocation-free helpers and
+  the S/T arena reuse. Small fast frames and fast+`format_v2` roundtrip tests
+  guard the page setup and plain-token match-length fix.
 - Stream format-reset equivalence with fresh contexts, length-extension
   terminators, declared-window limits, cumulative completion output, Huffman
   truncated streams and bit-writer bounds, and ANS frequency normalization.
@@ -466,7 +518,7 @@ src/        codec (encoder, decoder, tANS, Huffman, BCJ, xxh64, API, CLI)
 include/    public header (vaptvupt.h) and internal headers
 reference/  Python and JavaScript decoders for current/default encoder output
 tests/      C suites + Python fuzzer/gate/CLI tests + OOM-robustness sweep
-bench/      competitive harness (competitive.py) and COMPARISON.md
+bench/      CLI and one-shot API benchmarks, plus COMPARISON.md
 verification/ CBMC formal-verification harnesses for the BCJ filters
 ```
 

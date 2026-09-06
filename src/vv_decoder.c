@@ -19,7 +19,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#if defined(__x86_64__) && defined(__AVX2__)
+#if VV_HAS_AVX2
 #include <immintrin.h>
 #define VV_INLINE_AVX2 1
 #else

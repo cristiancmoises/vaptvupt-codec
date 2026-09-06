@@ -75,6 +75,26 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
                         uint8_t *dst, size_t dst_cap,
                         size_t num_literals, size_t *src_consumed);
 
+/* Allocation-free single/four-stream literal decode. The workspace must
+ * have the queried size/alignment, must not overlap src/dst, and must be
+ * exclusive to this call. It can be reused after any return; its contents
+ * are unspecified. NULL/misaligned workspace returns PARAM, insufficient
+ * capacity returns OVERFLOW. src_consumed is always required. Nonempty
+ * decode also requires non-NULL src/dst. num_literals == 0 succeeds without
+ * a workspace, and permits NULL src/dst with zero src_len/dst_cap.
+ * These helpers do not cover the legacy order-1 context decoder. */
+size_t vva_decode_workspace_size(void);
+size_t vva_decode_workspace_alignment(void);
+
+vva_error_t vva_decode_with_workspace(const uint8_t *src, size_t src_len,
+                                      uint8_t *dst, size_t dst_cap,
+                                      size_t num_literals, size_t *src_consumed,
+                                      void *workspace, size_t workspace_cap);
+vva_error_t vva_decode4_with_workspace(const uint8_t *src, size_t src_len,
+                                       uint8_t *dst, size_t dst_cap,
+                                       size_t num_literals, size_t *src_consumed,
+                                       void *workspace, size_t workspace_cap);
+
 /* Order-1 context model encode/decode (tag 'C', v0.7+)
  * Uses 256 ANS tables — one per previous byte. Contexts with too few
  * observations inherit from the global table. 4 MB decode memory. */

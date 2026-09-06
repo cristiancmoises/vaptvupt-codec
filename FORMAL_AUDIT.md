@@ -1,9 +1,9 @@
 # VaptVupt Formal Audit Document
 
-**Document version**: 1.4
-**Codebase audit scope**: v2.65.10 release delta (regression/dynamic validation)
+**Document version**: 1.5
+**Codebase audit scope**: v2.65.11 release delta (regression/dynamic validation)
 **Formal evidence baseline**: inherited historical results, with original
-versions and bounds recorded below; no full formal-tool rerun for v2.65.10
+versions and bounds recorded below; no full formal-tool rerun for v2.65.11
 **License**: GPL-3.0-or-later
 **Intended deployment**: Embedded codec library inside the VaptVupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
 
@@ -16,13 +16,32 @@ This document is the formal audit reference for VaptVupt. It specifies what has 
 
 It is intentionally specific about what is **not** verified, to support honest risk assessment.
 
-> **Currency note (v2.65.10):** the token length reader changed in this
+## v2.65.11 delta-validation scope
+
+Sparse small-input matcher initialization is checked against full-matcher
+output and with MemorySanitizer, including exact-sized buffers. Fast-mode
+format selection has roundtrip and reset regressions. Caller-owned entropy
+workspace checks cover alignment, capacity, reuse, malformed data and
+allocation behavior. These are dynamic tests, not formal proofs.
+
+The scalar gate builds the core with `VV_DISABLE_SIMD=1`, freestanding compiler
+semantics and general-purpose registers only, then links userspace tests.
+Its stack-usage files are diagnostics: passing this gate does not certify a
+kernel stack budget, a kernel build, all architectures, or allocation-free
+framed decoding. Linux integration also requires compatible licensing and
+human review of the contribution. No kernel submission is certified here.
+
+The existing formal harnesses are unchanged in v2.65.11. The v2.65.10 reader
+exception below still applies; CBMC/Frama-C results are not inferred from
+compiler or sanitizer success.
+
+> **Historical currency note (v2.65.10):** the token length reader changed in that
 > release and its formal harness copies have been updated. Historical
 > `read_ext_len` proof results therefore do not certify the current helper
 > until the tools are rerun. Current evidence for this helper and the other
 > changed codec paths consists of regression and dynamic validation.
 
-## v2.65.10 delta-validation scope
+## v2.65.10 delta-validation scope (historical)
 
 Targeted regressions cover Huffman encoder capacity exhaustion and undefined
 shift prevention; truncated single/four-stream Huffman codewords; ANS

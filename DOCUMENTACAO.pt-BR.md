@@ -1,6 +1,6 @@
 # Documentação técnica VaptVupt (pt-BR)
 
-Versão sincronizada com o release **2.65.10**. Este guia resume integração,
+Versão sincronizada com o release **2.65.11**. Este guia resume integração,
 formato e limites de segurança em português; os documentos em inglês
 [FORMAT.md](FORMAT.md), [SECURITY.md](SECURITY.md) e [INTEGRATION.md](INTEGRATION.md)
 são as referências normativas completas. **[README em português](README.pt-BR.md)**
@@ -22,7 +22,7 @@ side-channel. A aplicação deve impor limites de tamanho, tempo e processos.
 ## Formato e compatibilidade
 
 Um frame contém cabeçalho de 16 bytes, blocos RAW/RLE/token/entropia e um
-footer XXH64 opcional. A saída válida de 2.65.10 continua compatível com as
+footer XXH64 opcional. A saída válida de 2.65.11 continua compatível com as
 versões anteriores indicadas em [FORMAT.md](FORMAT.md). O campo `window_log`
 deve estar entre 10 e 24; valores fora desse intervalo são rejeitados.
 Desde v2.65.10, offsets também precisam respeitar a janela declarada, e toda
@@ -39,6 +39,10 @@ checksum, depois do bloco final.
 Offsets usam 2 bytes até `window_log=16` e 3 bytes até 24. O formato v2 (`T`)
 é selecionado automaticamente para dados binários em balanced/extreme; use
 `compat_v246_5_decoder` quando o consumidor precisar de decodificadores antigos.
+Desde v2.65.11, fast ignora `format_v2` e mantém matches mínimos de quatro
+bytes, exigidos pelos tokens simples. Isso corrige saída potencialmente
+corrompida ao combinar fast com a opção v2; balanced/extreme continuam usando
+matches mínimos de três bytes no formato T.
 
 ## API mínima
 
@@ -71,6 +75,35 @@ inversa no fim do frame. Para embedding simples,
 `make amalg` gera `build/vaptvupt.c` e `build/vaptvupt.h`; valide com
 `make amalg-verify`.
 
+## Workspaces dos decodificadores literais
+
+Os headers `include/vv_huffman.h` e `include/vv_ans.h` oferecem as variantes
+`*_decode_with_workspace` e `*_decode4_with_workspace`. Consulte
+`vvh_decode_workspace_size()`, `vvh_decode_workspace_alignment()`,
+`vva_decode_workspace_size()` e `vva_decode_workspace_alignment()`; forneça uma região exclusiva,
+alinhada, com capacidade suficiente e sem sobreposição com entrada/saída.
+O conteúdo fica indefinido após a chamada, mas a região pode ser reutilizada
+depois de qualquer retorno. Workspace nulo/desalinhado retorna `PARAM`;
+capacidade insuficiente retorna `OVERFLOW`. `src_consumed` é obrigatório.
+Consulte o contrato no header para o caso especial de zero literais.
+
+Esses helpers não alocam suas tabelas. Os wrappers antigos mantêm a interface
+e a alocação próprias; o decodificador ANS de contexto legado não está coberto.
+Nos blocos S/T, a etapa literal reutiliza a arena existente de 48 KiB antes da
+construção das tabelas de sequência. A decodificação do frame inteiro ainda
+aloca buffers e não é uma API sem alocação.
+Os caminhos ANS literais de um/quatro streams agora usam a construção direta
+de tabelas e removem 4 KiB de scratch de espalhamento da stack. Com GCC 14.3
+`-O3` sem LTO, os frames individuais medidos caíram de 4704 para 608 bytes e
+de 5024 para 960 bytes. Isso não mede a soma da cadeia de chamadas nem aprova
+limites do kernel; o encoder ANS de contexto legado ainda contém a matriz
+local de normalização de 128 KiB.
+
+Em compressões one-shot fast de até 4 KiB, o encoder inicializa apenas os
+buckets alcançáveis pela entrada e reduz a cadeia ao tamanho útil. O hash de
+18 bits permanece igual; isso reduz trabalho de preparação sem trocar o
+formato por uma tabela hash menor com colisões diferentes.
+
 ## Verificação do release
 
 ```sh
@@ -78,7 +111,13 @@ make
 make check-debug
 make test
 make amalg-verify
+make scalar-test
 ```
+
+`make clean && make SIMD=0` oferece um build sem intrinsics/dispatch SIMD do
+codec. O gate `scalar-test` usa registradores gerais para os objetos do núcleo
+em x86-64/AArch64 e roda oito suites em userspace. Ele continua ligado à libc,
+não testa outro sistema operacional e não aprova orçamento de stack do kernel.
 
 O conjunto inclui round-trip em todos os modos, fuzz diferencial C↔Python,
 referências JavaScript, corpus negativo, reprodutores de DoS, falhas de
@@ -124,7 +163,8 @@ suite determinística `generated-v1`, exige por padrão a matriz completa
 vv-fast/vv-balanced/lz4-1/zstd-1/zstd-3 e verifica cada decodificação por
 SHA-256. Use `--runs 7 --warmups 1 --csv ... --json ...`; o JSON registra a
 proveniência do host e das ferramentas, e o CSV registra hashes e medições.
-As tabelas comparativas atuais medem v2.65.10 em 06/09/2026. Separadamente,
+As tabelas históricas medem v2.65.10 em 06/09/2026; não representam tempos do
+v2.65.11. Separadamente,
 o microbenchmark interno de alocação do v2.65.10 contra v2.65.9 mediu +32,3%
 em texto fast de 1 KiB e +17,2%/+39,6% em dados aleatórios de 1 MiB nos modos
 fast/balanced, com saída comprimida idêntica. A remoção do hash4 não utilizado
@@ -132,7 +172,39 @@ evita solicitar 512 KiB por matcher na janela padrão, até 64,25 MiB na maior;
 isso não mede redução de RSS. Metodologia e limites em
 [bench/COMPARISON.md](bench/COMPARISON.md).
 
+`bench/bench_pages.c` mede APIs one-shot em entradas sintéticas de 4, 16 e
+64 KiB. A mediana padrão usa sete amostras depois de três aquecimentos e
+calibração de pelo menos 50 ms por operação. Buffers do chamador ficam fora
+do tempo; alocações internas ficam dentro. VV usa frame v1 com checksum,
+LZ4 usa bloco cru sem checksum e Zstd usa frame com checksum padrão desligado.
+Os bytes finais de cada lote são verificados fora da região cronometrada.
+São páginas sintéticas quentes no cache, não resultados de zram ou filesystem.
+
+## Prontidão para o kernel Linux
+
+O v2.65.11 não está pronto para inclusão upstream. A licença pública
+GPL-3.0-or-later não satisfaz a exigência de compatibilidade com GPL-2.0-only.
+Uma eventual opção compatível exige autorização de quem detém todos os
+direitos necessários; nenhuma alteração de licença foi feita. Consulte as
+[regras de licença do kernel](https://docs.kernel.org/process/license-rules.html).
+
+Também faltam a substituição das dependências de libc/alocação, limites
+explícitos para heap e stack e validação por arquitetura/endianness. O encoder
+ANS de contexto legado ainda contém uma matriz local de normalização de
+128 KiB. Não há integração Kbuild/Kconfig, testes KUnit ou medições reais de
+zram/filesystem. O gate escalar é apenas uma etapa de userspace; as regras
+para uso de registradores FP/SIMD no kernel são mais restritas, conforme a
+[API de ponto flutuante](https://docs.kernel.org/core-api/floating-point.html).
+
+Uma proposta futura precisa demonstrar benefício numa carga do subsistema,
+ter revisão humana, DCO certificado pelo próprio autor humano e atribuição
+`Assisted-by` para assistência de IA. Um agente não pode certificar o DCO
+em nome do autor. O fluxo usa patches revisáveis para os responsáveis pelo
+subsistema, não um push direto para a árvore principal. Consulte
+[assistentes de código](https://docs.kernel.org/process/coding-assistants.html)
+e [envio de patches](https://docs.kernel.org/process/submitting-patches.html).
+
 Veja [SECURITY.md](SECURITY.md) para o threat model completo e
 [INTEGRATION.md](INTEGRATION.md) para recomendações de AEAD, streaming e
 multi-thread. O artefato de distribuição atual é somente o arquivo-fonte
-`vaptvupt-2.65.10-src.tar.gz`; não inclua material interno no archive.
+`vaptvupt-2.65.11-src.tar.gz`; não inclua material interno no archive.
