@@ -25,12 +25,12 @@ if nm "$scalar_tmp/vv_simd.o" | awk '/g_copy_|vv_init_simd|vv_has_avx2/ { bad=1 
     echo 'scalar gate: runtime SIMD dispatch remains in the object' >&2
     exit 1
 fi
-for scalar_test in scalar roundtrip streaming huffman ans api_contract exact_buffer_decode entropy_workspace; do
+for scalar_test in scalar roundtrip streaming huffman ans api_contract exact_buffer_decode entropy_workspace fast_workspace; do
     "$scalar_cc" $scalar_flags -I"$scalar_root/include" \
         "$scalar_root/tests/test_$scalar_test.c" $scalar_objects \
         -o "$scalar_tmp/test_$scalar_test"
     "$scalar_tmp/test_$scalar_test"
 done
-printf 'scalar gate PASS: general-register core, eight test suites\n'
+printf 'scalar gate PASS: general-register core, nine test suites\n'
 printf 'Build and stack-usage diagnostics retained in %s\n' "$scalar_tmp"
 printf 'This is a userspace portability check, not a Linux kernel build or stack-budget approval.\n'
