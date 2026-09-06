@@ -18,6 +18,27 @@ São melhorias de userspace, não evidência de substituição geral de LZ4/Zstd
 nem de prontidão para o kernel Linux. Os bloqueios de licença, memória e
 validação estão na [documentação técnica](DOCUMENTACAO.pt-BR.md#prontidão-para-o-kernel-linux).
 
+### Perfil atual limitado a páginas (medido em 06/09/2026)
+
+O commit `2e454c2` foi medido in-process com 64 páginas independentes de texto
+sintético de 4 KiB, fixado na CPU 4. VaptVupt foi compilado sem intrínsecos e
+sem autovetorização do compilador; LZ4 1.10.0 e Zstd 1.5.7 mantiveram as suas
+compilações userspace instaladas. A tabela inclui o framing de cada formato e
+mostra a latência p50 de chamadas individuais e o throughput em lote. Não é
+uma medição de kernel, zram nem uma certificação general-register-only.
+
+| API | Razão | Compressão p50 (µs) | Descompressão p50 (µs) | Compressão MB/s | Descompressão MB/s |
+|---|---:|---:|---:|---:|---:|
+| Contexto FAST do VaptVupt, sem checksum | 2,868 | 73,173 | 9,192 | 56,3 | 485,8 |
+| LZ4 extState | 2,454 | 12,543 | 2,852 | 340,3 | 1499,1 |
+| Contexto Zstd, nível 1, sem checksum | 4,927 | 41,959 | 13,304 | 99,8 | 321,5 |
+
+Este perfil não sustenta afirmar que VaptVupt substitui LZ4 ou Zstd: LZ4 foi
+mais rápido neste caso, enquanto Zstd obteve a melhor razão. A evidência
+CSV/JSON completa tem 216 perfis de 4/16/64 KiB e seis fixtures sintéticos;
+LZO-RLE e execução no kernel não estavam disponíveis. A reprodução e as
+ressalvas estão em [bench/COMPARISON.md](bench/COMPARISON.md).
+
 A medição pareada isolando o encoder contra v2.65.10 encontrou compressão
 fast 2,7× mais rápida em texto de 1 KiB e ganho de 10,7% em 4 KiB; os controles
 maiores ficaram dentro de ±0,4%. Em 4 KiB, a cadeia menor deixa de solicitar

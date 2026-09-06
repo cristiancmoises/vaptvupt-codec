@@ -26,6 +26,27 @@ improvements, not a claim to replace LZ4/Zstd or to be ready for Linux kernel
 inclusion. The [integration guide](INTEGRATION.md#linux-kernel-readiness)
 records the licensing, memory, portability, and validation work still needed.
 
+### Current bounded page profile (measured 2026-09-06)
+
+Commit `2e454c2` was measured in-process on 64 independent synthetic 4 KiB
+text pages, pinned to CPU 4. VaptVupt was built without intrinsics or compiler
+auto-vectorization; LZ4 1.10.0 and Zstd 1.5.7 retained their installed
+userspace builds. The table includes each format's framing and reports p50
+individual-call latency plus batch throughput. It is a userspace measurement,
+not a kernel, zram, or general-register-only result.
+
+| API | Ratio | Encode p50 (µs) | Decode p50 (µs) | Encode MB/s | Decode MB/s |
+|---|---:|---:|---:|---:|---:|
+| VaptVupt FAST caller context, no checksum | 2.868 | 73.173 | 9.192 | 56.3 | 485.8 |
+| LZ4 extState | 2.454 | 12.543 | 2.852 | 340.3 | 1499.1 |
+| Zstd context, level 1, no checksum | 4.927 | 41.959 | 13.304 | 99.8 | 321.5 |
+
+This profile does not support a claim that VaptVupt supersedes LZ4 or Zstd:
+LZ4 is faster here, while Zstd has the stronger ratio. The complete 216-profile
+CSV/JSON evidence covers 4/16/64 KiB and six synthetic fixtures; LZO-RLE and
+kernel runtime testing were not available. Reproduction details and caveats
+are in [bench/COMPARISON.md](bench/COMPARISON.md).
+
 Paired encoder-only measurements against v2.65.10 found 2.7× fast encoding on
 1 KiB text and +10.7% on 4 KiB text; larger-input controls were within ±0.4%.
 At 4 KiB the shortened chain requests 240 KiB less memory with the default
