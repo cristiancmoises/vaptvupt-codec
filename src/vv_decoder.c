@@ -59,12 +59,6 @@ static inline void wcopy32(uint8_t *d, const uint8_t *s) {
     _mm256_storeu_si256((__m256i *)d, _mm256_loadu_si256((const __m256i *)s));
 }
 
-static inline void wcopy_n(uint8_t *d, const uint8_t *s, size_t n) {
-    while (n >= 32) { wcopy32(d, s); d += 32; s += 32; n -= 32; }
-    if (n >= 16) { wcopy16(d, s); d += 16; s += 16; n -= 16; }
-    if (n > 0) wcopy16(d, s); /* safe over-copy in safe zone */
-}
-
 /* Match copy with offset >= 32: 32-byte chunks, NO over-copy at tail */
 static inline void match_copy_32(uint8_t *d, const uint8_t *s, size_t n) {
     while (n >= 32) { wcopy32(d, s); d += 32; s += 32; n -= 32; }
