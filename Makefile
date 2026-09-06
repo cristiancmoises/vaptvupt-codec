@@ -130,6 +130,8 @@ TEST23_SRC = tests/test_entropy_workspace.c $(CORE_SRC)
 TEST23_BIN = test_entropy_workspace
 TEST24_SRC = tests/test_fast_workspace.c $(CORE_SRC)
 TEST24_BIN = test_fast_workspace
+TEST25_SRC = tests/test_xxh64.c src/vv_xxh64.c
+TEST25_BIN = test_xxh64
 ENTROPY_TEST_FLAGS :=
 ENTROPY_TEST_LDFLAGS :=
 ifeq ($(shell uname -s),Linux)
@@ -140,7 +142,7 @@ endif
 # A public-header change (including the release version) must rebuild every
 # consumer even when none of its .c files changed.
 $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN): $(CORE_HEADERS)
-$(TEST23_BIN) $(TEST24_BIN): $(CORE_HEADERS)
+$(TEST23_BIN) $(TEST24_BIN) $(TEST25_BIN): $(CORE_HEADERS)
 
 .PHONY: all clean test python-test fuzz fuzz-libfuzzer test-fuzz fuzz-clean bench-update speed-update speed-baseline speed-profile run_roundtrip run_huffman bench check-debug perf pgo
 
@@ -329,7 +331,10 @@ $(TEST24_BIN): $(TEST24_SRC)
 	$(CC) $(CFLAGS) -c src/vv_decoder.c $(SIMD_FLAGS) -o build_obj/vv_decoder_t24.o
 	$(CC) $(CFLAGS) $(ENTROPY_TEST_FLAGS) $(filter-out src/vv_simd.c src/vv_decoder.c, $(TEST24_SRC)) build_obj/vv_simd_t24.o build_obj/vv_decoder_t24.o $(LDFLAGS) $(ENTROPY_TEST_LDFLAGS) -o $(TEST24_BIN)
 
-test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TEST24_BIN) $(TARGET)
+$(TEST25_BIN): $(TEST25_SRC)
+	$(CC) $(CFLAGS) $(TEST25_SRC) $(LDFLAGS) -o $(TEST25_BIN)
+
+test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TEST24_BIN) $(TEST25_BIN) $(TARGET)
 	./$(TEST1_BIN)
 	./$(TEST2_BIN)
 	./$(TEST3_BIN)
@@ -354,6 +359,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST22_BIN)
 	./$(TEST23_BIN)
 	./$(TEST24_BIN)
+	./$(TEST25_BIN)
 	@echo ""
 	@echo "OOM-robustness sweep (no crash on any single allocation failure):"
 	@VV_BIN=./$(TARGET) CC="$(CC)" sh tests/oom_sweep.sh
@@ -606,7 +612,7 @@ bench: $(TARGET)
 	fi
 
 clean:
-	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TEST24_BIN) *.vv *.zupt *.orig
+	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TEST24_BIN) $(TEST25_BIN) *.vv *.zupt *.orig
 	rm -rf tests/corpus_bad
 
 amalg:
