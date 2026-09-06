@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <limits.h>
 
 static void usage(void) {
     fprintf(stderr,
@@ -94,11 +95,13 @@ static void usage(void) {
 static uint8_t *read_file(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
     if (!f) { perror(path); return NULL; }
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) { perror(path); fclose(f); return NULL; }
     long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (sz < 0) { fclose(f); return NULL; }
-    uint8_t *buf = (uint8_t *)malloc((size_t)sz);
+    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        perror(path); fclose(f); return NULL;
+    }
+    /* malloc(0) may return NULL even though an empty file is valid input. */
+    uint8_t *buf = (uint8_t *)malloc(sz ? (size_t)sz : 1);
     if (!buf) { fclose(f); return NULL; }
     if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) { free(buf); fclose(f); return NULL; }
     fclose(f);
@@ -109,8 +112,12 @@ static uint8_t *read_file(const char *path, size_t *len) {
 static int write_file(const char *path, const uint8_t *data, size_t len) {
     FILE *f = fopen(path, "wb");
     if (!f) { perror(path); return -1; }
-    if (fwrite(data, 1, len, f) != len) { fclose(f); return -1; }
-    fclose(f);
+    if (fwrite(data, 1, len, f) != len) {
+        perror(path); fclose(f); return -1;
+    }
+    /* A small write may succeed only in stdio's buffer. The final flush can
+     * still fail (disk full, quota, device error); success requires close. */
+    if (fclose(f) != 0) { perror(path); return -1; }
     return 0;
 }
 
@@ -123,7 +130,24 @@ static double now_sec(void) {
 static vv_mode_t parse_mode(const char *s) {
     if (strcmp(s, "fast") == 0) return VV_MODE_ULTRA_FAST;
     if (strcmp(s, "extreme") == 0) return VV_MODE_EXTREME;
-    return VV_MODE_BALANCED;
+    if (strcmp(s, "balanced") == 0) return VV_MODE_BALANCED;
+    return (vv_mode_t)-1;
+}
+
+/* Decimal options must consume the whole argument. atoi accepts typos as
+ * zero and has undefined behavior for values outside the int range. */
+static int parse_number(const char *s, unsigned limit, int *out) {
+    unsigned value = 0;
+    if (!*s) return 0;
+    for (; *s; ++s) {
+        if (*s < '0' || *s > '9') return 0;
+        unsigned digit = (unsigned)(*s - '0');
+        if (value > limit / 10 ||
+            (value == limit / 10 && digit > limit % 10)) return 0;
+        value = value * 10 + digit;
+    }
+    *out = (int)value;
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -166,55 +190,73 @@ int main(int argc, char **argv) {
         }
         else if ((strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--depth") == 0)
                  && i + 1 < argc) {
-            depth_override = atoi(argv[++i]);
+            const char *value = argv[++i];
             /* Overrides the mode's default match-finder chain depth. Higher
              * = better ratio, slower encode (smooth monotonic tradeoff).
              * 0 keeps the per-mode default. Reject out-of-range rather than
              * silently clamping so the value is never misread. */
-            if (depth_override != 0 && (depth_override < 1 || depth_override > 4096)) {
-                fprintf(stderr, "Invalid -D/--depth %d: must be 1..4096, "
-                        "or 0 for the mode default\n", depth_override);
+            if (!parse_number(value, 4096, &depth_override)) {
+                fprintf(stderr, "Invalid -D/--depth %s: must be 1..4096, "
+                        "or 0 for the mode default\n", value);
                 return 1;
             }
         }
         else if ((strcmp(argv[i], "-A") == 0 || strcmp(argv[i], "--accel") == 0)
                  && i + 1 < argc) {
-            accel = atoi(argv[++i]);
+            const char *value = argv[++i];
             /* Position-skip acceleration: speeds up encode on incompressible
              * input for a small ratio cost on compressible data. Zero selects
              * the mode-dependent automatic factor. Reject out-of-range rather
              * silently clamping. */
-            if (accel < 0 || accel > 64) {
-                fprintf(stderr, "Invalid -A/--accel %d: must be 0..64 "
-                        "(0 = automatic)\n", accel);
+            if (!parse_number(value, 64, &accel)) {
+                fprintf(stderr, "Invalid -A/--accel %s: must be 0..64 "
+                        "(0 = automatic)\n", value);
                 return 1;
             }
         }
         else if ((strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--window") == 0)
                  && i + 1 < argc) {
-            window_log = atoi(argv[++i]);
+            const char *value = argv[++i];
             /* Valid window logs are 10..24 (1 KiB .. 16 MiB). The 16 MiB
              * cap is the 3-byte (24-bit) offset wire-format limit. 0 keeps
              * the per-mode adaptive default. Reject anything else rather
              * than silently clamping, so the user knows their value was
              * out of range. */
-            if (window_log != 0 && (window_log < 10 || window_log > 24)) {
-                fprintf(stderr, "Invalid -w/--window %d: must be 10..24 "
-                        "(1 KiB .. 16 MiB), or 0 for auto\n", window_log);
+            if (!parse_number(value, 24, &window_log) ||
+                (window_log != 0 && window_log < 10)) {
+                fprintf(stderr, "Invalid -w/--window %s: must be 10..24 "
+                        "(1 KiB .. 16 MiB), or 0 for auto\n", value);
                 return 1;
             }
         }
         else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) {
-            nthreads = atoi(argv[++i]);
-            if (nthreads < 0) nthreads = 0;
+            const char *value = argv[++i];
+            if (!parse_number(value, INT_MAX, &nthreads)) {
+                fprintf(stderr, "Invalid -T %s: must be 0..%d\n", value, INT_MAX);
+                return 1;
+            }
         }
         else if (strcmp(argv[i], "-h") == 0) { usage(); return 0; }
-        else if (argv[i][0] != '-') input_path = argv[i];
+        else if (argv[i][0] != '-') {
+            if (input_path) {
+                fprintf(stderr, "Only one input file is supported\n"); return 1;
+            }
+            input_path = argv[i];
+        }
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); return 1; }
     }
 
-    if (!input_path || !(do_compress || do_decompress || do_test || do_bench)) {
+    if (!input_path || do_compress + do_decompress + do_test + do_bench != 1) {
         usage();
+        return 1;
+    }
+    vv_mode_t mode = parse_mode(mode_str);
+    if (mode != VV_MODE_ULTRA_FAST && mode != VV_MODE_BALANCED &&
+        mode != VV_MODE_EXTREME) {
+        fprintf(stderr, "Unknown compression mode: %s\n", mode_str); return 1;
+    }
+    if (filter_x86 && filter_arm64) {
+        fprintf(stderr, "Cannot combine --filter x86 and --filter arm64\n");
         return 1;
     }
 
@@ -226,7 +268,7 @@ int main(int argc, char **argv) {
     if (do_compress) {
         vv_options_t opts;
         vv_default_options(&opts);
-        opts.mode = parse_mode(mode_str);
+        opts.mode = mode;
         opts.verbose = verbose;
         /* --fast on compress: skip XXH64 footer generation.
          * Modest speedup (~5–7%) on text/json; bigger on trivial
@@ -247,10 +289,6 @@ int main(int argc, char **argv) {
          * +4–6% on nci/webster/mozilla at wlog=24) but can hurt inputs
          * with little long-range structure, so it is opt-in, not default. */
         if (window_log != 0) opts.window_log = (uint8_t)window_log;
-        if (filter_x86 && filter_arm64) {
-            fprintf(stderr, "Cannot combine --filter x86 and --filter arm64 (a file is one architecture)\n");
-            return 1;
-        }
         opts.filter_x86 = filter_x86;
         opts.filter_arm64 = filter_arm64;
         opts.filter_auto = filter_auto;

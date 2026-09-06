@@ -5,12 +5,15 @@ as the compression layer beneath an application's encryption envelope (for
 example, a backup tool that wraps each frame in AES-256-GCM or an ML-KEM + AEAD
 construction). It covers the API, the build, the flags that matter, and the
 threat-model boundary. Numbers here point to measured data, not headline
-claims — see `bench/COMPARISON.md` for the fresh v2.65.9 deterministic suite
-and the separately dated historical 11-file corpus.
+claims — see `bench/COMPARISON.md` for the paired v2.65.10 allocation
+microbenchmark, the dated v2.65.9 deterministic suite, and the historical
+11-file corpus.
 
-Release alignment: **v2.65.9**. The wire layout is unchanged from v2.65.8 and
-streams that release encoded validly remain compatible. A rare candidate that
-previously produced an undecodable SEQ frame now selects a lossless fallback.
+Release alignment: **v2.65.10**. The wire layout is unchanged from v2.65.9;
+valid encoded streams remain compatible. Malformed token extensions, offsets
+beyond the declared window, invalid ANS normalization and truncated Huffman
+bitstreams are rejected. Changing the streaming encoder's `format_v2` through
+reset no longer produces corrupt long-match frames.
 
 License: this codec library is GPL-3.0-or-later; the VaptVupt tool (formerly
 Zupt) is dual-licensed AGPL-3.0 + commercial (contact sac@securityops.co).
@@ -93,6 +96,28 @@ parsing reject an input header that sets both BCJ bits. The CLI's `-A 0` setting
 is automatic, not disabled: fast uses factor 2 and balanced/extreme use factor
 1.
 
+`vv_dstream_decompress_chunk` reports cumulative `written`, including calls
+after frame completion; `consumed` remains per-call. Keep the same output
+buffer base for the stream. `vv_cstream_reset` now synchronizes the new
+`format_v2` option with match-length limits and hash3 enablement. It allocates
+required hash3 storage before accepting new options, returning `VV_ERR_NOMEM`
+without replacing the current options if that allocation fails.
+
+The decoder requires a terminating byte below 255 for each token length
+extension and enforces the frame's advertised window for match offsets. ANS
+literal frequencies must sum to the full normalization table before it is
+built. Huffman bit writing avoids undefined shifts and reports output overflow;
+decoding rejects truncated bitstreams. The CLI validates complete decimal
+arguments and known modes, and a failed output flush/close returns failure.
+
+The encoder skips unused hash4 allocation: 512 KiB less requested memory at
+the default window and up to 64.25 MiB at `window_log=24`. Paired internal
+measurements against v2.65.9 found +32.3% throughput for 1 KiB fast text and
++17.2%/+39.6% for 1 MiB random input in fast/balanced mode; 1 MiB text was
+approximately unchanged. Compressed sizes/hashes matched in all measured
+cases. These are allocation savings, not an RSS measurement; see
+`bench/COMPARISON.md` for the in-process methodology.
+
 The v2.65.9 sequence decoder also builds its tANS tables directly, reducing
 per-block table scratch from 52 KiB to 48 KiB without changing the stream.
 Paired pinned in-process measurements found +0.40% text and +1.21% JSON decode
@@ -114,7 +139,8 @@ valid wire output is unchanged.
 - `make test` — full suite (C suites, reference decoders, differential fuzzer,
   negative corpus, ratio gate, OOM sweep). It also checks current C output in
   Python/JavaScript, including checksum-on/off x86/AArch64 BCJ frames. Allow
-  >= 850 s.
+  >= 850 s. Every Python subcommand propagates failures, including CLI contract
+  checks for malformed options and failed output writes.
 - `make verify` — CBMC proofs + Frama-C/Eva analyses of the BCJ filters and the
   decoder's length reader and block-header codec (needs `cbmc`, optionally
   `frama-c-base` + `z3`).
@@ -124,10 +150,12 @@ If you vendor `src/` directly instead of the amalgamation, run
 has drifted from `src/`, so a security fix in `src/` cannot silently miss the
 embedded copy.
 
-The v2.65.9 streaming-completion and direct-table changes have dedicated
-regression/dynamic coverage; they did not receive a new full formal-tool rerun.
-The formal baseline remains scoped to the unchanged functions and bounds in
-`FORMAL_AUDIT.md` and `verification/README.md`.
+The v2.65.10 length-reader change has an updated formal harness, but CBMC was
+unavailable during this release validation. Its historical proof does not
+certify the modified reader; regression and sanitizer tests cover the change
+dynamically. No new full formal-tool rerun is claimed. The historical evidence
+remains limited to its recorded implementations and bounds in `FORMAL_AUDIT.md`
+and `verification/README.md`.
 
 ---
 

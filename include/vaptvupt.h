@@ -23,8 +23,8 @@ extern "C" {
 
 #define VV_VERSION_MAJOR  2
 #define VV_VERSION_MINOR  65
-#define VV_VERSION_PATCH  9
-#define VV_VERSION_STRING "2.65.9"
+#define VV_VERSION_PATCH  10
+#define VV_VERSION_STRING "2.65.10"
 
 #define VV_MAGIC          0x56560100u  /* "VV\x01\x00" */
 #define VV_MAX_BLOCK_SIZE (1u << 20)   /* 1 MB per block */

@@ -2,6 +2,63 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.10 — Sprint 140: leaner encoder setup and malformed-stream rejection
+
+Performance and correctness maintenance. The wire layout is unchanged, and
+valid one-shot compressed output remains byte-identical on the paired
+benchmark fixtures. Corrupt encodings accepted by earlier decoders may now
+return an error. Streaming reset between format versions now produces the
+same bytes as a newly created context with the selected options.
+
+- Allocate secondary hash4 matcher tables only when adaptive binary encoding
+  uses them. Fast encoding, text paths, adaptive trials, optimal-parser
+  prepasses and streaming avoid an unused 256 KiB map plus a window-sized
+  chain: 512 KiB per default-window matcher, or 64.25 MiB at window_log=24.
+  These are allocation savings, not guaranteed RSS reductions.
+- Seven alternating baseline/candidate in-process runs on CPU 4 with GCC
+  14.3 measured fast encoding gains of 32.3% on 1 KiB text, 19.7% on 4 KiB
+  text and 17.2% on 1 MiB random data; balanced random encoding improved
+  39.6%. Large text was approximately unchanged. Fixture compressed sizes
+  and hashes matched. These workload-specific measurements are separate
+  from the generated-v1 CLI comparison table.
+- Fixed data corruption when `vv_cstream_reset` changes from format v1 to
+  v2: reset now updates the representable match-length limit and hash3
+  configuration, allocating before accepting new options. Regression cases
+  exercise repeated v1/v2 transitions in balanced and extreme modes, with
+  long matches and three-byte records, against fresh-context output.
+- Token length extensions now require a final byte below 255, including an
+  explicit zero for a zero extension. Classic LZ and legacy entropy token
+  decoders also enforce the frame's advertised history window. Regressions
+  cover one-shot and fragmented streaming, scalar tails, AVX2 paths, and
+  valid boundary controls. Completed streaming decode continues to report
+  cumulative `written` on subsequent calls.
+- Huffman encoding returns `VVH_ERR_OVERFLOW` when its bit writer exhausts
+  the output buffer. The accumulator remains bounded, preventing the
+  undefined shift reproduced with small destination buffers. Single- and
+  four-stream decoding reject codewords whose bits extend beyond input.
+- Validate normalized ANS frequencies sum to 4096 before constructing
+  single-stream, four-stream, global-context or local-context literal
+  tables. This rejects incomplete tables that could leave decoder state
+  uninitialized, and rejects overfull tables before use.
+- CLI numeric arguments now require a complete, nonnegative decimal value
+  within range. Unknown modes, conflicting actions and multiple inputs are
+  rejected. Buffered write/close errors return failure, so a full disk
+  cannot be reported as successful compression or decompression. Empty
+  files no longer depend on implementation-specific `malloc(0)` behavior.
+- `make test` propagates failures from every Python check. Header changes
+  rebuild CLI/test consumers, core changes rebuild fuzz harnesses, and the
+  SIMD fuzz object is instrumented with the selected sanitizers.
+- Corrected the ratio gate's `ultra_fast` JSON column to invoke CLI `fast`:
+  the old unknown CLI name silently selected balanced mode. The gate now
+  checks the emitted mode byte. Its fast baseline is corrected using
+  v2.65.9 fast output, verified byte-identical to this release on all ten
+  fixtures; balanced/extreme pins are unchanged. This is a measurement
+  correction, not a compression-ratio regression.
+- Updated English and Portuguese documentation and comparison evidence.
+  The copied `read_ext_len` formal harnesses follow the changed helper;
+  historical proofs for that helper are not claimed for the new code
+  without rerunning the tools. The release artifact remains source-only.
+
 ## v2.65.9 — Sprint 139: direct tANS tables, SEQ/BCJ correctness, and reproducible benchmarks
 
 Performance, correctness, and release-infrastructure maintenance. The frame

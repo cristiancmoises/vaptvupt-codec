@@ -492,6 +492,19 @@ static size_t read_hdr_v2(const uint8_t *s, size_t len, uint16_t norm[NSYM]) {
     return 0;
 }
 
+/* Every decode-table slot must be initialized before it can be indexed.
+ * Wire frequencies are untrusted: an underfull table leaves spread slots
+ * uninitialized, and an overfull table destroys the ANS state mapping. */
+static int validated_symbol_count(const uint16_t norm[NSYM], int *single) {
+    uint32_t total = 0;
+    int count = 0;
+    for (int i = 0; i < NSYM; i++) {
+        total += norm[i];
+        if (norm[i]) { count++; *single = i; }
+    }
+    return total == ANS_L ? count : 0;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * BITPAIR STACK (for LIFO encode)
  * ═══════════════════════════════════════════════════════════════ */
@@ -621,9 +634,8 @@ vva_error_t vva_decode(const uint8_t *src, size_t src_len,
     size_t hdr = read_hdr_v2(src, src_len, norm);
     if (!hdr) return VVA_ERR_CORRUPT;
 
-    int np = 0, single = -1;
-    for (int i = 0; i < NSYM; i++)
-        if (norm[i]) { np++; single = i; }
+    int single = -1;
+    int np = validated_symbol_count(norm, &single);
     if (!np) return VVA_ERR_CORRUPT;
     if (np == 1) {
         memset(dst, single, num_literals);
@@ -816,9 +828,8 @@ vva_error_t vva_decode4(const uint8_t *src, size_t src_len,
     size_t hdr = read_hdr_v2(src, src_len, norm);
     if (!hdr) return VVA_ERR_CORRUPT;
 
-    int np = 0, single = -1;
-    for (int i = 0; i < NSYM; i++)
-        if (norm[i]) { np++; single = i; }
+    int single = -1;
+    int np = validated_symbol_count(norm, &single);
     if (!np) return VVA_ERR_CORRUPT;
     if (np == 1) {
         memset(dst, single, num_literals);
@@ -1188,9 +1199,9 @@ vva_error_t vva_decode_ctx(const uint8_t *src, size_t src_len,
     p += global_sz;
 
     /* Check for single-symbol global */
-    int global_np = 0, global_single = -1;
-    for (int i = 0; i < NSYM; i++)
-        if (global_norm[i]) { global_np++; global_single = i; }
+    int global_single = -1;
+    int global_np = validated_symbol_count(global_norm, &global_single);
+    if (!global_np) return VVA_ERR_CORRUPT;
 
     /* Read inherited bitmap */
     if (p + 32 > end) return VVA_ERR_CORRUPT;
@@ -1240,11 +1251,12 @@ vva_error_t vva_decode_ctx(const uint8_t *src, size_t src_len,
         if (!chdr) goto ctx_dec_fail;
         p += tsz;
 
+        int csingle = -1;
+        int cnp = validated_symbol_count(cnorm, &csingle);
+        if (!cnp) goto ctx_dec_fail;
+
         vva_dec_entry_t *cdec = (vva_dec_entry_t *)malloc(ANS_L * sizeof(vva_dec_entry_t));
         if (!cdec) goto ctx_dec_fail;
-
-        int cnp = 0, csingle = -1;
-        for (int i = 0; i < NSYM; i++) if (cnorm[i]) { cnp++; csingle = i; }
 
         if (cnp > 1) {
             spread_symbols(cnorm, sp);
@@ -2690,7 +2702,6 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
         offset_check_floor = dst + ((size_t)max_offset - history_at_block_start);
     }
 
-    size_t seqs_decoded = 0;
     /* SPRINT 90 SECURITY FIX (DoS hardening):
      *
      * The original loop terminated only when both lit_pos reached
@@ -2795,7 +2806,6 @@ vva_error_t vva_decode_sequences_impl(const uint8_t *src, size_t src_len,
             op += litlen;
             lit_pos += litlen;
         }
-        seqs_decoded++;
 
         /* SPRINT 63/64: continue the loop even when all matches are
          * consumed, as long as literals remain. Previously this broke

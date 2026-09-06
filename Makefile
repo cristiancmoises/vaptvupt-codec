@@ -42,6 +42,7 @@ ifeq ($(ARCH),x86_64)
 endif
 
 CORE_SRC = src/vv_encoder.c src/vv_decoder.c src/vv_simd.c src/vv_xxh64.c src/vv_huffman.c src/vv_ans.c src/vv_bcj.c src/vaptvupt_api.c
+CORE_HEADERS = $(wildcard include/*.h)
 SOURCES  = src/main.c $(CORE_SRC)
 TARGET   = vaptvupt
 
@@ -111,6 +112,10 @@ TEST21_BIN = test_phase1_overflow
 
 TEST22_SRC = tests/test_exact_buffer_decode.c $(CORE_SRC)
 TEST22_BIN = test_exact_buffer_decode
+
+# A public-header change (including the release version) must rebuild every
+# consumer even when none of its .c files changed.
+$(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN): $(CORE_HEADERS)
 
 .PHONY: all clean test python-test fuzz fuzz-libfuzzer test-fuzz fuzz-clean bench-update speed-update speed-baseline speed-profile run_roundtrip run_huffman bench check-debug perf pgo
 
@@ -309,7 +314,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	@echo ""
 	@echo "OOM-robustness sweep (no crash on any single allocation failure):"
 	@VV_BIN=./$(TARGET) CC="$(CC)" sh tests/oom_sweep.sh
-	@if command -v python3 >/dev/null 2>&1 ; then \
+	@set -e; if command -v python3 >/dev/null 2>&1 ; then \
 		echo "" ; \
 		echo "Python reference decoder self-test (validates FORMAT.md decode side):" ; \
 		python3 reference/vv_decoder.py --self-test ; \
@@ -319,6 +324,7 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 		echo "" ; \
 		echo "Python tANS module synthetic test (legacy 'A' tag support):" ; \
 		python3 reference/vv_ans.py ; \
+		python3 reference/test_lit_fmt_3.py --huffman-only ; \
 		echo "" ; \
 		echo "Negative corpus cross-decoder test (C ↔ Python consistency):" ; \
 		python3 tests/corpus_negative.py ; \
@@ -340,10 +346,12 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 		echo "" ; \
 		echo "CLI window flag test (-w roundtrip + validation):" ; \
 		VV_BIN=./$(TARGET) python3 tests/cli_window.py ; \
+		VV_BIN=./$(TARGET) python3 tests/cli_contract.py ; \
 		if command -v node >/dev/null 2>&1 ; then \
 			echo "" ; \
 			echo "JavaScript reference decoder self-test:" ; \
 			node reference/vv_decoder.test.js ; \
+			node reference/test_lit_fmt_3.js --huffman-only ; \
 		else \
 			echo "" ; \
 			echo "Skipping JS decoder test (no node)" ; \
@@ -360,6 +368,7 @@ python-test: $(TARGET)
 	python3 reference/vv_decoder.py --self-test
 	python3 reference/vv_encoder.py --self-test
 	python3 reference/vv_ans.py
+	python3 reference/test_lit_fmt_3.py --huffman-only
 	python3 tests/corpus_negative.py
 	python3 tests/fuzz_differential.py --iters 1000 --seed 42
 	python3 tests/reference_roundtrip.py
@@ -399,20 +408,20 @@ ifeq ($(ARCH),x86_64)
 FUZZ_ARCH_FLAGS := -mavx2
 endif
 
-build_obj/vv_simd_fuzz.o: src/vv_simd.c
+build_obj/vv_simd_fuzz.o: src/vv_simd.c $(CORE_HEADERS)
 	@command -v clang >/dev/null 2>&1 || { echo "fuzz: clang required"; exit 1; }
 	@mkdir -p build_obj
-	clang -O1 -g -Wall -Wno-unused-parameter $(FUZZ_ARCH_FLAGS) -fPIC -Iinclude -c $< -o $@
+	clang -O1 -g -Wall -Wno-unused-parameter -fsanitize=$(FUZZ_SAN) $(FUZZ_ARCH_FLAGS) -fPIC -Iinclude -c $< -o $@
 
-build_obj/fuzz_decompress: tests/fuzz/fuzz_decompress.c $(FUZZ_SIMD_O)
+build_obj/fuzz_decompress: tests/fuzz/fuzz_decompress.c $(FUZZ_SIMD_O) $(FUZZ_CORE) $(CORE_HEADERS)
 	@mkdir -p build_obj
 	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
 
-build_obj/fuzz_dstream: tests/fuzz/fuzz_dstream.c $(FUZZ_SIMD_O)
+build_obj/fuzz_dstream: tests/fuzz/fuzz_dstream.c $(FUZZ_SIMD_O) $(FUZZ_CORE) $(CORE_HEADERS)
 	@mkdir -p build_obj
 	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
 
-build_obj/fuzz_roundtrip: tests/fuzz/fuzz_roundtrip.c $(FUZZ_SIMD_O)
+build_obj/fuzz_roundtrip: tests/fuzz/fuzz_roundtrip.c $(FUZZ_SIMD_O) $(FUZZ_CORE) $(CORE_HEADERS)
 	@mkdir -p build_obj
 	clang $(FUZZ_CFLAGS) $(FUZZ_ARCH_FLAGS) $(FUZZ_CORE) $(FUZZ_SIMD_O) $< -o $@
 

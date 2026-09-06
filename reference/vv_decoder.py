@@ -253,12 +253,14 @@ def read_u64(buf, pos):
     return struct.unpack_from('<Q', buf, pos)[0], pos + 8
 
 
-def read_ext_len(buf, pos):
+def read_ext_len(buf, pos, end=None):
     """FORMAT.md §5.1 — lz4-style byte-sum varint.
 
     Read bytes, summing as uint8. Stop when one is < 255. Return total."""
     val = 0
-    while pos < len(buf):
+    if end is None:
+        end = len(buf)
+    while pos < end:
         b = buf[pos]
         pos += 1
         val += b
@@ -271,7 +273,8 @@ def read_ext_len(buf, pos):
 # Decoder
 # ─────────────────────────────────────────────────────────────────
 
-def _decode_compressed_block(buf, pos, csz, dsz, off_bytes, dst_base_offset, out):
+def _decode_compressed_block(buf, pos, csz, dsz, off_bytes, dst_base_offset, out,
+                             max_offset):
     """FORMAT.md §3.2 + §5: decode an LZ token stream into `out`.
 
     `dst_base_offset` is the index in `out` at which this frame began
@@ -282,30 +285,30 @@ def _decode_compressed_block(buf, pos, csz, dsz, off_bytes, dst_base_offset, out
     target_len = len(out) + dsz  # decoded output should reach this length
     initial_len = len(out)
 
-    while len(out) - initial_len < dsz:
-        if pos >= end:
-            raise CorruptError("token stream ended before block completion")
-
+    while pos < end:
         token = buf[pos]; pos += 1
         ll = token >> 4
         mc = token & 0x0F
 
         # Extended literal length
         if ll == 15:
-            ext, pos = read_ext_len(buf, pos)
+            ext, pos = read_ext_len(buf, pos, end)
             ll += ext
 
         # Literal bytes
+        if ll > end - pos or ll > target_len - len(out):
+            raise CorruptError("literal run exceeds compressed block bounds")
         if ll > 0:
-            _need(buf, pos, ll)
             out += buf[pos:pos + ll]
             pos += ll
 
         # If we've hit the target and there's no match, stop.
-        if len(out) - initial_len >= dsz:
+        if pos == end:
             break
 
         # Offset (2 or 3 LE bytes per FORMAT.md §5)
+        if off_bytes > end - pos:
+            raise CorruptError("offset truncated in compressed block")
         if off_bytes == 2:
             offset, pos = struct.unpack_from('<H', buf, pos)[0], pos + 2
         else:
@@ -314,12 +317,14 @@ def _decode_compressed_block(buf, pos, csz, dsz, off_bytes, dst_base_offset, out
         # Match length
         mlen = mc + VV_MIN_MATCH
         if mc == 15:
-            ext, pos = read_ext_len(buf, pos)
+            ext, pos = read_ext_len(buf, pos, end)
             mlen += ext
 
         # Validate offset (FORMAT.md §5)
-        if offset == 0:
-            raise CorruptError("offset of 0 is invalid")
+        if offset == 0 or offset > max_offset:
+            raise CorruptError("match offset is outside frame window")
+        if mlen > target_len - len(out):
+            raise CorruptError("match exceeds decoded block size")
         # Position relative to dst_base
         cur_pos = len(out)
         match_src_idx = cur_pos - offset
@@ -346,7 +351,7 @@ def _decode_compressed_block(buf, pos, csz, dsz, off_bytes, dst_base_offset, out
 
 
 def _decode_stripped_tokens(token_bytes, literals, dsz, off_bytes,
-                              dst_base_offset, out):
+                              dst_base_offset, out, max_offset):
     """Decode tokens whose literal-bytes live in a separate buffer.
 
     Used for ENTROPY blocks (FORMAT.md §3.4): literals were
@@ -361,10 +366,7 @@ def _decode_stripped_tokens(token_bytes, literals, dsz, off_bytes,
     initial_len = len(out)
     lit_pos = 0
 
-    while len(out) - initial_len < dsz:
-        if pos >= end:
-            raise CorruptError("stripped token stream ended before block completion")
-
+    while pos < end:
         token = token_bytes[pos]; pos += 1
         ll = token >> 4
         mc = token & 0x0F
@@ -380,6 +382,8 @@ def _decode_stripped_tokens(token_bytes, literals, dsz, off_bytes,
                     break
 
         # Literal bytes come from `literals`, NOT inline
+        if ll > dsz - (len(out) - initial_len):
+            raise CorruptError("literal run exceeds decoded block size")
         if ll > 0:
             if lit_pos + ll > len(literals):
                 raise CorruptError(
@@ -388,7 +392,7 @@ def _decode_stripped_tokens(token_bytes, literals, dsz, off_bytes,
             out += literals[lit_pos : lit_pos + ll]
             lit_pos += ll
 
-        if len(out) - initial_len >= dsz:
+        if pos == end:
             break
 
         # Offset
@@ -412,8 +416,10 @@ def _decode_stripped_tokens(token_bytes, literals, dsz, off_bytes,
                 if b < 255:
                     break
 
-        if offset == 0:
-            raise CorruptError("offset of 0 is invalid")
+        if offset == 0 or offset > max_offset:
+            raise CorruptError("match offset is outside frame window")
+        if mlen > dsz - (len(out) - initial_len):
+            raise CorruptError("match exceeds decoded block size")
         cur_pos = len(out)
         match_src_idx = cur_pos - offset
         if match_src_idx < dst_base_offset:
@@ -460,6 +466,7 @@ def decompress_frame(buf, pos):
     if not 10 <= window_log <= 24:
         raise CorruptError(f"invalid window_log {window_log} (expected 10..24)")
     off_bytes = 2 if window_log <= 16 else 3
+    max_offset = min(1 << window_log, (1 << (off_bytes * 8)) - 1)
 
     content_size, pos = read_u64(buf, pos)
     # content_size of 0 means unknown (streaming encode)
@@ -496,7 +503,7 @@ def decompress_frame(buf, pos):
             # decoder must consume <= csz bytes to be valid.
             block_end = pos + csz
             new_pos = _decode_compressed_block(
-                buf, pos, csz, dsz, off_bytes, frame_start_idx, out)
+                buf, pos, csz, dsz, off_bytes, frame_start_idx, out, max_offset)
             if new_pos > block_end:
                 raise CorruptError(
                     f"COMPRESSED block consumed {new_pos - pos} bytes, "
@@ -538,7 +545,7 @@ def decompress_frame(buf, pos):
                 stripped_len = csz - 5 - ent_len
                 _decode_stripped_tokens(
                     bytes(buf[stripped_start : stripped_start + stripped_len]),
-                    literals, dsz, off_bytes, frame_start_idx, out)
+                    literals, dsz, off_bytes, frame_start_idx, out, max_offset)
 
                 pos += csz
             elif tag == 0x53:  # ENTROPY_SEQ
@@ -561,7 +568,7 @@ def decompress_frame(buf, pos):
                     raise NotImplementedError(
                         "'S' tag requires reference/vv_ans.py — not on path")
                 payload = bytes(buf[pos + 1 : pos + csz])
-                _vv_ans.vva_decode_sequences(payload, out)
+                _vv_ans.vva_decode_sequences(payload, out, max_offset=max_offset)
                 pos += csz
             elif tag == 0x54:  # ENTROPY_SEQ_V2
                 # FORMAT.md §3.4 tag 'T': sequence block with min_match=3.
@@ -577,7 +584,7 @@ def decompress_frame(buf, pos):
                     raise NotImplementedError(
                         "'T' tag requires reference/vv_ans.py — not on path")
                 payload = bytes(buf[pos + 1 : pos + csz])
-                _vv_ans.vva_decode_sequences_v2(payload, out)
+                _vv_ans.vva_decode_sequences_v2(payload, out, max_offset=max_offset)
                 pos += csz
             else:
                 raise NotImplementedError(

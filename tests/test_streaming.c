@@ -12,6 +12,8 @@
  */
 
 #include "vaptvupt.h"
+#include "vv_huffman.h"
+#include "vv_ans.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -260,10 +262,175 @@ static int test_stream_auto_accel(vv_mode_t mode, const char *name) {
     return ok;
 }
 
+/* Build a frame around directed token fixtures. An RLE block supplies any
+ * cross-block history, and optional Huffman literals exercise the shared
+ * stripped-token decoder used by all four legacy entropy formats. */
+static size_t token_frame(uint8_t *frame, const uint8_t *tokens, size_t tok_len,
+                          size_t literals, size_t history, size_t block_size,
+                          int window_log, int stripped) {
+    vv_frame_header_t fh = {VV_MAGIC, 1, 0, VV_MODE_ULTRA_FAST,
+                            (uint8_t)window_log, history + block_size};
+    memcpy(frame, &fh, sizeof(fh));
+    size_t pos = sizeof(fh);
+    while (history) {
+        size_t n = history < VV_MAX_BLOCK_SIZE ? history : VV_MAX_BLOCK_SIZE;
+        vv_write32(frame + pos, vv_bh_pack(VV_BLOCK_RLE, 0, (uint32_t)n));
+        frame[pos + 4] = 'Q';
+        pos += 5;
+        history -= n;
+    }
+    vv_write32(frame + pos, vv_bh_pack(stripped ? VV_BLOCK_ENTROPY : VV_BLOCK_COMPRESSED,
+                                      1, (uint32_t)block_size));
+    pos += 4;
+    size_t size_pos = pos;
+    pos += 3;
+    if (stripped) {
+        uint8_t lit[1024];
+        size_t entropy_len = 0;
+        if (literals > sizeof(lit)) return 0;
+        memset(lit, 'Q', literals);
+        frame[pos++] = literals == 15 ? VV_ENTROPY_ANS : VV_ENTROPY_HUFFMAN;
+        vv_write16(frame + pos, (uint16_t)literals);
+        int err = literals == 15
+            ? vva_encode(lit, literals, frame + pos + 4, 1024, &entropy_len)
+            : vvh_encode(lit, literals, frame + pos + 4, 1024, &entropy_len);
+        if (err != 0)
+            return 0;
+        vv_write16(frame + pos + 2, (uint16_t)entropy_len);
+        pos += 4 + entropy_len;
+    }
+    memcpy(frame + pos, tokens, tok_len);
+    pos += tok_len;
+    size_t csz = pos - size_pos - 3;
+    frame[size_pos] = (uint8_t)csz;
+    frame[size_pos + 1] = (uint8_t)(csz >> 8);
+    frame[size_pos + 2] = (uint8_t)(csz >> 16);
+    return pos;
+}
+
+static int check_token_frame(const uint8_t *frame, size_t frame_len,
+                            size_t output_size, int valid) {
+    uint8_t *out = malloc(output_size ? output_size : 1);
+    vv_dstream_t *d = vv_dstream_create();
+    int ok = frame_len > 0 && out && d;
+    if (ok) {
+        int64_t r = vv_decompress(frame, frame_len, out, output_size);
+        ok = valid ? r == (int64_t)output_size : r == VV_ERR_CORRUPT;
+        if (valid && ok) {
+            for (size_t i = 0; i < output_size; i++)
+                if (out[i] != 'Q') { ok = 0; break; }
+        }
+    }
+    /* Whole-frame and bytewise input cover the buffered and fragmented
+     * state-machine paths, with an exact-sized destination under ASan. */
+    for (int split = 0; ok && split < 2; split++) {
+        vv_dstream_reset(d);
+        int r = VV_OK;
+        size_t pos = 0, written = 0;
+        while (r == VV_OK && pos < frame_len) {
+            size_t chunk = split ? 1 : frame_len;
+            size_t consumed = 0;
+            r = vv_dstream_decompress_chunk(d, frame + pos, chunk, out,
+                                             output_size, &consumed, &written);
+            if (consumed != chunk) { ok = 0; break; }
+            pos += consumed;
+        }
+        ok = ok && (valid ? r == 1 && written == output_size : r == VV_ERR_CORRUPT);
+        if (valid && ok) {
+            for (size_t i = 0; i < output_size; i++)
+                if (out[i] != 'Q') { ok = 0; break; }
+        }
+    }
+    free(out);
+    vv_dstream_destroy(d);
+    if (!ok) fprintf(stderr, "[frame=%zu output=%zu valid=%d] ", frame_len, output_size, valid);
+    return ok;
+}
+
+static void test_token_extension_termination(void) {
+    TEST("token extensions require a terminating byte");
+    uint8_t frame[2048], tokens[1024];
+    int ok = 1;
+    /* Literal runs select the scalar tail (1 byte), AVX2 warmup (64),
+     * and AVX2 hot phase (64 after >65535 bytes of preceding history). */
+    for (int path = 0; path < 4; path++) {
+        int stripped = path == 3;
+        size_t literals = path == 0 ? 1 : 64;
+        size_t history = path == 2 ? 65536 : 0;
+        for (int wide = 0; wide < 2; wide++) {
+            int width = wide ? 3 : 2;
+            for (int continuation = 0; continuation < 2; continuation++) {
+                size_t pos = 0;
+                tokens[pos++] = (uint8_t)((literals >= 15 ? 15 : literals) << 4) | 15;
+                if (literals >= 15) tokens[pos++] = (uint8_t)(literals - 15);
+                if (!stripped) { memset(tokens + pos, 'Q', literals); pos += literals; }
+                tokens[pos++] = 1;
+                tokens[pos++] = 0;
+                if (width == 3) tokens[pos++] = 0;
+                if (continuation) tokens[pos++] = 255;
+                size_t output_size = history + literals + 19 + (continuation ? 255 : 0);
+                size_t frame_len = token_frame(frame, tokens, pos, literals, history,
+                                               output_size - history, wide ? 17 : 16, stripped);
+                ok &= check_token_frame(frame, frame_len, output_size, 0);
+                /* Appending zero terminates exactly the same match length. */
+                tokens[pos++] = 0;
+                frame_len = token_frame(frame, tokens, pos, literals, history,
+                                         output_size - history, wide ? 17 : 16, stripped);
+                ok &= check_token_frame(frame, frame_len, output_size, 1);
+            }
+        }
+    }
+    /* Stripped tokens can reach EOF with all literals available elsewhere;
+     * both an absent extension and an FF-only extension must be rejected. */
+    for (int continuation = 0; continuation < 2; continuation++) {
+        size_t literals = 15 + (continuation ? 255 : 0);
+        tokens[0] = 0xF0;
+        tokens[1] = 255;
+        size_t pos = 1 + (size_t)continuation;
+        size_t frame_len = token_frame(frame, tokens, pos, literals, 0, literals, 16, 1);
+        ok &= check_token_frame(frame, frame_len, literals, 0);
+        tokens[pos++] = 0;
+        frame_len = token_frame(frame, tokens, pos, literals, 0, literals, 16, 1);
+        ok &= check_token_frame(frame, frame_len, literals, 1);
+    }
+    if (ok) PASS(); else FAIL("unterminated extension accepted or valid boundary rejected");
+}
+
+static void test_token_window_limit(void) {
+    TEST("classic and stripped tokens enforce frame window");
+    uint8_t frame[2048], tokens[1024];
+    int ok = 1;
+    const int windows[] = {10, 17};
+    for (size_t w = 0; w < sizeof(windows) / sizeof(windows[0]); w++) {
+        int width = windows[w] > 16 ? 3 : 2;
+        size_t limit = (size_t)1 << windows[w];
+        for (int stripped = 0; stripped < 2; stripped++) {
+            for (int beyond = 0; beyond < 2; beyond++) {
+                size_t offset = limit + (size_t)beyond;
+                size_t pos = 0;
+                tokens[pos++] = 0;
+                tokens[pos++] = (uint8_t)offset;
+                tokens[pos++] = (uint8_t)(offset >> 8);
+                if (width == 3) tokens[pos++] = (uint8_t)(offset >> 16);
+                tokens[pos++] = 0xF0;
+                tokens[pos++] = 80 - 15;
+                if (!stripped) { memset(tokens + pos, 'Q', 80); pos += 80; }
+                size_t history = limit + 32;
+                size_t frame_len = token_frame(frame, tokens, pos, 80, history, 84,
+                                               windows[w], stripped);
+                ok &= check_token_frame(frame, frame_len, history + 84, !beyond);
+            }
+        }
+    }
+    if (ok) PASS(); else FAIL("out-of-window match accepted or exact limit rejected");
+}
+
 int main(void) {
     fprintf(stderr, "\n═══ VaptVupt streaming tests ═══\n");
 
     test_xxh64_streaming();
+    test_token_extension_termination();
+    test_token_window_limit();
 
     /* Streaming compress → one-shot decompress */
     test_streaming_compress(1000,    100,      VV_MODE_BALANCED,   "stream-enc 1KB chunk=100 balanced");

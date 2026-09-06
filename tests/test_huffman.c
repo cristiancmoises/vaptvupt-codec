@@ -115,12 +115,103 @@ static int test_vv_roundtrip(const uint8_t *data, size_t len,
 }
 #endif
 
+/* Exercise the public buffer contract with every insufficient capacity.
+ * Comparing the exact-size result with an unrestricted encode also checks
+ * that reaching the last output byte is not itself treated as overflow. */
+static void test_output_capacities(int four_streams) {
+    TEST(four_streams ? "Huffman4 output capacities" : "Huffman output capacities");
+    uint8_t data[4096], reference[1024], output[1040], decoded[4096];
+    for (size_t i = 0; i < sizeof(data); i++) data[i] = (uint8_t)(i & 1);
+    size_t reference_len = 0;
+    vvh_error_t (*encode)(const uint8_t *, size_t, uint8_t *, size_t, size_t *) =
+        four_streams ? vvh_encode4 : vvh_encode;
+    vvh_error_t (*decode)(const uint8_t *, size_t, uint8_t *, size_t, size_t,
+                         size_t *) = four_streams ? vvh_decode4 : vvh_decode;
+    if (encode(data, sizeof(data), reference, sizeof(reference), &reference_len)
+        != VVH_OK) { FAIL("reference encode"); return; }
+
+    for (size_t cap = 0; cap <= reference_len; cap++) {
+        memset(output, 0xA5, sizeof(output));
+        size_t encoded_len = 0;
+        vvh_error_t err = encode(data, sizeof(data), output, cap, &encoded_len);
+        for (size_t i = cap; i < sizeof(output); i++) {
+            if (output[i] != 0xA5) { FAIL("write beyond capacity"); return; }
+        }
+        if (cap < reference_len) {
+            if (err != VVH_ERR_OVERFLOW) { FAIL("undersized output accepted"); return; }
+        } else {
+            size_t consumed = 0;
+            if (err != VVH_OK || encoded_len != reference_len ||
+                memcmp(output, reference, reference_len) != 0 ||
+                decode(output, encoded_len, decoded, sizeof(decoded), sizeof(data),
+                       &consumed) != VVH_OK || consumed != encoded_len ||
+                memcmp(data, decoded, sizeof(data)) != 0) {
+                FAIL("exact-capacity roundtrip"); return;
+            }
+        }
+    }
+    PASS();
+}
+
+static void test_truncated_streams(int four_streams) {
+    TEST(four_streams ? "Huffman4 truncated streams" : "Huffman truncated stream");
+    uint8_t data[4096], encoded[1024], decoded[4096];
+    for (size_t i = 0; i < sizeof(data); i++) data[i] = (uint8_t)(i & 1);
+    size_t encoded_len = 0;
+    vvh_error_t (*encode)(const uint8_t *, size_t, uint8_t *, size_t, size_t *) =
+        four_streams ? vvh_encode4 : vvh_encode;
+    vvh_error_t (*decode)(const uint8_t *, size_t, uint8_t *, size_t, size_t,
+                         size_t *) = four_streams ? vvh_decode4 : vvh_decode;
+    if (encode(data, sizeof(data), encoded, sizeof(encoded), &encoded_len)
+        != VVH_OK) { FAIL("reference encode"); return; }
+    for (size_t cut = 0; cut < encoded_len; cut++) {
+        size_t consumed = 0;
+        if (decode(encoded, cut, decoded, sizeof(decoded), sizeof(data), &consumed)
+            != VVH_ERR_CORRUPT) { FAIL("truncated stream accepted"); return; }
+    }
+    PASS();
+}
+
+static void test_truncated_long_codes(void) {
+    TEST("Huffman long-code input exhaustion");
+    /* One 15-bit code, 000000000000000. An incomplete tree is valid;
+     * an incomplete codeword is not, even if its missing bits are zero. */
+    const uint8_t single[] = {0, 0xF0, 0, 0};
+    uint8_t four[] = {0, 0xF0, 2, 0, 0, 2, 0, 0, 2, 0, 0,
+                      0, 0, 0, 0, 0, 0, 0, 0};
+    uint8_t decoded[4];
+    size_t consumed = 0;
+    if (vvh_decode(single, sizeof(single), decoded, sizeof(decoded), 1,
+                   &consumed) != VVH_OK || consumed != sizeof(single) ||
+        vvh_decode(single, sizeof(single) - 1, decoded, sizeof(decoded), 1,
+                   &consumed) != VVH_ERR_CORRUPT ||
+        vvh_decode4(four, sizeof(four), decoded, sizeof(decoded), 4,
+                    &consumed) != VVH_OK) {
+        FAIL("single-stream long-code boundary"); return;
+    }
+    for (int lane = 0; lane < 4; lane++) {
+        if (lane > 0) four[2 + (lane - 1) * 3] = 1;
+        if (vvh_decode4(four, sizeof(four) - 1, decoded, sizeof(decoded), 4,
+                        &consumed) != VVH_ERR_CORRUPT) {
+            FAIL("truncated long-code lane accepted"); return;
+        }
+        if (lane > 0) four[2 + (lane - 1) * 3] = 2;
+    }
+    PASS();
+}
+
 int main(void) {
     fprintf(stderr, "\n╔════════════════════════════════════════════════╗\n");
     fprintf(stderr, "║  VaptVupt — Huffman Codec Tests                ║\n");
     fprintf(stderr, "╚════════════════════════════════════════════════╝\n\n");
 
     fprintf(stderr, "── Standalone Huffman tests ──\n");
+
+    test_output_capacities(0);
+    test_output_capacities(1);
+    test_truncated_streams(0);
+    test_truncated_streams(1);
+    test_truncated_long_codes();
 
     /* Test 1: All-zero input */
     {

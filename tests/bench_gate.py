@@ -166,13 +166,24 @@ FIXTURES = [
 
 def compress_with_vaptvupt(data, mode):
     """Return output size of compressing `data` with `vaptvupt -m <mode>`."""
+    # Keep the historical JSON key, but use the actual CLI mode name.
+    # Older CLI versions silently treated "ultra_fast" as balanced.
+    cli_mode, mode_hint = {
+        'ultra_fast': ('fast', 0),
+        'balanced': ('balanced', 1),
+        'extreme': ('extreme', 2),
+    }[mode]
     with tempfile.NamedTemporaryFile(delete=False) as f:
         f.write(data)
         in_path = f.name
     out_path = in_path + '.vv'
     try:
-        subprocess.run([VV_BINARY, '-c', '-m', mode, '-o', out_path, in_path],
+        subprocess.run([VV_BINARY, '-c', '-m', cli_mode, '-o', out_path, in_path],
                        check=True, capture_output=True)
+        with open(out_path, 'rb') as output:
+            header = output.read(16)
+        if len(header) != 16 or header[6] != mode_hint:
+            raise RuntimeError(f'{mode}: encoder did not emit requested mode {mode_hint}')
         return os.path.getsize(out_path)
     finally:
         for p in (in_path, out_path):

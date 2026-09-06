@@ -39,10 +39,12 @@ typedef struct {
     uint8_t *dst;
     size_t   pos;
     size_t   cap;
+    int      overflow;
 } bw_t;
 
 static inline void bw_init(bw_t *w, uint8_t *dst, size_t cap) {
     w->bits = 0; w->nbits = 0; w->dst = dst; w->pos = 0; w->cap = cap;
+    w->overflow = 0;
 }
 
 /* Add up to 16 bits. Flushes full bytes automatically. */
@@ -50,7 +52,16 @@ static inline void bw_add(bw_t *w, uint32_t val, int n) {
     w->bits |= (uint64_t)(val & ((1u << n) - 1)) << w->nbits;
     w->nbits += n;
     /* Flush complete bytes */
-    while (w->nbits >= 8 && w->pos < w->cap) {
+    while (w->nbits >= 8) {
+        if (w->pos == w->cap) {
+            /* Keep the accumulator bounded after capacity exhaustion;
+             * later symbols must never shift by 64 or more. Flush
+             * reports the sticky error to the encoder. */
+            w->overflow = 1;
+            w->bits = 0;
+            w->nbits = 0;
+            return;
+        }
         w->dst[w->pos++] = (uint8_t)(w->bits);
         w->bits >>= 8;
         w->nbits -= 8;
@@ -58,12 +69,13 @@ static inline void bw_add(bw_t *w, uint32_t val, int n) {
 }
 
 static inline size_t bw_flush(bw_t *w) {
+    if (w->overflow) return SIZE_MAX;
     while (w->nbits > 0 && w->pos < w->cap) {
         w->dst[w->pos++] = (uint8_t)(w->bits);
         w->bits >>= 8;
         w->nbits -= 8;
     }
-    return w->pos;
+    return w->nbits > 0 ? SIZE_MAX : w->pos;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -465,6 +477,7 @@ vvh_error_t vvh_encode(const uint8_t *src, size_t src_len,
     }
 
     size_t bs_sz = bw_flush(&w);
+    if (bs_sz == SIZE_MAX) return VVH_ERR_OVERFLOW;
     size_t total = hdr_sz + bs_sz;
 
     /* Incompressible guard: if not smaller, signal failure */
@@ -555,6 +568,7 @@ vvh_error_t vvh_encode4(const uint8_t *src, size_t src_len,
         }
 
         size_t sz = bw_flush(&w);
+        if (sz == SIZE_MAX) return VVH_ERR_OVERFLOW;
         stream_sizes[s] = sz;
         cur_off += sz;
     }
@@ -641,6 +655,7 @@ vvh_error_t vvh_decode(const uint8_t *src, size_t src_len,
 
         if (VV_LIKELY(len > 0)) {
             /* Fast path: code ≤ 12 bits */
+            if (r.nbits < len) { free(dec); return VVH_ERR_CORRUPT; }
             br_consume(&r, len);
             dst[i] = (uint8_t)sym;
         } else {
@@ -649,7 +664,8 @@ vvh_error_t vvh_decode(const uint8_t *src, size_t src_len,
             for (int s = 0; s < dec->slow_count; s++) {
                 int slen = dec->slow_len[s];
                 uint32_t mask = (1u << slen) - 1;
-                if ((br_peek(&r, slen) & mask) == dec->slow_code[s]) {
+                if (r.nbits >= slen &&
+                    (br_peek(&r, slen) & mask) == dec->slow_code[s]) {
                     br_consume(&r, slen);
                     dst[i] = dec->slow_sym[s];
                     found = 1;
@@ -764,6 +780,7 @@ vvh_error_t vvh_decode4(const uint8_t *src, size_t src_len,
         int sym = (int)(entry & 0xFF); \
         int len = (int)((entry >> 8) & 0xF); \
         if (VV_LIKELY(len > 0)) { \
+            if ((R).nbits < len) { free(dec); return VVH_ERR_CORRUPT; } \
             br_consume(&(R), len); \
             (OUT) = (uint8_t)sym; \
         } else { \
@@ -771,7 +788,8 @@ vvh_error_t vvh_decode4(const uint8_t *src, size_t src_len,
             for (int s = 0; s < dec->slow_count; s++) { \
                 int slen = dec->slow_len[s]; \
                 uint32_t mask = (1u << slen) - 1; \
-                if ((br_peek(&(R), slen) & mask) == dec->slow_code[s]) { \
+                if ((R).nbits >= slen && \
+                    (br_peek(&(R), slen) & mask) == dec->slow_code[s]) { \
                     br_consume(&(R), slen); \
                     (OUT) = dec->slow_sym[s]; \
                     found = 1; \

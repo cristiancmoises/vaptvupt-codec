@@ -10,16 +10,26 @@ byte-identical output and sanitizer-clean corrupt-input handling. The C decoder
 remains canonical for the full legacy H/A/I/C entropy surface; Python retains
 limited A-tag coverage, while JavaScript intentionally omits legacy tags.
 
-Version 2.65.9. The codec library and CLI are available under
+Version 2.65.10. The codec library and CLI are available under
 GPL-3.0-or-later or, for controlled first-party rights, a separate signed
 commercial agreement. The broader VaptVupt application uses a distinct AGPL
 public option. See `NOTICE`; `LICENSE-COMMERCIAL` is not itself a grant.
 
 ## Where it stands
 
-### v2.65.9 deterministic generated-v1 suite (measured 2026-09-01)
+v2.65.10 avoids allocating the secondary hash4 matcher when it is unused:
+512 KiB less requested memory at the default window, up to 64.25 MiB at the
+largest window. Paired internal encoding measurements against v2.65.9 found
++32.3% throughput on 1 KiB fast text, +19.7% on 4 KiB fast text, and
++17.2%/+39.6% on 1 MiB random data in fast/balanced mode. Large text was
+approximately unchanged, and all measured compressed sizes and hashes matched.
+These are in-process microbenchmarks; methodology and allocation-versus-RSS
+limits are in [bench/COMPARISON.md](bench/COMPARISON.md).
 
-Fresh subprocess measurements on an Intel Core i7-13700HX, Linux 7.2.2,
+### Historical v2.65.9 deterministic generated-v1 suite (measured 2026-09-01)
+
+The following subprocess measurements belong to v2.65.9, dated 2026-09-01;
+they are not v2.65.10 timings. They used an Intel Core i7-13700HX, Linux 7.2.2,
 gcc 14.3, pinned to core 2. Each cell is the median of 7 measured runs after
 1 warm-up; zstd 1.5.6 ran single-threaded and lz4 is 1.10. Every decode was
 verified against the generated input by SHA-256. Cells are
@@ -111,6 +121,16 @@ suite above.
 
 Recent releases, newest first:
 
+- **v2.65.10** — avoids unused hash4 allocations and fixes corrupt streaming
+  output after changing `format_v2` through `vv_cstream_reset`. Token decoding
+  requires the length-extension terminator and enforces the frame's declared
+  window. Completed streaming decodes keep reporting cumulative `written`.
+  Huffman coding fixes a bit-writer shift/overflow defect and rejects truncated
+  bitstreams; literal ANS decoding validates frequency totals before building
+  tables. The CLI rejects malformed numeric options and unknown modes, and
+  reports output flush/close failures. `make test` now propagates every Python
+  subcommand failure. Valid wire layout is unchanged. The updated length-reader
+  formal harness has not been rerun with CBMC; see the verification scope below.
 - **v2.65.9** — builds sequence tANS decode tables directly, removing 4 KiB
   of per-block sequence-table scratch (52 KiB to 48 KiB). Paired pinned
   in-process decode measurements improved +0.40% on text and +1.21% on JSON
@@ -401,6 +421,11 @@ checksum they apply it once after the final block.
 - The competitive harness self-test and the `-w` CLI test. Release validation
   separately runs the full generated-v1 matrix, verifies every decode by
   SHA-256, and emits reproducibility metadata.
+- CLI contract regressions for malformed options and failed output writes;
+  every Python subcommand in `make test` propagates its failure to the target.
+- Stream format-reset equivalence with fresh contexts, length-extension
+  terminators, declared-window limits, cumulative completion output, Huffman
+  truncated streams and bit-writer bounds, and ANS frequency normalization.
 - Direct-vs-legacy tANS decode-table equivalence and whole/split streaming BCJ
   roundtrips for x86 and ARM64 with checksums both enabled and disabled.
 - `test_seq_v2` 21/21, including rejection and lossless fallback for an
@@ -416,7 +441,7 @@ was additionally validated with the full 22-suite run under
 ASan+UBSan+LeakSanitizer roundtrip sweep (11 corpus files × 3 modes,
 byte-exact, no leaks). The build is `-Wall -Wextra -Werror`.
 
-Selected code is additionally formally verified with CBMC (`make verify`, or
+Historical formal evidence uses CBMC (`make verify`, or
 `sh verification/verify.sh`): for all inputs up to a bounded size, the x86 and
 AArch64 BCJ filters are proven memory-safe and lossless
 (`inverse(forward(x)) == x`); the executable-header detector is proven
@@ -425,8 +450,12 @@ integer reader (`read_ext_len`) is proven never to read past the input end;
 and the block-header pack/unpack is proven a lossless round trip with
 in-range accessors for any header. A second tier of Frama-C/Eva
 abstract-interpretation analyses (run with `frama-c-base`) independently
-confirms `read_ext_len` and the block-header accessors raise no runtime error
-for any input. See [verification/README.md](verification/README.md).
+confirms the historical `read_ext_len` and block-header accessors raise no
+runtime error for any input. v2.65.10 changes `read_ext_len` to reject missing
+terminators and updates its harness, but CBMC was unavailable for this release
+validation. The earlier proof does not establish the changed implementation;
+current evidence for that change is regression testing and sanitizers. See
+[verification/README.md](verification/README.md).
 
 ## Repository layout
 

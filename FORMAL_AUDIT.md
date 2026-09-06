@@ -1,9 +1,9 @@
 # VaptVupt Formal Audit Document
 
-**Document version**: 1.3
-**Codebase audit scope**: v2.65.9 release delta (regression/dynamic validation)
+**Document version**: 1.4
+**Codebase audit scope**: v2.65.10 release delta (regression/dynamic validation)
 **Formal evidence baseline**: inherited historical results, with original
-versions and bounds recorded below; no full formal-tool rerun for v2.65.9
+versions and bounds recorded below; no full formal-tool rerun for v2.65.10
 **License**: GPL-3.0-or-later
 **Intended deployment**: Embedded codec library inside the VaptVupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
 
@@ -16,7 +16,35 @@ This document is the formal audit reference for VaptVupt. It specifies what has 
 
 It is intentionally specific about what is **not** verified, to support honest risk assessment.
 
-> **Currency note (v2.65.9):** historical sprint references below record the
+> **Currency note (v2.65.10):** the token length reader changed in this
+> release and its formal harness copies have been updated. Historical
+> `read_ext_len` proof results therefore do not certify the current helper
+> until the tools are rerun. Current evidence for this helper and the other
+> changed codec paths consists of regression and dynamic validation.
+
+## v2.65.10 delta-validation scope
+
+Targeted regressions cover Huffman encoder capacity exhaustion and undefined
+shift prevention; truncated single/four-stream Huffman codewords; ANS
+normalized-frequency validation before all literal table builds; mandatory
+token extension terminators; advertised-window offset bounds; and cumulative
+streaming output after completion. Valid controls accompany the malformed
+streams, with one-shot, fragmented streaming and reference-decoder coverage.
+
+Encoder regression tests exercise repeated v1/v2 stream resets against fresh
+contexts, including the long-match corruption trigger. Paired timing runs
+verify the compressed size/hash while assessing optional hash4 allocation;
+these performance measurements are not formal proofs. CLI regressions cover
+invalid options and failed buffered output. The build propagates required
+Python failures and instruments the SIMD fuzz object.
+
+The updated CBMC/Eva/ACSL helper copies require new tool runs. Historical BCJ
+and block-header results remain evidence for those unchanged functions under
+their stated bounds, not a proof of the whole current codec. No new formal
+claim is made for the streaming orchestration, entropy table builders or
+encoder allocation paths.
+
+> **Historical currency note (v2.65.9):** historical sprint references below record the
 > original evidence, bounds, and tool availability. This release did **not**
 > perform or claim a fresh full CBMC/Frama-C or audit-campaign rerun. Its delta
 > is covered by regression and dynamic validation: direct-vs-historical tANS
@@ -30,7 +58,7 @@ It is intentionally specific about what is **not** verified, to support honest r
 > Re-run the commands on the target toolchain before treating historical
 > results as current certification.
 
-## v2.65.9 delta-validation scope
+## v2.65.9 delta-validation scope (historical)
 
 The direct sequence-table builder removes the 4 KiB spread scratch and is
 checked entry-for-entry against the prior builder over 256 deterministic valid
@@ -56,8 +84,9 @@ limited A-tag support and JavaScript omits the legacy tags.
 These are regression/dynamic claims. The streaming state-machine orchestration
 and the new direct table builder are not covered by a new bounded or deductive
 proof in this revision. The existing CBMC/Eva baseline still applies to its
-unchanged BCJ filter functions, detector, `read_ext_len`, and block-header
-helpers under the bounds stated in Section 2.
+then-unchanged BCJ filter functions, detector, `read_ext_len`, and block-header
+helpers under the bounds stated in Section 2. The v2.65.10 exception for the
+changed token length reader is described above.
 
 ---
 

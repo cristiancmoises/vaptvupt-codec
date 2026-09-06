@@ -299,7 +299,8 @@ typedef struct {
  * the NULL pointer would crash. Sprint 92 audit identified this as a
  * real defect. The fix tolerates allocator failure cleanly. */
 static void matcher_free(matcher_t *m); /* fwd decl for cleanup-on-failure */
-static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
+static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth,
+                        int use_hash4) {
     if (window_log < 10 || window_log > 24) return 0;
     uint32_t wsz = 1u << window_log;
     /* Initialize ALL pointers to NULL first so matcher_free is safe to
@@ -313,9 +314,15 @@ static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
 
     m->table = (int32_t *)malloc(VV_HC_SIZE * sizeof(int32_t));
     m->chain = (int32_t *)malloc(wsz * sizeof(int32_t));
-    m->table4 = (int32_t *)malloc(VV_HC4_SIZE * sizeof(int32_t));
-    m->hash4_chain = (int32_t *)malloc(wsz * sizeof(int32_t));
-    if (!m->table || !m->chain || !m->table4 || !m->hash4_chain) {
+    /* Only adaptive binary encoding uses the secondary matcher. Fast
+     * encoding, window trials, text and streaming otherwise pay for an
+     * unused 256 KiB table and a window-sized chain on every creation. */
+    if (use_hash4) {
+        m->table4 = (int32_t *)malloc(VV_HC4_SIZE * sizeof(int32_t));
+        m->hash4_chain = (int32_t *)malloc(wsz * sizeof(int32_t));
+    }
+    if (!m->table || !m->chain ||
+        (use_hash4 && (!m->table4 || !m->hash4_chain))) {
         matcher_free(m);
         /* Re-NULL after free so caller's matcher_free is also safe */
         m->table = m->chain = m->table4 = m->hash4_chain = NULL;
@@ -328,12 +335,12 @@ static int matcher_init(matcher_t *m, uint32_t window_log, uint32_t depth) {
      * are only read via table entries (which are now -1), so stale
      * data in them is unreachable. See matcher_reset for rationale. */
     memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));
-    memset(m->table4, 0xFF, VV_HC4_SIZE * sizeof(int32_t));
+    if (m->table4) memset(m->table4, 0xFF, VV_HC4_SIZE * sizeof(int32_t));
     m->chain_mask = wsz - 1;
     m->chain_depth = depth;
     m->rep[0] = m->rep[1] = m->rep[2] = 0;
     m->wlog = (uint8_t)window_log;
-    m->use_hash4 = 0;  /* Disabled by default — enabled adaptively for binary */
+    m->use_hash4 = use_hash4 ? 1 : 0;
     m->use_hash3 = 0;  /* Disabled by default — enabled for format v2 */
     m->single_probe = 0; /* Disabled by default — set only for ULTRA_FAST encode */
     m->accel = 0;        /* Resolved from the public automatic/default setting later. */
@@ -385,15 +392,15 @@ static void matcher_free(matcher_t *m) {
 /* Reset matcher state without reallocating tables. Used by
  * vv_cstream_reset() for fast per-file reuse.
  *
- * PERF: We only need to clear the `table` and `table4` arrays (the
- * hash → position maps). The `chain` arrays store (pos → earlier
+ * PERF: We only need to clear the allocated hash → position maps.
+ * The `chain` arrays store (pos → earlier
  * pos) links, but those links are only FOLLOWED from table entries.
  * After resetting the tables, any stale chain entries become
- * unreachable. This cuts reset cost from ~1.6 MB of memset to
- * ~1.25 MB (table=1MB + table4=256KB), a ~25% speedup. */
+ * unreachable. Streaming does not allocate the unused hash4 map,
+ * leaving only the 1 MiB primary map and optional 64 KiB hash3 map. */
 static void matcher_reset(matcher_t *m) {
     memset(m->table, 0xFF, VV_HC_SIZE * sizeof(int32_t));
-    memset(m->table4, 0xFF, VV_HC4_SIZE * sizeof(int32_t));
+    if (m->table4) memset(m->table4, 0xFF, VV_HC4_SIZE * sizeof(int32_t));
     if (m->table3) memset(m->table3, 0xFF, VV_HC3_SIZE * sizeof(int32_t));
     m->rep[0] = m->rep[1] = m->rep[2] = 0;
     m->use_hash4 = 0;
@@ -926,8 +933,6 @@ typedef struct { uint32_t off; int32_t len; } opt_cand_t;
  * captures most of the available win at zero added complexity, so this
  * sprint ships it and defers the two-pass design until the window-size
  * lever has been measured (matters more for nci-class fixtures). */
-static inline int32_t opt_lit_price(void) { return 8; }
-
 /* SPRINT 129: per-byte literal prices from the block's byte histogram.
  * The flat-8 model (Sprint 44) was chosen as the best single constant,
  * but the real literal coder delivers ~4-6 bits/byte on text and 7-8
@@ -1200,13 +1205,13 @@ static size_t compress_block_optimal(const uint8_t *src, size_t start_pos,
          * non-aliasing across a <= 2^20-wide position span — so the
          * prepass finds the identical match set and emits the identical
          * tokens/histogram/prices as it would at the real encode's wlog.
-         * Capping here avoids allocating and zeroing the full extreme
-         * window (up to 2 x 2^24 x 4 = 128 MB of chain arrays per block
-         * at wlog=24) when 2 x 2^20 x 4 = 8 MB suffices. off_bytes is
+         * Capping here avoids allocating the full extreme window
+         * (up to 2^24 x 4 = 64 MiB of chain entries per block at wlog=24)
+         * when 2^20 x 4 = 4 MiB suffices. off_bytes is
          * unaffected: both >16 wlogs emit 3-byte offsets. Output-
          * identical — verified by the ratio gate at +-0. */
         uint32_t pp_wlog = (m->wlog < 20) ? m->wlog : 20;
-        if (matcher_init(&mp, pp_wlog, 4)) {
+        if (matcher_init(&mp, pp_wlog, 4, 0)) {
             mp.accel = 2;
             mp.max_match = m->max_match;
             size_t pcap = block_len + block_len / 255 + 1024;
@@ -2042,14 +2047,14 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
              * inputs no longer pay two full 128 KB parses just to
              * decide "store raw". Both trials use the same accel, so
              * the 16-vs-20 comparison stays apples-to-apples. */
-            if (matcher_init(&m16, 16, 4)) {
+            if (matcher_init(&m16, 16, 4, 0)) {
                 m16.accel = 2;
                 sz16 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m16, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
                 matcher_free(&m16);
             }
 
             matcher_t m20;
-            if (matcher_init(&m20, 20, 4)) {
+            if (matcher_init(&m20, 20, 4, 0)) {
                 m20.accel = 2;
                 sz20 = compress_block(src, 0, trial_len, trial_buf, trial_cap, &m20, VV_MODE_ULTRA_FAST, VV_MIN_MATCH);
                 matcher_free(&m20);
@@ -2108,8 +2113,8 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
      * fix this scaling breaks roundtrip on multi-block files (the bug
      * diagnosed and reverted in Sprint 45).
      *
-     * Memory at wlog=24: chain[wsz]+hash4_chain[wsz] = 2*4*16M = 128 MB
-     * matcher. Acceptable for extreme ("max ratio, will wait"). */
+     * Memory at wlog=24: primary chain = 4*16M = 64 MB. The optional
+     * hash4 chain is only allocated for adaptive binary encoding. */
     if (opts->window_log == 0 && opts->mode >= VV_MODE_EXTREME &&
         !use_v2_fmt && src_len > (1u << 20)) {
         /* SPRINT 124: v2-routed (binary) extreme input uses the greedy
@@ -2140,10 +2145,9 @@ int64_t vv_compress_inner(const uint8_t *src, size_t src_len,
     /* Matcher */
     matcher_t m;
     /* SPRINT 93 audit: handle allocation failure cleanly */
-    if (!matcher_init(&m, wlog, depth)) {
+    if (!matcher_init(&m, wlog, depth, enable_hash4)) {
         return VV_ERR_NOMEM;
     }
-    m.use_hash4 = (uint8_t)enable_hash4; /* From fused adaptive-window trial */
     /* SPRINT 58: enable the single-probe match finder for ULTRA_FAST.
      * Set here (not in matcher_init) so the depth-4 chain matchers used
      * by the balanced/extreme window-selection trial above stay at
@@ -2345,7 +2349,7 @@ vv_cstream_t *vv_cstream_create(const vv_options_t *opts) {
 
     /* SPRINT 93 audit: matcher_init can fail; cstream returns NULL
      * on any allocation error per public API contract. */
-    if (!matcher_init(&ctx->m, wlog, depth)) {
+    if (!matcher_init(&ctx->m, wlog, depth, 0)) {
         free(ctx);
         return NULL;
     }
@@ -2435,8 +2439,19 @@ int vv_cstream_reset(vv_cstream_t *ctx, const vv_options_t *opts) {
         if (new_wlog != 0 && (new_wlog < 10 || new_wlog > 24)) return VV_ERR_PARAM;
         if (new_wlog == 0) new_wlog = 16;
         if (new_wlog != ctx->wlog) return VV_ERR_PARAM;
-        ctx->opts = *opts;
     }
+
+    /* A format switch changes both the emitted sequence tables and the
+     * matcher's representable lengths. Allocate before accepting options,
+     * so an allocation failure leaves the current stream configuration
+     * usable. Retain hash3 storage when switching back to v1 for reuse. */
+    const vv_options_t *next_opts = opts ? opts : &ctx->opts;
+    if (next_opts->format_v2 && !ctx->m.table3 &&
+        !matcher_enable_hash3(&ctx->m)) return VV_ERR_NOMEM;
+    if (opts) ctx->opts = *opts;
+    ctx->m.use_hash3 = ctx->opts.format_v2 ? 1 : 0;
+    ctx->m.max_match = VV_MAX_MATCH;
+    if (ctx->opts.format_v2) matcher_set_format_v2(&ctx->m);
 
     /* Update chain_depth in case the mode changed */
     uint32_t depth;
@@ -2526,7 +2541,7 @@ int vv_cstream_compress_chunk(vv_cstream_t *ctx,
                         ctx->m.table[i] -= (int32_t)drop;
                     else ctx->m.table[i] = -1;
                 }
-                for (uint32_t i = 0; i < VV_HC4_SIZE; i++) {
+                for (uint32_t i = 0; ctx->m.table4 && i < VV_HC4_SIZE; i++) {
                     if (ctx->m.table4[i] >= (int32_t)drop)
                         ctx->m.table4[i] -= (int32_t)drop;
                     else ctx->m.table4[i] = -1;
@@ -2541,9 +2556,11 @@ int vv_cstream_compress_chunk(vv_cstream_t *ctx,
                     if (ctx->m.chain[i] >= (int32_t)drop)
                         ctx->m.chain[i] -= (int32_t)drop;
                     else ctx->m.chain[i] = -1;
-                    if (ctx->m.hash4_chain[i] >= (int32_t)drop)
-                        ctx->m.hash4_chain[i] -= (int32_t)drop;
-                    else ctx->m.hash4_chain[i] = -1;
+                    if (ctx->m.hash4_chain) {
+                        if (ctx->m.hash4_chain[i] >= (int32_t)drop)
+                            ctx->m.hash4_chain[i] -= (int32_t)drop;
+                        else ctx->m.hash4_chain[i] = -1;
+                    }
                 }
             }
         }

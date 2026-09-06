@@ -2,16 +2,27 @@
 
 Codec de compressão LZ + tANS em C11, sem dependências de runtime, com
 formato aberto e decodificadores de referência em Python e JavaScript que
-reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.9**.
+reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.10**.
 
 Leia também a [documentação técnica em português](DOCUMENTACAO.pt-BR.md) e a
 [documentação normativa em inglês](FORMAT.md). **[English README](README.md)**.
 
 ## Situação atual
 
-### Suite determinística generated-v1 do v2.65.9 (medida em 01/09/2026)
+O v2.65.10 evita alocar o matcher hash4 quando não é usado: reduz a memória
+solicitada em 512 KiB na janela padrão e em até 64,25 MiB na maior janela.
+Microbenchmarks internos pareados contra v2.65.9 mediram +32,3% de throughput
+em texto de 1 KiB no modo fast, +19,7% em 4 KiB e +17,2%/+39,6% em 1 MiB
+aleatório nos modos fast/balanced. Texto de 1 MiB ficou aproximadamente
+inalterado; tamanhos e hashes comprimidos coincidiram em todos os casos medidos.
+São medições in-process, com limites e metodologia em
+[bench/COMPARISON.md](bench/COMPARISON.md); a redução de alocação não implica
+igual redução de RSS.
 
-Medição nova por subprocesso em Intel Core i7-13700HX, Linux 7.2.2 e gcc 14.3,
+### Suite histórica generated-v1 do v2.65.9 (medida em 01/09/2026)
+
+Os números abaixo são do v2.65.9 em 01/09/2026, não uma medição do v2.65.10.
+Medição por subprocesso em Intel Core i7-13700HX, Linux 7.2.2 e gcc 14.3,
 fixada no core 2. Cada célula é a mediana de 7 execuções após 1 aquecimento;
 zstd 1.5.6 usou uma thread e lz4 é 1.10. Todas as saídas decodificadas foram
 verificadas por SHA-256. As células mostram
@@ -90,6 +101,16 @@ antes de aceitar dados não confiáveis.
 
 ## Segurança e integração
 
+O v2.65.10 corrige corrupção ao alternar `format_v2` em `vv_cstream_reset`.
+O decodificador exige o byte terminador das extensões de comprimento dos
+tokens e respeita a janela declarada no frame; chamadas após a conclusão do
+stream preservam `written` cumulativo. Também corrige shift/overflow na escrita
+de bits Huffman, rejeita bitstreams Huffman truncados e valida as somas de
+frequências ANS antes de construir as tabelas. A CLI rejeita opções numéricas
+malformadas e modos desconhecidos, e retorna erro se a gravação falhar no
+flush/fechamento. Cada falha de subcomando Python agora interrompe `make test`.
+O layout válido do formato permanece compatível.
+
 O decodificador verifica limites, rejeita frames malformados e nunca substitui
 autenticação. O checksum XXH64 detecta corrupção acidental, não adulteração;
 use AEAD na camada chamadora. A API de streaming exige o mesmo buffer de saída
@@ -118,6 +139,12 @@ usada pelo BCJ one-shot agora é
 zerada explicitamente antes de `free()`; `test_secure_zero` cobre a conclusão
 desse caminho e o round-trip sob sanitizers, sem alegar inspeção da memória
 depois de liberada.
+
+O harness formal de `read_ext_len` foi atualizado para a rejeição de extensões
+sem terminador, mas CBMC não estava disponível nesta validação. Não houve nova
+aprovação formal dessa implementação; testes de regressão e sanitizers são a
+evidência atual. O escopo histórico está em
+[verification/README.md](verification/README.md).
 
 Licença: GPL-3.0-or-later para a biblioteca. Consulte `NOTICE` e
 `LICENSE-COMMERCIAL` para escopo comercial.

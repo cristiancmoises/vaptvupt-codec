@@ -127,9 +127,8 @@ vvh_error_t vvh_decode(const uint8_t *src, size_t src_len,
  * single-stream vvh_encode wins on overhead and this function returns
  * VVH_ERR_OVERFLOW.
  *
- * NOTE (Phase A): Production decoder support arrives in Phase B.
- * This sprint adds only the encoder + a test-only inverse decoder
- * (in tests/test_huffman4.c) for round-trip verification.
+ * Production decoding is provided by vvh_decode4 below. Both decoders
+ * reject a payload that ends before all requested code bits are present.
  *
  * Returns VVH_OK on success.
  * Returns VVH_ERR_OVERFLOW if src_len < 1024, dst too small, or output

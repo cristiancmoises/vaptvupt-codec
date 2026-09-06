@@ -3,7 +3,7 @@
 **Version**: 1 (frame format version field = `0x01`)
 **Endianness**: Little-endian for all multi-byte integers
 **Status**: Stable since v1.0.0 of the reference encoder
-**Reference implementation alignment**: v2.65.9 (no wire-layout change)
+**Reference implementation alignment**: v2.65.10 (no wire-layout change)
 
 This document specifies the on-wire format produced by `vv_compress`,
 `vv_compress_mt`, and `vv_cstream_*`. It is sufficient to implement
@@ -388,6 +388,10 @@ block header's `decompressed_size`.
 - Read bytes one at a time, summing them as `uint8_t` values.
 - Stop reading when a byte's value is < 255.
 - The total is the sum of all bytes read (including the final non-255 byte).
+- The terminating byte is mandatory, even when it is zero. An empty
+  extension or a run ending in `0xFF` is corrupt; the reader must stop at
+  the compressed block's boundary. v2.65.10 enforces this in all C token
+  paths and aligns the reference decoders' block bounds.
 
 Pseudocode:
 
@@ -397,9 +401,9 @@ size_t read_ext_len(const uint8_t **pp, const uint8_t *end) {
     while (*pp < end) {
         uint8_t b = *(*pp)++;
         val += b;
-        if (b < 255) break;
+        if (b < 255) return val;
     }
-    return val;
+    return SIZE_MAX; /* Unterminated: caller must reject before addition. */
 }
 ```
 

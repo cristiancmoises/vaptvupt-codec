@@ -270,9 +270,9 @@
      * FORMAT.md §5.1 — lz4-style byte-sum varint.
      * Returns [value, new_pos].
      */
-    function readExtLen(buf, pos) {
+    function readExtLen(buf, pos, end = buf.length) {
         let val = 0;
-        while (pos < buf.length) {
+        while (pos < end) {
             const b = buf[pos];
             pos += 1;
             val += b;
@@ -917,7 +917,7 @@
      *            or ML_BASE_V2 ('T' tag min_match=3). Added v2.35.0
      *            for JS-side 'T' tag support; v1 callers omit it.
      */
-    function vvaDecodeSequences(src, out, mlBaseTab) {
+    function vvaDecodeSequences(src, out, mlBaseTab, maxOffset = 0xFFFFFF) {
         const mlTab = mlBaseTab || ML_BASE;
         let p = 0;
         const end = src.length;
@@ -1084,7 +1084,7 @@
             const matchlen = mlTab[mlSym] + mlExtra;
 
             const currentTotal = out.length;
-            if (offset === 0 || offset > currentTotal) {
+            if (offset === 0 || offset > maxOffset || offset > currentTotal) {
                 throw new CorruptError(`'S' invalid offset ${offset}`);
             }
             // Match copy; self-referential for offset < matchlen
@@ -1103,33 +1103,34 @@
     // COMPRESSED block decoder (FORMAT.md §3.2, §5)
     // ─────────────────────────────────────────────────────────────
 
-    function decodeCompressedBlock(buf, pos, csz, dsz, offBytes, dstBaseOffset, out) {
+    function decodeCompressedBlock(buf, pos, csz, dsz, offBytes, dstBaseOffset, out, maxOffset) {
         const end = pos + csz;
         const initialLen = out.length;
 
-        while (out.length - initialLen < dsz) {
-            if (pos >= end) {
-                throw new CorruptError('token stream ended before block completion');
-            }
-
+        while (pos < end) {
             const token = buf[pos]; pos += 1;
             let ll = token >>> 4;
             const mc = token & 0x0F;
 
             if (ll === 15) {
-                const r = readExtLen(buf, pos);
+                const r = readExtLen(buf, pos, end);
                 ll += r[0]; pos = r[1];
             }
 
+            if (ll > end - pos || ll > dsz - (out.length - initialLen)) {
+                throw new CorruptError('literal run exceeds compressed block bounds');
+            }
             if (ll > 0) {
-                needBytes(buf, pos, ll);
                 for (let j = 0; j < ll; j++) out.push(buf[pos + j]);
                 pos += ll;
             }
 
-            if (out.length - initialLen >= dsz) break;
+            if (pos === end) break;
 
             let offset;
+            if (offBytes > end - pos) {
+                throw new CorruptError('offset truncated in compressed block');
+            }
             if (offBytes === 2) {
                 needBytes(buf, pos, 2);
                 offset = buf[pos] | (buf[pos + 1] << 8);
@@ -1142,11 +1143,16 @@
 
             let mlen = mc + VV_MIN_MATCH;
             if (mc === 15) {
-                const r = readExtLen(buf, pos);
+                const r = readExtLen(buf, pos, end);
                 mlen += r[0]; pos = r[1];
             }
 
-            if (offset === 0) throw new CorruptError('offset of 0 is invalid');
+            if (offset === 0 || offset > maxOffset) {
+                throw new CorruptError('match offset is outside frame window');
+            }
+            if (mlen > dsz - (out.length - initialLen)) {
+                throw new CorruptError('match exceeds decoded block size');
+            }
             const curPos = out.length;
             let matchSrcIdx = curPos - offset;
             if (matchSrcIdx < dstBaseOffset) {
@@ -1167,7 +1173,10 @@
             }
         }
 
-        return end;
+        if (out.length - initialLen !== dsz) {
+            throw new CorruptError(`block produced ${out.length - initialLen} bytes, expected ${dsz}`);
+        }
+        return pos;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1203,6 +1212,7 @@
             throw new CorruptError(`invalid window_log ${windowLog} (expected 10..24)`);
         }
         const offBytes = windowLog <= 16 ? 2 : 3;
+        const maxOffset = Math.min(2 ** windowLog, 2 ** (offBytes * 8) - 1);
 
         const contentSize = readU64LE(buf, pos); pos += 8;
         // contentSize is informational (matches C reference behavior)
@@ -1239,7 +1249,7 @@
                 needBytes(buf, pos, csz);
                 const blockEnd = pos + csz;
                 const newPos = decodeCompressedBlock(
-                    buf, pos, csz, dsz, offBytes, frameStartIdx, out);
+                    buf, pos, csz, dsz, offBytes, frameStartIdx, out, maxOffset);
                 if (newPos > blockEnd) {
                     throw new CorruptError(
                         `COMPRESSED block consumed more than csz`);
@@ -1265,7 +1275,7 @@
                     // (cross-block dict carry — the `out` array holds
                     // the whole frame's decoded content so far).
                     const payload = buf.subarray(pos + 1, pos + csz);
-                    vvaDecodeSequences(payload, out);
+                    vvaDecodeSequences(payload, out, ML_BASE, maxOffset);
                     pos += csz;
                 } else if (tag === 0x54) {  // ENTROPY_SEQ_V2 — 'T' tag
                     // Format v2: same wire payload as 'S' but decoded
@@ -1273,7 +1283,7 @@
                     // 3 instead of 4. Added v2.33.0 (decoder) /
                     // v2.35.0 (encoder + hash3 + JS decoder support).
                     const payload = buf.subarray(pos + 1, pos + csz);
-                    vvaDecodeSequences(payload, out, ML_BASE_V2);
+                    vvaDecodeSequences(payload, out, ML_BASE_V2, maxOffset);
                     pos += csz;
                 } else {
                     throw new NotImplementedError(

@@ -82,6 +82,73 @@ static int test_roundtrip(const uint8_t *data, size_t len, vv_mode_t mode, const
     return 1;
 }
 
+/* A reset must apply the new format to both the block writer and matcher.
+ * Long matches exercise v2's 65534-byte cap, while the record fixture
+ * exercises its three-byte hash table across repeated enable/disable cycles. */
+static void test_cstream_format_reset(vv_mode_t mode, int records) {
+    char label[128];
+    snprintf(label, sizeof(label), "Stream format reset (%s, %s)",
+             mode == VV_MODE_BALANCED ? "balanced" : "extreme",
+             records ? "records" : "long matches");
+    TEST(label);
+    size_t len = records ? 16384 : 262144;
+    size_t cap = vv_compress_bound(len);
+    uint8_t *src = (uint8_t *)malloc(len);
+    uint8_t *reused = (uint8_t *)malloc(cap);
+    uint8_t *fresh = (uint8_t *)malloc(cap);
+    uint8_t *decoded = (uint8_t *)malloc(len);
+    vv_options_t opts;
+    vv_default_options(&opts);
+    opts.mode = mode;
+    vv_cstream_t *stream = NULL;
+    const char *error = NULL;
+    if (!src || !reused || !fresh || !decoded) {
+        error = "allocation failed";
+        goto done;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (records)
+            src[i] = (uint8_t)((i % 4 == 3) ? (i / 4) : (i % 4 + i / 1024));
+        else
+            src[i] = (uint8_t)(i % 43);
+    }
+    stream = vv_cstream_create(&opts);
+    if (!stream) { error = "stream create failed"; goto done; }
+    const int formats[] = {1, 0, 1, 0};
+    for (size_t pass = 0; pass < sizeof(formats) / sizeof(formats[0]); pass++) {
+        opts.format_v2 = (uint8_t)formats[pass];
+        if (vv_cstream_reset(stream, &opts) != VV_OK) {
+            error = "stream reset failed";
+            goto done;
+        }
+        vv_cstream_t *reference = vv_cstream_create(&opts);
+        if (!reference) { error = "reference create failed"; goto done; }
+        size_t reused_len = 0, fresh_len = 0;
+        int reused_err = vv_cstream_compress_chunk(stream, src, len, reused,
+                                                  cap, &reused_len, 1);
+        int fresh_err = vv_cstream_compress_chunk(reference, src, len, fresh,
+                                                 cap, &fresh_len, 1);
+        vv_cstream_destroy(reference);
+        if (reused_err != VV_OK || fresh_err != VV_OK) {
+            error = "stream compress failed";
+            goto done;
+        }
+        if (vv_decompress(reused, reused_len, decoded, len) != (int64_t)len ||
+            memcmp(src, decoded, len) != 0) {
+            error = "reset format roundtrip failed";
+            goto done;
+        }
+        if (reused_len != fresh_len || memcmp(reused, fresh, fresh_len) != 0) {
+            error = "reset format differs from fresh context";
+            goto done;
+        }
+    }
+done:
+    vv_cstream_destroy(stream);
+    free(src); free(reused); free(fresh); free(decoded);
+    if (error) { FAIL(error); } else { PASS(); }
+}
+
 int main(void) {
     fprintf(stderr, "\n╔════════════════════════════════════════════╗\n");
     fprintf(stderr, "║  VaptVupt v%s — Unit Tests              ║\n", VV_VERSION_STRING);
@@ -152,6 +219,11 @@ int main(void) {
             }
             test_roundtrip(sparse, sizeof(sparse), modes[m], "Sparse (mostly zeros)");
         }
+    }
+
+    for (int mode = VV_MODE_BALANCED; mode <= VV_MODE_EXTREME; mode++) {
+        test_cstream_format_reset((vv_mode_t)mode, 0);
+        test_cstream_format_reset((vv_mode_t)mode, 1);
     }
 
     fprintf(stderr, "\n═══════════════════════════════════════════\n");

@@ -188,6 +188,38 @@ int main(void) {
     }
     vv_dstream_destroy(NULL);
     printf("  ✓ destroy NULL doesn't crash\n");
+
+    /* Completion is idempotent, including the documented cumulative
+     * written count. A post-completion call consumes no further input. */
+    for (int checksum = 0; checksum < 2; checksum++) {
+        vv_default_options(&opts);
+        opts.checksum = checksum;
+        r = vv_compress(small, sizeof(small), buf, sizeof(buf), &opts);
+        ds = vv_dstream_create();
+        int ok = r > 0 && ds != NULL;
+        size_t consumed = 0, written = 0;
+        if (ok) {
+            ir = vv_dstream_decompress_chunk(ds, buf, (size_t)r, small,
+                                              sizeof(small), &consumed, &written);
+            ok = ir == 1 && consumed == (size_t)r && written == sizeof(small);
+        }
+        for (int repeat = 0; ok && repeat < 2; repeat++) {
+            consumed = written = SIZE_MAX;
+            ir = vv_dstream_decompress_chunk(ds, repeat ? buf : NULL,
+                                              repeat ? (size_t)r : 0, small,
+                                              sizeof(small), &consumed, &written);
+            ok = ir == 1 && consumed == 0 && written == sizeof(small);
+        }
+        CHECK(ok, "completed dstream preserves cumulative written with and without new input");
+        if (ds) {
+            vv_dstream_reset(ds);
+            ir = vv_dstream_decompress_chunk(ds, NULL, 0, small, sizeof(small),
+                                              &consumed, &written);
+            CHECK(ir == VV_OK && consumed == 0 && written == 0,
+                  "dstream reset clears the completed cumulative written count");
+        }
+        vv_dstream_destroy(ds);
+    }
     
     /* === vv_xxh64 === */
     printf("\nvv_xxh64 edge cases:\n");

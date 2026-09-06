@@ -123,6 +123,90 @@ def gen_zero_progress_frame():
         b"S" + payload
 
 
+def token_frame(tokens, dsz, window_log=16, history=0, following_block=False):
+    """Classic token payload with optional history and an adjacent RAW block."""
+    frame = struct.pack("<IBBBBQ", 0x56560100, 1, 0, 0, window_log, history + dsz)
+    if history:
+        frame += struct.pack("<I", 2 | (history << 3)) + b"Q"
+    frame += struct.pack("<I", 1 | (0 if following_block else 4) | (dsz << 3))
+    frame += len(tokens).to_bytes(3, "little") + tokens
+    if following_block:
+        frame += struct.pack("<I", 4)  # Last, empty RAW block.
+    return frame
+
+
+def check_token_bounds(tmpdir, have_node):
+    """Require rejection, not merely output mismatch, for malformed tokens."""
+    fixtures = [
+        ("missing-match-extension", token_frame(b"\x1fQ\x01\x00", 20), None),
+        ("unterminated-match-extension", token_frame(b"\x1fQ\x01\x00\xff", 275), None),
+        ("extension-crosses-block", token_frame(b"\x1fQ\x01\x00", 20,
+                                               following_block=True), None),
+        ("literal-crosses-block", token_frame(b"\x40Q", 4, following_block=True), None),
+        ("offset-crosses-block", token_frame(b"\x10Q\x01", 5, history=2048,
+                                            following_block=True), None),
+        ("literal-exceeds-output", token_frame(b"\x50QQQQQ", 4), None),
+        ("match-exceeds-output", token_frame(b"\x10Q\x01\x00", 4), None),
+        ("trailing-incomplete-token", token_frame(b"\x10Q\x00", 1), None),
+        ("terminated-zero-extension", token_frame(b"\x1fQ\x01\x00\x00", 20), b"Q" * 20),
+        ("terminated-255-extension", token_frame(b"\x1fQ\x01\x00\xff\x00", 275), b"Q" * 275),
+        ("exact-output", token_frame(b"\x10Q\x01\x00", 5), b"Q" * 5),
+    ]
+    for window_log in (10, 17):
+        limit = 1 << window_log
+        width = 2 if window_log <= 16 else 3
+        for beyond in (0, 1):
+            tokens = b"\x00" + (limit + beyond).to_bytes(width, "little")
+            fixtures.append((f"window-{window_log}-beyond-{beyond}",
+                             token_frame(tokens, 4, window_log, limit + 32),
+                             None if beyond else b"Q" * (limit + 36)))
+            # Single-symbol LL/ML/OF tables encode one match with offset
+            # 2**window_log + beyond; only the offset extra bits vary.
+            for tag, match_length in ((b"S", 4), (b"T", 3)):
+                payload = b"\x00" * 9 + struct.pack("<I", 1)
+                for symbol in (0, window_log + 3, 0):
+                    payload += struct.pack("<HBB", 2, 1, symbol)
+                payload += b"\x00" * 6 + struct.pack("<II", 4, beyond)
+                frame = struct.pack("<IBBBBQ", 0x56560100, 1, 0, 1, window_log,
+                                    limit + 32 + match_length)
+                frame += struct.pack("<I", 2 | ((limit + 32) << 3)) + b"Q"
+                frame += struct.pack("<I", 7 | (match_length << 3))
+                frame += (len(payload) + 1).to_bytes(3, "little") + tag + payload
+                fixtures.append((f"{tag.decode()}-window-{window_log}-beyond-{beyond}",
+                                 frame, None if beyond else b"Q" * (limit + 32 + match_length)))
+
+    failures = 0
+    js_reject = """
+const vv = require(process.argv[1]);
+const fs = require('fs');
+try { vv.decompress(new Uint8Array(fs.readFileSync(process.argv[2]))); process.exit(1); }
+catch (e) { if (e.name !== 'CorruptError') { console.error(String(e)); process.exit(2); } }
+"""
+    for name, blob, expected in fixtures:
+        comp = os.path.join(tmpdir, name + ".vv")
+        plain = os.path.join(tmpdir, name + ".expected")
+        with open(comp, "wb") as f:
+            f.write(blob)
+        with open(plain, "wb") as f:
+            f.write(expected or b"")
+        c = subprocess.run([VV, "-t", comp], capture_output=True, timeout=5)
+        ok = (c.returncode == 0) == (expected is not None)
+        try:
+            out = bytes(vv_decoder.decompress(blob))
+            ok &= expected is not None and out == expected
+        except (vv_decoder.CorruptError, ValueError):
+            ok &= expected is None
+        if have_node:
+            args = (["node", "-e", js_reject,
+                     os.path.join(ROOT, "reference", "vv_decoder.js"), comp]
+                    if expected is None else ["node", JS_CHECK, comp, plain])
+            js = subprocess.run(args, capture_output=True, timeout=5)
+            ok &= js.returncode == 0
+        print(f"  {'ok  ' if ok else 'FAIL'}  {name}: C/Python/JS token bounds")
+        failures += not ok
+    return failures
+
+
 # ─────────────────────────────────────────────────────────────────
 # Container walk: collect lit_fmt values of 'S'/'T' entropy blocks.
 # ─────────────────────────────────────────────────────────────────
@@ -176,6 +260,7 @@ def main():
     failures = 0
     huf4_seen = 0
     try:
+        failures += check_token_bounds(tmpdir, have_node)
         for name, data in FIXTURES:
             plain = os.path.join(tmpdir, name)
             with open(plain, "wb") as f:

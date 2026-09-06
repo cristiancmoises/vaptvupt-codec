@@ -7,7 +7,23 @@ input). They are small, pure or bounded, which makes them tractable to verify
 rather than merely fuzz. This directory contains CBMC harnesses that
 machine-check their safety and correctness.
 
-## v2.65.9 currency and scope
+## v2.65.10 currency and scope
+
+The `read_ext_len` implementation now returns `SIZE_MAX` for an extension
+that reaches the compressed-input boundary without a byte below 255. Its
+CBMC, Eva and ACSL harness copies follow the new code. The historical reader
+proofs below do not cover this revision until those tools are rerun; tool
+unavailability is not a passing proof result.
+
+The current release validates this behavior through positive/negative token
+fixtures, one-shot and fragmented streaming decoding, sanitizer checks and
+reference parity. Additional dynamic regressions cover Huffman output
+capacity and input truncation, ANS frequency totals, frame-window offsets,
+streaming format reset, and CLI failure reporting. These do not extend the
+formal proof set. Historical BCJ and block-header evidence remains scoped to
+the unchanged functions and recorded bounds.
+
+## v2.65.9 currency and scope (historical)
 
 The formal baseline below is inherited for the unchanged functions and stated
 bounds; v2.65.9 does **not** claim a fresh full CBMC/Frama-C rerun. Its new
@@ -45,10 +61,11 @@ storage or prove post-`free()` contents. The scrubbing claim therefore remains
 an implementation/source-inspection claim with dynamic path coverage, not a
 new formal result.
 
-The existing CBMC/Eva results continue to describe the BCJ filter functions,
+The historical CBMC/Eva results describe the BCJ filter functions,
 detector, `read_ext_len`, and block-header helpers named below. Re-run
 `make verify` on the target toolchain before treating the inherited evidence as
-current certification.
+current certification. In particular, the current `read_ext_len` body differs
+from the historical proved body as described above.
 
 ## What is proven
 

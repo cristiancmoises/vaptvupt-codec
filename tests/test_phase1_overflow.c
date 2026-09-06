@@ -71,7 +71,7 @@ static void test_phase1_offset_class(uint32_t offset, const char *label) {
     size_t out_len = 12345;
     /* dst_base == op: single-block decode, offsets validated against
      * the buffer start. off_bytes = 2 (window log <= 16). */
-    vv_error_t r = decode_block_tokens_impl(ip, ip_len, op, dst_cap, &out_len, op, 2);
+    vv_error_t r = decode_block_tokens_impl(ip, ip_len, op, dst_cap, &out_len, op, 0xFFFFu, 2);
     CHECK(r != VV_OK, label);          /* must reject corrupt overrun, not crash */
     free(op);
 }
@@ -153,7 +153,7 @@ int main(void) {
         size_t dst_cap = 300;
         uint8_t *op = (uint8_t *)malloc(dst_cap);
         size_t out_len = 0;
-        vv_error_t r = decode_block_tokens_impl(ip, n, op, dst_cap, &out_len, op, 3);
+        vv_error_t r = decode_block_tokens_impl(ip, n, op, dst_cap, &out_len, op, 0xFFFFFFu, 3);
         CHECK(r != VV_OK, "3-byte offset path rejects overrun");
         free(op);
     }

@@ -421,7 +421,7 @@ def _build_dec_from_norm(norm):
     return build_dec(norm, sp)
 
 
-def vva_decode_sequences(src, dst_base, ml_base_tab=None):
+def vva_decode_sequences(src, dst_base, ml_base_tab=None, max_offset=0xFFFFFF):
     """Decode a full 'S' or 'T' tag ENTROPY block payload.
 
     `src` is the bytes AFTER the tag byte (i.e., the `bdata` slice in
@@ -641,7 +641,7 @@ def vva_decode_sequences(src, dst_base, ml_base_tab=None):
 
         # Validate match
         current_total = base_len_at_start + len(out_bytes)
-        if offset == 0 or offset > current_total:
+        if offset == 0 or offset > max_offset or offset > current_total:
             raise ValueError(
                 f"'S' invalid offset {offset} (total={current_total})")
 
@@ -763,14 +763,15 @@ def _self_test():
     return 0 if failures == 0 else 1
 
 
-def vva_decode_sequences_v2(src, dst_base):
+def vva_decode_sequences_v2(src, dst_base, max_offset=0xFFFFFF):
     """Decode a 'T' tag ENTROPY block payload (format v2, min_match=3).
 
     Payload format is byte-identical to 'S' — only the match-length
     table differs. Produced by C encoders running with
     `opts.format_v2 = 1`. Decodable by any v2.33.0+ Python decoder.
     """
-    return vva_decode_sequences(src, dst_base, ml_base_tab=ML_BASE_V2)
+    return vva_decode_sequences(src, dst_base, ml_base_tab=ML_BASE_V2,
+                                max_offset=max_offset)
 
 
 if __name__ == '__main__':

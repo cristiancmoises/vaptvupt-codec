@@ -34,10 +34,16 @@ static size_t read_ext_len(const uint8_t **pp, const uint8_t *end) {
     while (p < end) {
         uint8_t b = *p++;
         val += b;
-        if (b < 255) break;
+        if (b < 255) {
+            *pp = p;
+            return val;
+        }
     }
     *pp = p;
-    return val;
+    /* Even a zero extension requires its terminating byte. All token
+     * payloads are bounded by the 24-bit compressed-size field, so their
+     * byte sums fit below SIZE_MAX on both 32- and 64-bit hosts. */
+    return SIZE_MAX;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -137,13 +143,14 @@ static __attribute__((always_inline)) inline vv_error_t
 decode_block_tokens_impl(
     const uint8_t *ip, size_t ip_len,
     uint8_t *op, size_t dst_cap, size_t *out_len,
-    const uint8_t *dst_base,
+    const uint8_t *dst_base, uint32_t max_offset,
     const int off_bytes)  /* compile-time constant after inlining */
 {
     const uint8_t *const ip_end = ip + ip_len;
     uint8_t *const op_start = op;
     uint8_t *const op_end = op + dst_cap;
 
+#if VV_INLINE_AVX2
     /* PERF: widened safe-zone margins (was 24/40).
      * Larger margins = fewer bound-check-triggered loop exits per block.
      * Exit boundary: max is 1 token + 14 lits + 3 offset + 6 match_ext = 24.
@@ -152,33 +159,30 @@ decode_block_tokens_impl(
     const uint8_t *const ip_safe = (ip_len > 48) ? (ip_end - 48) : ip;
     uint8_t *const op_safe = (dst_cap > 72) ? (op_end - 72) : op;
 
-    /* PERF: once we've written enough bytes, any offset ≤ max_dist passes
-     * the "offset > op - dst_base" check. Max offset is (1 << wlog) - 1:
-     * at most 0xFFFF for 2-byte offsets (wlog ≤ 16), 0xFFFFFF for 3-byte
-     * offsets (wlog ≤ 24, the extreme large-window path since Sprint 46).
-     * Past this threshold only offset==0 (invalid/corrupted) needs the
-     * explicit check. The 3-byte ceiling (2^24) is also the absolute DoS
-     * cap: a larger offset is unrepresentable in the wire format and is
-     * rejected. */
-    const uint32_t max_valid_off = (off_bytes == 2) ? 0xFFFF : 0xFFFFFF;
+    /* Once the output history exceeds the advertised window, any offset
+     * in [1, max_offset] is in-bounds. The unsigned offset - 1 comparison
+     * rejects both zero and out-of-window offsets in a single range check. */
+    const uint32_t max_valid_off = max_offset;
 
-#if VV_INLINE_AVX2
     /* PERF: two-phase fast path.
      * Phase 1 (warmup): op hasn't advanced far enough to make any offset
      *   automatically valid. Do full offset validation per sequence.
      * Phase 2 (hot): op - dst_base > max_valid_off, so any non-zero
-     *   offset within 2/3 bytes is automatically valid — skip the
-     *   (op - dst_base) comparison, keep only offset==0 check. */
+     *   offset within the window is valid — skip the history comparison,
+     *   keep the offset range check. */
 
     /* Phase 1: warmup — full validation */
     while (VV_LIKELY(ip < ip_safe && op < op_safe
-                      && (uint32_t)(op - dst_base) <= max_valid_off)) {
+                      && (size_t)(op - dst_base) <= max_valid_off)) {
         uint32_t token = *ip++;
         uint32_t ll = token >> 4;
         uint32_t mc = token & 0x0F;
 
-        if (VV_UNLIKELY(ll == 15))
-            ll += (uint32_t)read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(ll == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            ll += (uint32_t)ext;
+        }
 
         /* Sprint 109 fix: corrupt ll extension can yield a huge ll
          * that exceeds remaining input or output. Found by libFuzzer
@@ -227,10 +231,13 @@ decode_block_tokens_impl(
         ip += off_bytes;
 
         uint32_t mlen = mc + VV_MIN_MATCH;
-        if (VV_UNLIKELY(mc == 15))
-            mlen += (uint32_t)read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(mc == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            mlen += (uint32_t)ext;
+        }
 
-        if (VV_UNLIKELY(offset == 0 || offset > (uint32_t)(op - dst_base)))
+        if (VV_UNLIKELY(offset - 1u >= max_offset || offset > (size_t)(op - dst_base)))
             return VV_ERR_CORRUPT;
 
         /* Phase-1 warmup previously lacked the match-length output bound that
@@ -269,15 +276,18 @@ decode_block_tokens_impl(
         op += mlen;
     }
 
-    /* Phase 2: hot path — op is far enough in that any non-zero offset
-     * within 2-byte or 3-byte range is automatically valid. */
+    /* Phase 2: hot path — op is far enough in that any offset within the
+     * advertised frame window is automatically within decoded history. */
     while (VV_LIKELY(ip < ip_safe && op < op_safe)) {
         uint32_t token = *ip++;
         uint32_t ll = token >> 4;
         uint32_t mc = token & 0x0F;
 
-        if (VV_UNLIKELY(ll == 15))
-            ll += (uint32_t)read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(ll == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            ll += (uint32_t)ext;
+        }
 
         /* Sprint 109 fix: corrupt ll extension can yield a huge ll
          * that exceeds remaining input or output. Found by libFuzzer
@@ -324,11 +334,14 @@ decode_block_tokens_impl(
         ip += off_bytes;
 
         uint32_t mlen = mc + VV_MIN_MATCH;
-        if (VV_UNLIKELY(mc == 15))
-            mlen += (uint32_t)read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(mc == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            mlen += (uint32_t)ext;
+        }
 
         /* No (op - dst_base) check needed — op is past max_valid_off */
-        if (VV_UNLIKELY(offset == 0))
+        if (VV_UNLIKELY(offset - 1u >= max_offset))
             return VV_ERR_CORRUPT;
 
         /* Phase-2 previously had NO output-length bound before the match
@@ -371,11 +384,14 @@ decode_block_tokens_impl(
         size_t ll = token >> 4;
         size_t mc = token & 0x0F;
 
-        if (VV_UNLIKELY(ll == 15))
-            ll += read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(ll == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            ll += ext;
+        }
 
-        if (VV_UNLIKELY(ip + ll > ip_end)) return VV_ERR_CORRUPT;
-        if (VV_UNLIKELY(op + ll > op_end)) return VV_ERR_OVERFLOW;
+        if (VV_UNLIKELY(ll > (size_t)(ip_end - ip))) return VV_ERR_CORRUPT;
+        if (VV_UNLIKELY(ll > (size_t)(op_end - op))) return VV_ERR_OVERFLOW;
 
         if (ll > 0) vv_copy_fast(op, ip, ll);
         ip += ll;
@@ -383,7 +399,7 @@ decode_block_tokens_impl(
 
         if (ip >= ip_end) break;
 
-        if (VV_UNLIKELY(ip + off_bytes > ip_end)) return VV_ERR_CORRUPT;
+        if (VV_UNLIKELY((size_t)off_bytes > (size_t)(ip_end - ip))) return VV_ERR_CORRUPT;
         uint32_t offset;
         if (off_bytes == 2) {
             offset = vv_read16(ip);
@@ -393,12 +409,15 @@ decode_block_tokens_impl(
         ip += off_bytes;
 
         size_t mlen = mc + VV_MIN_MATCH;
-        if (VV_UNLIKELY(mc == 15))
-            mlen += read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(mc == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            mlen += ext;
+        }
 
-        if (VV_UNLIKELY(offset == 0 || offset > (uint32_t)(op - dst_base)))
+        if (VV_UNLIKELY(offset - 1u >= max_offset || offset > (size_t)(op - dst_base)))
             return VV_ERR_CORRUPT;
-        if (VV_UNLIKELY(op + mlen > op_end))
+        if (VV_UNLIKELY(mlen > (size_t)(op_end - op)))
             return VV_ERR_OVERFLOW;
 
         vv_copy_match(op, offset, mlen);
@@ -413,28 +432,28 @@ decode_block_tokens_impl(
 static vv_error_t decode_block_tokens_w16(
     const uint8_t *ip, size_t ip_len,
     uint8_t *op, size_t dst_cap, size_t *out_len,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
-    return decode_block_tokens_impl(ip, ip_len, op, dst_cap, out_len, dst_base, 2);
+    return decode_block_tokens_impl(ip, ip_len, op, dst_cap, out_len, dst_base, max_offset, 2);
 }
 
 /* Specialized for 3-byte offsets (wlog > 16) */
 static vv_error_t decode_block_tokens_w20(
     const uint8_t *ip, size_t ip_len,
     uint8_t *op, size_t dst_cap, size_t *out_len,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
-    return decode_block_tokens_impl(ip, ip_len, op, dst_cap, out_len, dst_base, 3);
+    return decode_block_tokens_impl(ip, ip_len, op, dst_cap, out_len, dst_base, max_offset, 3);
 }
 
 static vv_error_t decode_block_tokens(
     const uint8_t *ip, size_t ip_len,
     uint8_t *op, size_t dst_cap, size_t *out_len, int off_bytes,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
     if (off_bytes == 2)
-        return decode_block_tokens_w16(ip, ip_len, op, dst_cap, out_len, dst_base);
-    return decode_block_tokens_w20(ip, ip_len, op, dst_cap, out_len, dst_base);
+        return decode_block_tokens_w16(ip, ip_len, op, dst_cap, out_len, dst_base, max_offset);
+    return decode_block_tokens_w20(ip, ip_len, op, dst_cap, out_len, dst_base, max_offset);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -451,7 +470,7 @@ decode_stripped_tokens_impl(
     const uint8_t *ip, size_t ip_len,
     const uint8_t *lit_buf, size_t lit_len,
     uint8_t *op, size_t dst_cap, size_t *out_len,
-    const uint8_t *dst_base,
+    const uint8_t *dst_base, uint32_t max_offset,
     const int off_bytes)
 {
     const uint8_t *ip_end = ip + ip_len;
@@ -464,11 +483,14 @@ decode_stripped_tokens_impl(
         size_t ll = token >> 4;
         size_t mc = token & 0x0F;
 
-        if (VV_UNLIKELY(ll == 15))
-            ll += read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(ll == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            ll += ext;
+        }
 
-        if (VV_UNLIKELY(lit_pos + ll > lit_len)) return VV_ERR_CORRUPT;
-        if (VV_UNLIKELY(op + ll > op_end)) return VV_ERR_OVERFLOW;
+        if (VV_UNLIKELY(ll > lit_len - lit_pos)) return VV_ERR_CORRUPT;
+        if (VV_UNLIKELY(ll > (size_t)(op_end - op))) return VV_ERR_OVERFLOW;
         if (ll > 0) {
             memcpy(op, lit_buf + lit_pos, ll);
             lit_pos += ll;
@@ -477,7 +499,7 @@ decode_stripped_tokens_impl(
 
         if (ip >= ip_end) break;
 
-        if (VV_UNLIKELY(ip + off_bytes > ip_end)) return VV_ERR_CORRUPT;
+        if (VV_UNLIKELY((size_t)off_bytes > (size_t)(ip_end - ip))) return VV_ERR_CORRUPT;
         /* PERF: off_bytes is compile-time constant here */
         uint32_t offset;
         if (off_bytes == 2) {
@@ -488,13 +510,16 @@ decode_stripped_tokens_impl(
         ip += off_bytes;
 
         size_t mlen = mc + VV_MIN_MATCH;
-        if (VV_UNLIKELY(mc == 15))
-            mlen += read_ext_len(&ip, ip_end);
+        if (VV_UNLIKELY(mc == 15)) {
+            size_t ext = read_ext_len(&ip, ip_end);
+            if (VV_UNLIKELY(ext == SIZE_MAX)) return VV_ERR_CORRUPT;
+            mlen += ext;
+        }
 
-        if (VV_UNLIKELY(offset == 0 || offset > (uint32_t)(op - dst_base))) {
+        if (VV_UNLIKELY(offset - 1u >= max_offset || offset > (size_t)(op - dst_base))) {
             return VV_ERR_CORRUPT;
         }
-        if (VV_UNLIKELY(op + mlen > op_end))
+        if (VV_UNLIKELY(mlen > (size_t)(op_end - op)))
             return VV_ERR_OVERFLOW;
 
         vv_copy_match(op, offset, mlen);
@@ -509,14 +534,14 @@ static vv_error_t decode_stripped_tokens(
     const uint8_t *ip, size_t ip_len,
     const uint8_t *lit_buf, size_t lit_len,
     uint8_t *op, size_t dst_cap, size_t *out_len, int off_bytes,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
     if (off_bytes == 2) {
         return decode_stripped_tokens_impl(ip, ip_len, lit_buf, lit_len,
-                                            op, dst_cap, out_len, dst_base, 2);
+                                            op, dst_cap, out_len, dst_base, max_offset, 2);
     }
     return decode_stripped_tokens_impl(ip, ip_len, lit_buf, lit_len,
-                                        op, dst_cap, out_len, dst_base, 3);
+                                        op, dst_cap, out_len, dst_base, max_offset, 3);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -528,7 +553,7 @@ static vv_error_t decode_stripped_tokens(
 static vv_error_t decode_block_huffman(
     const uint8_t *data, size_t data_len,
     uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -553,7 +578,7 @@ static vv_error_t decode_block_huffman(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes, dst_base);
+                                             output, decomp_size, out_len, off_bytes, dst_base, max_offset);
     free(lit_buf);
     return err;
 }
@@ -567,7 +592,7 @@ static vv_error_t decode_block_huffman(
 static vv_error_t decode_block_ans(
     const uint8_t *data, size_t data_len,
     uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -591,7 +616,7 @@ static vv_error_t decode_block_ans(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes, dst_base);
+                                             output, decomp_size, out_len, off_bytes, dst_base, max_offset);
     free(lit_buf);
     return err;
 }
@@ -603,7 +628,7 @@ static vv_error_t decode_block_ans(
 static vv_error_t decode_block_ans4(
     const uint8_t *data, size_t data_len,
     uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -625,7 +650,7 @@ static vv_error_t decode_block_ans4(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes, dst_base);
+                                             output, decomp_size, out_len, off_bytes, dst_base, max_offset);
     free(lit_buf);
     return err;
 }
@@ -637,7 +662,7 @@ static vv_error_t decode_block_ans4(
 static vv_error_t decode_block_ctx(
     const uint8_t *data, size_t data_len,
     uint8_t *output, size_t decomp_size, size_t *out_len, int off_bytes,
-    const uint8_t *dst_base)
+    const uint8_t *dst_base, uint32_t max_offset)
 {
     if (data_len < 4) return VV_ERR_CORRUPT;
 
@@ -659,7 +684,7 @@ static vv_error_t decode_block_ctx(
 
     vv_error_t err = decode_stripped_tokens(tokens, tok_len,
                                              lit_buf, lit_count,
-                                             output, decomp_size, out_len, off_bytes, dst_base);
+                                             output, decomp_size, out_len, off_bytes, dst_base, max_offset);
     free(lit_buf);
     return err;
 }
@@ -751,7 +776,7 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
                 if (ip + csz > ip_end) return VV_ERR_CORRUPT;
 
                 size_t actual = 0;
-                vv_error_t err = decode_block_tokens(ip, csz, op, dsz, &actual, off_bytes, frame_out_start);
+                vv_error_t err = decode_block_tokens(ip, csz, op, dsz, &actual, off_bytes, frame_out_start, max_offset);
                 if (err != VV_OK) return err;
                 if (actual != dsz) return VV_ERR_CORRUPT;
                 ip += csz; op += dsz;
@@ -768,11 +793,11 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
                 vv_error_t err;
 
                 if (tag == VV_ENTROPY_ANS) {
-                    err = decode_block_ans(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start);
+                    err = decode_block_ans(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start, max_offset);
                 } else if (tag == VV_ENTROPY_ANS4) {
-                    err = decode_block_ans4(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start);
+                    err = decode_block_ans4(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start, max_offset);
                 } else if (tag == VV_ENTROPY_CTX) {
-                    err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start);
+                    err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start, max_offset);
                 } else if (tag == VV_ENTROPY_SEQ) {
                     err = vva_decode_sequences_limited(bdata, bdata_len, op, dsz, &actual,
                                                        frame_out_start, max_offset);
@@ -784,7 +809,7 @@ int64_t vv_decompress_flags(const uint8_t *src, size_t src_len,
                                                           frame_out_start, max_offset);
                     if (err != VV_OK) err = VV_ERR_CORRUPT;
                 } else if (tag == VV_ENTROPY_HUFFMAN) {
-                    err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start);
+                    err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, off_bytes, frame_out_start, max_offset);
                 } else {
                     return VV_ERR_CORRUPT;
                 }
@@ -988,7 +1013,10 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
     *written = 0;
 
     if (ctx->state == VV_DSTREAM_ERROR) return VV_ERR_CORRUPT;
-    if (ctx->state == VV_DSTREAM_DONE) return 1;
+    if (ctx->state == VV_DSTREAM_DONE) {
+        *written = ctx->output_pos;
+        return 1;
+    }
     if (ctx->dst_base_saved && dst != ctx->dst_base_saved) return VV_ERR_PARAM;
     if (ctx->output_pos > dst_cap) return VV_ERR_OVERFLOW;
 
@@ -1069,7 +1097,7 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
                 uint32_t csz = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
                 size_t actual = 0;
                 vv_error_t err = decode_block_tokens(p + 3, csz, op, dsz, &actual,
-                                                      ctx->off_bytes, ctx->dst_base_saved);
+                                                      ctx->off_bytes, ctx->dst_base_saved, ctx->max_offset);
                 if (err != VV_OK || actual != dsz) { ctx->state = VV_DSTREAM_ERROR; return err != VV_OK ? err : VV_ERR_CORRUPT; }
             } else { /* ENTROPY */
                 uint32_t csz = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
@@ -1085,11 +1113,11 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
                 size_t actual = 0;
                 vv_error_t err;
                 if (tag == VV_ENTROPY_ANS) {
-                    err = decode_block_ans(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved);
+                    err = decode_block_ans(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved, ctx->max_offset);
                 } else if (tag == VV_ENTROPY_ANS4) {
-                    err = decode_block_ans4(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved);
+                    err = decode_block_ans4(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved, ctx->max_offset);
                 } else if (tag == VV_ENTROPY_CTX) {
-                    err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved);
+                    err = decode_block_ctx(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved, ctx->max_offset);
                 } else if (tag == VV_ENTROPY_SEQ) {
                     err = vva_decode_sequences_limited(bdata, bdata_len, op, dsz, &actual,
                                                        ctx->dst_base_saved, ctx->max_offset);
@@ -1099,7 +1127,7 @@ int vv_dstream_decompress_chunk(vv_dstream_t *ctx,
                                                           ctx->dst_base_saved, ctx->max_offset);
                     if (err != VV_OK) err = VV_ERR_CORRUPT;
                 } else if (tag == VV_ENTROPY_HUFFMAN) {
-                    err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved);
+                    err = decode_block_huffman(bdata, bdata_len, op, dsz, &actual, ctx->off_bytes, ctx->dst_base_saved, ctx->max_offset);
                 } else {
                     ctx->state = VV_DSTREAM_ERROR; return VV_ERR_CORRUPT;
                 }

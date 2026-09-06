@@ -36,16 +36,22 @@ static size_t read_ext_len(const uint8_t **pp, const uint8_t *end) {
     const uint8_t *p = *pp;
     /*@
       loop invariant \at(*pp,Pre) <= p <= end;
-      loop assigns p, val;
+      loop assigns p, val, *pp;
       loop variant end - p;
     */
     while (p < end) {
         uint8_t b = *p++;
         val += b;
-        if (b < 255) break;
+        if (b < 255) {
+            *pp = p;
+            return val;
+        }
     }
     *pp = p;
-    return val;
+    /* Even a zero extension requires its terminating byte. All token
+     * payloads are bounded by the 24-bit compressed-size field, so their
+     * byte sums fit below SIZE_MAX on both 32- and 64-bit hosts. */
+    return SIZE_MAX;
 }
 
 /* A trivial caller so WP has an entry context; the proof obligations live in

@@ -44,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import vv_decoder  # noqa: E402  (sys.path hack above)
+import vv_huffman  # noqa: E402
 
 
 # Locate the encode_compat tool and the silesia corpus
@@ -61,7 +62,41 @@ def find_encode_compat() -> str | None:
     return None
 
 
+def test_huffman_exhaustion() -> None:
+    """Keep short/long-code exhaustion behavior aligned with the C decoder."""
+    for code_length in (1, 15):
+        single = bytes([0, code_length << 4]) + bytes((4 * code_length + 7) // 8)
+        decoded, consumed = vv_huffman.vvh_decode(single, len(single), 4)
+        assert decoded == bytes(4) and consumed == len(single)
+        try:
+            vv_huffman.vvh_decode(single[:-1], len(single) - 1, 4)
+        except vv_huffman.HuffmanError as exc:
+            assert "exhausted" in str(exc)
+        else:
+            raise AssertionError("truncated single-stream Huffman accepted")
+
+        lane_size = (code_length + 7) // 8
+        four = bytes([0, code_length << 4]) + bytes([lane_size, 0, 0]) * 3
+        four += bytes(4 * lane_size)
+        decoded, consumed = vv_huffman.vvh_decode4(four, len(four), 4)
+        assert decoded == bytes(4) and consumed == len(four)
+        for lane in range(4):
+            truncated = bytearray(four[:-1])
+            if lane:
+                truncated[2 + (lane - 1) * 3] -= 1
+            try:
+                vv_huffman.vvh_decode4(truncated, len(truncated), 4)
+            except vv_huffman.HuffmanError:
+                pass
+            else:
+                raise AssertionError(f"truncated Huffman lane {lane} accepted")
+    print("  PASS Huffman input exhaustion (short/long codes, all four lanes)")
+
+
 def main() -> int:
+    test_huffman_exhaustion()
+    if "--huffman-only" in sys.argv[1:]:
+        return 0
     encode_compat = find_encode_compat()
     if encode_compat is None:
         print(

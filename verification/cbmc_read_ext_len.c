@@ -3,7 +3,7 @@
  * CBMC harness: the decoder's variable-length integer reader must never read
  * past the end of the input buffer, for any buffer contents and any starting
  * position. read_ext_len advances a pointer over a run of 0xFF continuation
- * bytes terminated by a < 255 byte (LEB128-style, base-256-ish sum). An
+ * bytes terminated by a < 255 byte (LZ4-style byte sum). An
  * over-read here would be a classic heap-buffer-overflow on attacker-
  * controlled compressed input.
  *
@@ -24,10 +24,16 @@ static size_t read_ext_len(const uint8_t **pp, const uint8_t *end) {
     while (p < end) {
         uint8_t b = *p++;
         val += b;
-        if (b < 255) break;
+        if (b < 255) {
+            *pp = p;
+            return val;
+        }
     }
     *pp = p;
-    return val;
+    /* Even a zero extension requires its terminating byte. All token
+     * payloads are bounded by the 24-bit compressed-size field, so their
+     * byte sums fit below SIZE_MAX on both 32- and 64-bit hosts. */
+    return SIZE_MAX;
 }
 /* ----------------------------------------------------- */
 
@@ -52,11 +58,15 @@ void harness(void) {
     const uint8_t *end  = buf + n;
     const uint8_t *p    = buf + start;
 
-    (void)read_ext_len(&p, end);           /* dereferences checked by --pointer-check */
+    size_t value = read_ext_len(&p, end);  /* dereferences checked by --pointer-check */
 
     /* pointer-advance invariant the callers rely on for their own bounds math */
     __CPROVER_assert(p >= base, "read_ext_len: pointer does not move backwards");
     __CPROVER_assert(p <= end,  "read_ext_len: pointer never passes end");
+    __CPROVER_assert(value == SIZE_MAX || (p > buf + start && p[-1] < 255),
+                     "read_ext_len: success requires a terminating byte");
+    __CPROVER_assert(value != SIZE_MAX || p == end,
+                     "read_ext_len: missing terminator fails at input end");
 }
 
 int main(void) { harness(); return 0; }

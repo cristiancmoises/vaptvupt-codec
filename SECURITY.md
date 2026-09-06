@@ -1,14 +1,49 @@
 # VaptVupt Security Posture
 
-**Document version**: 2.14 (v2.65.9)
-**Codebase audited**: v2.65.9 release delta, subject to the evidence scope below
+**Document version**: 2.15 (v2.65.10)
+**Codebase audited**: v2.65.10 release delta, subject to the evidence scope below
 **License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
 
 ---
 
-## v2.65.9 security and correctness delta
+## v2.65.10 security and correctness delta
+
+The decoder rejects unterminated length extensions and classic/legacy
+entropy match offsets outside the advertised frame window. Checks apply to
+one-shot and streaming entry points. The C, Python and JavaScript token
+readers enforce compressed-block boundaries. Valid terminators and offsets
+at the supported boundary remain covered by positive regression controls.
+
+Huffman output-buffer exhaustion no longer lets the encoder accumulate an
+invalid shift count or return success for a truncated bitstream. It returns
+`VVH_ERR_OVERFLOW`. Single- and four-stream Huffman decode reject missing
+codeword bits. ANS literal decoders validate a total normalized frequency of
+4096 before building every table, including global and local context tables;
+underfull input previously permitted use of uninitialized decoder entries.
+Targeted sanitizer regressions reproduce the old undefined behavior and
+exercise the corrected error paths.
+
+Streaming compression reset now synchronizes format-specific match limits
+and hash3 state. Repeated v1/v2 transitions are checked against a fresh
+context; old v1-to-v2 transitions could corrupt long-match frames. Optional
+hash4 allocation reduces unused matcher memory without changing valid
+one-shot output in the paired fixtures. These requested-allocation savings
+are not a bound on total process RSS.
+
+The CLI rejects malformed numeric arguments and unknown modes, and reports
+buffered output errors such as a full disk. `make test` now stops on any
+required Python check failure; fuzz builds instrument SIMD and rebuild when
+core sources or headers change. A completed streaming decoder continues to
+report cumulative output length on later calls.
+
+Assurance is based on regressions and sanitizer/dynamic checks. The changed
+`read_ext_len` helper has synchronized formal harness copies, but its old
+proofs do not certify this revision until the tools are rerun. Historical
+formal results apply only to unchanged functions and their recorded bounds.
+
+## v2.65.9 security and correctness delta (historical)
 
 Streaming decode now completes a BCJ-filtered frame by applying the selected
 x86 or AArch64 inverse exactly once. With a footer, the decoder first validates
@@ -130,7 +165,7 @@ Per the project's discipline ("State explicitly what the system does NOT protect
 | **Side-channel resistance** (timing, cache, power) | Caller (codec is throughput-tuned; constant-time properties apply only to libpqvaptvupt's crypto path) |
 | **Compression-oracle attacks** (CRIME, BREAST, BREACH) | Caller (do not mix attacker-controlled and secret plaintext in the same compression stream — same caveat as zlib, zstd, brotli) |
 | **Denial of service from `dst_cap` exhaustion** | Caller (the codec enforces `dst_cap` but the caller chooses the value; passing `SIZE_MAX` defeats DoS protection) |
-| **Resource exhaustion from extreme-mode *encoding* of attacker-controlled input** | Caller (since v2.52.0, extreme mode uses up to a 16 MB window → ~128 MB matcher and ~1 MB/s optimal parse, so a large input consumes proportional time/memory: measured 169 MB / 126 s on a 51 MB input. The decoder is unaffected. Deployments exposing extreme *encoding* to untrusted input sizes must impose their own size/timeout limits — same caveat as zstd `--ultra --long`. Decode of untrusted input remains bounded by `dst_cap`.) |
+| **Resource exhaustion from extreme-mode *encoding* of attacker-controlled input** | Caller. Extreme mode can use a 16 MiB window and substantial parse workspace; v2.65.10 omits unused secondary tables, but does not impose a total allocation or time limit. The historical v2.52.0 observation was 169 MB / 126 s on a 51 MB input and is not a new-release measurement. Deployments must impose their own input-size, memory and time limits. Decode remains bounded by caller-provided `dst_cap`. |
 | **Multi-process race conditions on shared input/output buffers** | Caller (codec assumes single-writer-during-call semantics) |
 | **Disk persistence of working buffers** | Caller (secure-zero covers tracked plaintext-bearing heap buffers, not swap; mlockall is caller's job) |
 | **Resistance to compiler downgrades** | Caller (the security properties below assume `-O2` or `-O3` with a modern gcc/clang; `-O0` builds are functional but not audit-targeted) |

@@ -56,10 +56,64 @@ static int test_ans_rt(const uint8_t *data, size_t len, const char *name) {
     PASS(); free(enc); free(dec); return 1;
 }
 
+static void test_invalid_literal_tables(void) {
+    TEST("Literal decoders reject invalid frequency totals");
+    static const struct {
+        size_t len;
+        uint8_t bytes[11];
+    } headers[] = {
+        {2, {VVA_HDR_SPARSE, 0}},
+        {5, {VVA_HDR_SPARSE, 1, 0, 1, 0}},
+        {8, {VVA_HDR_SPARSE, 2, 0, 1, 0, 1, 1, 0}},
+        {8, {VVA_HDR_SPARSE, 2, 0, 0, 16, 1, 1, 0}},
+        {6, {VVA_HDR_DENSE, 1, 1, 0, 1, 0}},
+        {11, {4, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0}}
+    };
+    for (size_t h = 0; h < sizeof(headers) / sizeof(headers[0]); h++) {
+        uint8_t encoded[600] = {0}, decoded[4];
+        size_t consumed = 0;
+        memcpy(encoded, headers[h].bytes, headers[h].len);
+        if (vva_decode(encoded, headers[h].len + 32, decoded, sizeof(decoded),
+                       sizeof(decoded), &consumed) != VVA_ERR_CORRUPT ||
+            vva_decode4(encoded, headers[h].len + 32, decoded, sizeof(decoded),
+                        sizeof(decoded), &consumed) != VVA_ERR_CORRUPT) {
+            FAIL("single/four-stream malformed table accepted"); return;
+        }
+
+        /* Context model with every context inherited from an invalid
+         * global table; states and bitstream are otherwise in range. */
+        memset(encoded, 0, sizeof(encoded));
+        encoded[0] = (uint8_t)headers[h].len;
+        memcpy(encoded + 2, headers[h].bytes, headers[h].len);
+        memset(encoded + 2 + headers[h].len, 0xFF, 32);
+        if (vva_decode_ctx(encoded, sizeof(encoded), decoded, sizeof(decoded),
+                           sizeof(decoded), &consumed) != VVA_ERR_CORRUPT) {
+            FAIL("context global malformed table accepted"); return;
+        }
+
+        /* Valid single-symbol global table, with context zero replaced
+         * by the malformed table. This exercises per-context validation. */
+        memset(encoded, 0, sizeof(encoded));
+        encoded[0] = 2;
+        encoded[2] = VVA_HDR_SINGLE;
+        memset(encoded + 4, 0xFF, 32);
+        encoded[4] = 0xFE;
+        encoded[37] = (uint8_t)headers[h].len;
+        memcpy(encoded + 39, headers[h].bytes, headers[h].len);
+        if (vva_decode_ctx(encoded, sizeof(encoded), decoded, sizeof(decoded),
+                           sizeof(decoded), &consumed) != VVA_ERR_CORRUPT) {
+            FAIL("context local malformed table accepted"); return;
+        }
+    }
+    PASS();
+}
+
 int main(void) {
     fprintf(stderr, "\n╔════════════════════════════════════════════════╗\n");
     fprintf(stderr, "║  VaptVupt — ANS/tANS Codec Tests               ║\n");
     fprintf(stderr, "╚════════════════════════════════════════════════╝\n\n");
+
+    test_invalid_literal_tables();
 
     /* 1. All zero */
     { uint8_t d[4096]; memset(d, 0, sizeof(d));

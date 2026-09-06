@@ -27,9 +27,60 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const assert = require('assert');
 
 const here = __dirname;
 const decoder = require(path.join(here, 'vv_decoder.js'));
+
+// A complete four-literal sequence frame lets these tests reach Huffman
+// through the public API without requiring a C encoder or a checksum.
+function literalFrame(litFmt, encoded) {
+    const trailer = Buffer.alloc(22);
+    trailer.writeUInt16LE(2, 8);  // LL table header size; ML/OF unused
+    trailer[10] = 1;             // single-symbol ANS table
+    trailer[11] = 4;             // literal-run length code = 4
+    const literals = Buffer.alloc(10);
+    literals[0] = 'S'.charCodeAt(0);
+    literals.writeUInt32LE(4, 1);
+    literals[5] = litFmt;
+    literals.writeUInt32LE(encoded.length, 6);
+    const payload = Buffer.concat([literals, encoded, trailer]);
+    const header = Buffer.alloc(23);
+    header.writeUInt32LE(decoder._constants.VV_MAGIC, 0);
+    header[4] = decoder._constants.VV_VERSION;
+    header[7] = 16;
+    header.writeBigUInt64LE(4n, 8);
+    header.writeUInt32LE((4 << 3) | 4 | decoder._constants.BLOCK_ENTROPY, 16);
+    header.writeUIntLE(payload.length, 20, 3);
+    return Buffer.concat([header, payload]);
+}
+
+for (const codeLength of [1, 15]) {
+    const single = Buffer.concat([
+        Buffer.from([0, codeLength << 4]),
+        Buffer.alloc(Math.ceil(4 * codeLength / 8)),
+    ]);
+    assert.deepStrictEqual(Buffer.from(decoder.decompress(literalFrame(3, single))),
+                           Buffer.alloc(4));
+    assert.throws(() => decoder.decompress(literalFrame(3, single.subarray(0, -1))),
+                  /Huffman: bitstream exhausted/);
+    const laneSize = Math.ceil(codeLength / 8);
+    const four = Buffer.concat([
+        Buffer.from([0, codeLength << 4, laneSize, 0, 0,
+                     laneSize, 0, 0, laneSize, 0, 0]),
+        Buffer.alloc(4 * laneSize),
+    ]);
+    assert.deepStrictEqual(Buffer.from(decoder.decompress(literalFrame(4, four))),
+                           Buffer.alloc(4));
+    for (let lane = 0; lane < 4; lane++) {
+        const truncated = Buffer.from(four.subarray(0, -1));
+        if (lane) truncated[2 + (lane - 1) * 3]--;
+        assert.throws(() => decoder.decompress(literalFrame(4, truncated)),
+                      /Huffman4: (bitstream exhausted|zero-length stream)/);
+    }
+}
+console.log('  PASS Huffman input exhaustion (short/long codes, all four lanes)');
+if (process.argv.includes('--huffman-only')) process.exit(0);
 
 // Locate the encode_compat tool
 const candidates = [

@@ -13,10 +13,16 @@ static size_t read_ext_len(const uint8_t **pp, const uint8_t *end) {
     while (p < end) {
         uint8_t b = *p++;
         val += b;
-        if (b < 255) break;
+        if (b < 255) {
+            *pp = p;
+            return val;
+        }
     }
     *pp = p;
-    return val;
+    /* Even a zero extension requires its terminating byte. All token
+     * payloads are bounded by the 24-bit compressed-size field, so their
+     * byte sums fit below SIZE_MAX on both 32- and 64-bit hosts. */
+    return SIZE_MAX;
 }
 
 #define CAP 64
