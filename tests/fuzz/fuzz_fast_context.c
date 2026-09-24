@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Exercise the canonical FAST parser through both storage ownership paths. */
 #include "vaptvupt.h"
 #include <stdlib.h>

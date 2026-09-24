@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * Compare public one-shot APIs on small, deterministic inputs. This is a
  * userspace microbenchmark, not a kernel, zram, or filesystem benchmark.

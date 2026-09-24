@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * In-process encoder allocation benchmark. The deterministic fixtures,
  * fingerprint seed and >=80 ms doubling calibration preserve the protocol

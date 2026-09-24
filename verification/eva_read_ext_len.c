@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  * Frama-C/Eva memory-safety analysis of the decoder varint reader.
  * Eva (abstract interpretation) + RTE proves the absence of runtime errors
  * (invalid pointer dereference, out-of-bounds read) without manual loop

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  * Frama-C/Eva + RTE: the block-header pack/unpack accessors raise no runtime
  * error (no shift/overflow UB) for any field values, and pack is free of
  * signed/overflow issues. Definitions copied from include/vaptvupt.h. */

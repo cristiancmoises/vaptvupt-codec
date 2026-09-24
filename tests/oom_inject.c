@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * Allocation-failure injector for OOM-robustness testing. Build as a shared
  * library and LD_PRELOAD it; it counts malloc/calloc/realloc calls and forces

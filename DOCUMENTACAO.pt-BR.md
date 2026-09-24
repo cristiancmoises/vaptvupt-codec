@@ -1,10 +1,14 @@
 # Documentação técnica VaptVupt (pt-BR)
 
-Versão sincronizada com o release **2.65.11**. Este guia resume integração,
+Versão sincronizada com o release **2.65.12**. Este guia resume integração,
 formato e limites de segurança em português; os documentos em inglês
 [FORMAT.md](FORMAT.md), [SECURITY.md](SECURITY.md) e [INTEGRATION.md](INTEGRATION.md)
 são as referências normativas completas. **[README em português](README.pt-BR.md)**
 · **[English README](README.md)**.
+
+Copyright 2026 Cristian Cezar Moisés. O material de autoria própria usa
+Apache-2.0. O arquivo derivado de XXH64 mantém BSD-2-Clause; consulte
+`LICENSE` e `NOTICE`.
 
 ## Limite de segurança
 
@@ -22,7 +26,7 @@ side-channel. A aplicação deve impor limites de tamanho, tempo e processos.
 ## Formato e compatibilidade
 
 Um frame contém cabeçalho de 16 bytes, blocos RAW/RLE/token/entropia e um
-footer XXH64 opcional. A saída válida de 2.65.11 continua compatível com as
+footer XXH64 opcional. A saída válida de 2.65.12 continua compatível com as
 versões anteriores indicadas em [FORMAT.md](FORMAT.md). O campo `window_log`
 deve estar entre 10 e 24; valores fora desse intervalo são rejeitados.
 Desde v2.65.10, offsets também precisam respeitar a janela declarada, e toda
@@ -174,7 +178,7 @@ vv-fast/vv-balanced/lz4-1/zstd-1/zstd-3 e verifica cada decodificação por
 SHA-256. Use `--runs 7 --warmups 1 --csv ... --json ...`; o JSON registra a
 proveniência do host e das ferramentas, e o CSV registra hashes e medições.
 As tabelas históricas medem v2.65.10 em 06/09/2026; não representam tempos do
-v2.65.11. Separadamente,
+v2.65.12. Separadamente,
 o microbenchmark interno de alocação do v2.65.10 contra v2.65.9 mediu +32,3%
 em texto fast de 1 KiB e +17,2%/+39,6% em dados aleatórios de 1 MiB nos modos
 fast/balanced, com saída comprimida idêntica. A remoção do hash4 não utilizado
@@ -218,10 +222,11 @@ e limites estão em [INTEGRATION.md](INTEGRATION.md#caller-owned-fast-contexts-d
 
 ## Prontidão para o kernel Linux
 
-O v2.65.11 não está pronto para inclusão upstream. A licença pública
-GPL-3.0-or-later não satisfaz a exigência de compatibilidade com GPL-2.0-only.
-Uma eventual opção compatível exige autorização de quem detém todos os
-direitos necessários; nenhuma alteração de licença foi feita. Consulte as
+O v2.65.12 não está pronto para inclusão upstream. O projeto agora usa
+Apache-2.0 para o material de autoria própria, mas Apache-2.0-only não fornece
+por si só uma licença compatível com a árvore GPL-2.0-only do Linux. Uma
+eventual licença adicional compatível exige autorização de quem detém todos os
+direitos necessários. Consulte as
 [regras de licença do kernel](https://docs.kernel.org/process/license-rules.html).
 
 Também faltam a substituição das dependências de libc/alocação, limites
@@ -256,5 +261,9 @@ e [envio de patches](https://docs.kernel.org/process/submitting-patches.html).
 
 Veja [SECURITY.md](SECURITY.md) para o threat model completo e
 [INTEGRATION.md](INTEGRATION.md) para recomendações de AEAD, streaming e
-multi-thread. O artefato de distribuição atual é somente o arquivo-fonte
-`vaptvupt-2.65.11-src.tar.gz`; não inclua material interno no archive.
+multi-thread. O artefato de distribuição atual é
+`vaptvupt-codec-2.65.12.zupt`, criado a partir da tag assinada com
+`zupt compress --vv -l 9`. Valide com `zupt test`, confira `SHA256SUMS` e
+extraia com `zupt extract -o DIRETÓRIO ARQUIVO.zupt`. O pacote não é
+criptografado e não deve conter material interno. Arquivos `.tar.gz` de
+releases antigos permanecem publicados, sem alteração.

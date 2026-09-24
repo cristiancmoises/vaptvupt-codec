@@ -10,16 +10,17 @@ byte-identical output and sanitizer-clean corrupt-input handling. The C decoder
 remains canonical for the full legacy H/A/I/C entropy surface; Python retains
 limited A-tag coverage, while JavaScript intentionally omits legacy tags.
 
-Version 2.65.11. The codec library and CLI are available under
-GPL-3.0-or-later or, for controlled first-party rights, a separate signed
-commercial agreement. The broader VaptVupt application uses a distinct AGPL
-public option. See `NOTICE`; `LICENSE-COMMERCIAL` is not itself a grant.
+Version 2.65.12. Copyright 2026 Cristian Cezar Moisés. The first-party codec
+library, CLI, tests, and documentation are licensed under Apache-2.0. The
+XXH64-derived implementation retains its BSD-2-Clause notice; see `NOTICE`.
 
 ## Where it stands
 
-v2.65.11 reduces fast-mode setup work for inputs up to 4 KiB while preserving
-the full hash mapping, adds caller-owned workspaces for Huffman/ANS literal
-decoding, and provides an explicitly scalar build. Fast mode now ignores
+v2.65.12 changes licensing and release packaging without changing codec
+behavior or the wire format. It retains the v2.65.11 work that reduced
+fast-mode setup for inputs up to 4 KiB while preserving the full hash mapping,
+added caller-owned workspaces for Huffman/ANS literal decoding, and provided an
+explicitly scalar build. Fast mode ignores
 `format_v2`, because its plain tokens require a minimum match length of four;
 the previous combination could produce corrupt output. Frame footer capacity,
 checksum tails, decoder spans, and both AVX2 prefetch histories are checked
@@ -93,7 +94,7 @@ gcc 14.3, pinned to core 2. Each cell is the median of 7 measured runs after
 1 warm-up; zstd 1.5.6 ran single-threaded and lz4 is 1.10. Every decode was
 verified against the generated input by SHA-256. Cells are
 `ratio @ encode/decode MB/s`; ratio = raw / compressed.
-These are historical v2.65.10 timings, not measurements of v2.65.11.
+These are historical v2.65.10 timings, not measurements of v2.65.12.
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
@@ -183,6 +184,9 @@ suite above.
 
 Recent releases, newest first:
 
+- **v2.65.12** — relicense first-party work under Apache-2.0, preserve the
+  XXH64-derived BSD-2-Clause notice, and distribute new source releases as
+  signed-tag `.zupt` packages. Codec behavior and the wire format are unchanged.
 - **v2.65.11** — fast one-shot inputs up to 4 KiB initialize only reachable
   hash buckets and use a smaller match chain, preserving the 18-bit hash
   mapping. Fast mode keeps plain-token minimum matches at four even when
@@ -328,6 +332,33 @@ make scalar-test          # general-register-only core, userspace tests
 
 Debian/Ubuntu: `apt install build-essential`. Arch: `pacman -S base-devel`.
 Fedora: `dnf install gcc make`. The build uses only the C standard library.
+
+## Release package
+
+New releases are distributed as `vaptvupt-codec-<version>.zupt` archives.
+They are source packages created from the signed tag with Zupt's VaptVupt
+backend at maximum compression. Existing `.tar.gz` assets from older releases
+remain available and are not renamed or removed.
+
+With Zupt 5.2.9 or later, inspect, verify, and extract a package as follows:
+
+```sh
+zupt list vaptvupt-codec-2.65.12.zupt
+zupt test vaptvupt-codec-2.65.12.zupt
+zupt extract -o ./vaptvupt-codec-2.65.12 \
+  vaptvupt-codec-2.65.12.zupt
+```
+
+For maintainers, maximum compression is selected explicitly:
+
+```sh
+zupt compress --vv -l 9 vaptvupt-codec-2.65.12.zupt \
+  vaptvupt-codec-2.65.12/
+```
+
+The release archive is not encrypted. Verify its `SHA256SUMS` entry and the
+signed Git tag before building. The package is a Zupt archive container, not a
+single raw `.zupt` codec frame produced by the `vaptvupt` CLI.
 
 ## Use
 
@@ -583,9 +614,10 @@ verification/ CBMC formal-verification harnesses for the BCJ filters
 
 ## License
 
-This repository's first-party codec library and CLI are available under
-GPL-3.0-or-later or a separate written commercial agreement signed by the
-applicable copyright holder and licensee. The public commercial notice does
-not grant proprietary rights, and separately noticed/generated material keeps
-its own license. The broader VaptVupt tool uses an AGPL public option with its
-own commercial path. Contact `sac@securityops.co`. "In Code We Trust."
+Copyright 2026 Cristian Cezar Moisés.
+
+The first-party source and documentation are licensed under the Apache License,
+Version 2.0. See [LICENSE](LICENSE). `src/vv_xxh64.c` is derived from xxHash and
+remains under BSD-2-Clause; its attribution and terms are preserved in
+[NOTICE](NOTICE). Files with a different SPDX identifier remain under the
+license stated in that file. "In Code We Trust."

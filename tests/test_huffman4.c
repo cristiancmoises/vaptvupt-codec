@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  *
  * test_huffman4.c — Sprint 103 Phase A unit tests for vvh_encode4.
  *

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  * Caller-owned entropy tables and SEQ scratch-lifetime regression tests.
  * Define VV_TEST_ALLOC_WRAP and link --wrap=malloc/calloc/realloc/free to
  * prove workspace calls allocate nothing and SEQ decoding allocates once.

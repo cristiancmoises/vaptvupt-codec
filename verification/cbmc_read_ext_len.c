@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * CBMC harness: the decoder's variable-length integer reader must never read
  * past the end of the input buffer, for any buffer contents and any starting

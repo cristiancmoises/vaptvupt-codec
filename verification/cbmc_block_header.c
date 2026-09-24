@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * CBMC harness: the 32-bit block-header pack/unpack is a faithful, lossless
  * round trip over the full valid field domain (type in 0..3, last in 0..1,

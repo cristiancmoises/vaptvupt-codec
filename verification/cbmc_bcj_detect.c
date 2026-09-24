@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * CBMC harness: vv_bcj_detect must never read outside data[0..size), for any
  * size and any contents — including the computed PE-header offset, which is

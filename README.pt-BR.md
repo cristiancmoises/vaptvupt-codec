@@ -2,17 +2,23 @@
 
 Codec de compressão LZ + tANS em C11, sem dependências de runtime de terceiros, com
 formato aberto e decodificadores de referência em Python e JavaScript que
-reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.11**.
+reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.12**.
+
+Copyright 2026 Cristian Cezar Moisés. O codec, a CLI, os testes e a
+documentação de autoria própria são licenciados sob Apache-2.0. A implementação
+derivada de XXH64 preserva a licença BSD-2-Clause; consulte `NOTICE`.
 
 Leia também a [documentação técnica em português](DOCUMENTACAO.pt-BR.md) e a
 [documentação normativa em inglês](FORMAT.md). **[English README](README.md)**.
 
 ## Situação atual
 
-O v2.65.11 reduz o trabalho inicial do modo fast em entradas de até 4 KiB,
-mantendo o mapeamento hash completo, oferece workspaces do chamador para
-decodificação literal Huffman/ANS e inclui uma compilação explicitamente
-escalar. Fast agora ignora `format_v2`: seus tokens simples exigem matches
+O v2.65.12 altera a licença e o empacotamento do release, sem mudar o
+comportamento do codec nem o formato no fio. Ele preserva o trabalho do
+v2.65.11, que reduziu a inicialização do modo fast em entradas de até 4 KiB,
+manteve o mapeamento hash completo, ofereceu workspaces do chamador para
+decodificação literal Huffman/ANS e incluiu uma compilação explicitamente
+escalar. Fast ignora `format_v2`: seus tokens simples exigem matches
 mínimos de quatro bytes, e a combinação anterior podia gerar saída corrompida.
 Capacidade do footer, caudas do checksum, spans do decoder e os dois históricos
 de prefetch AVX2 são validados antes de avançar ou formar os ponteiros;
@@ -88,7 +94,7 @@ fixada no core 2. Cada célula é a mediana de 7 execuções após 1 aquecimento
 zstd 1.5.6 usou uma thread e lz4 é 1.10. Todas as saídas decodificadas foram
 verificadas por SHA-256. As células mostram
 `razão @ compressão/decodificação MB/s`.
-São tempos históricos do v2.65.10, não medições do v2.65.11.
+São tempos históricos do v2.65.10, não medições do v2.65.12.
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
@@ -167,9 +173,36 @@ antes de aceitar dados não confiáveis.
 e executa onze suites em userspace; a biblioteca C do sistema continua sendo
 usada. Não é um build de kernel nem uma aprovação dos limites de stack.
 
+## Pacote do release
+
+Novos releases são distribuídos como `vaptvupt-codec-<versão>.zupt`. O pacote
+de fontes é criado a partir da tag assinada, usando o backend VaptVupt do Zupt
+no nível máximo de compressão. Os arquivos `.tar.gz` de releases antigos
+continuam disponíveis e não são renomeados nem removidos.
+
+Com Zupt 5.2.9 ou mais recente, inspecione, valide e extraia o pacote assim:
+
+```sh
+zupt list vaptvupt-codec-2.65.12.zupt
+zupt test vaptvupt-codec-2.65.12.zupt
+zupt extract -o ./vaptvupt-codec-2.65.12 \
+  vaptvupt-codec-2.65.12.zupt
+```
+
+O comando equivalente para criar o pacote com compressão máxima é:
+
+```sh
+zupt compress --vv -l 9 vaptvupt-codec-2.65.12.zupt \
+  vaptvupt-codec-2.65.12/
+```
+
+O pacote não é criptografado. Confira a entrada em `SHA256SUMS` e a tag Git
+assinada antes de compilar. Este arquivo é um contêiner de archive do Zupt,
+não um único frame bruto criado pela CLI `vaptvupt`.
+
 ## Segurança e integração
 
-No v2.65.11, os helpers literais Huffman/ANS de um e quatro streams aceitam
+Desde o v2.65.11, os helpers literais Huffman/ANS de um e quatro streams aceitam
 workspaces exclusivos do chamador, com consultas de tamanho/alinhamento. Os
 blocos S/T reutilizam a arena de 48 KiB das tabelas de sequência durante a
 decodificação literal. Isso elimina essa alocação de tabela, não todas as
@@ -229,5 +262,9 @@ aprovação formal dessa implementação; testes de regressão e sanitizers são
 evidência atual. O escopo histórico está em
 [verification/README.md](verification/README.md).
 
-Licença: GPL-3.0-or-later para a biblioteca. Consulte `NOTICE` e
-`LICENSE-COMMERCIAL` para escopo comercial.
+Copyright 2026 Cristian Cezar Moisés.
+
+O código e a documentação de autoria própria são licenciados sob Apache-2.0;
+consulte `LICENSE`. `src/vv_xxh64.c` deriva do xxHash e permanece sob
+BSD-2-Clause, com atribuição e termos preservados em `NOTICE`. Arquivos com
+outro identificador SPDX permanecem sob a licença indicada neles.

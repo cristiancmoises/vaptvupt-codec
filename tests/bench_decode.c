@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  *
  * In-process decode-speed benchmark. Eliminates process-startup
  * overhead so we measure the actual decoder hot path.

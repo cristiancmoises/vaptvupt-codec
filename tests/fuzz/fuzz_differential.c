@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  *
  * libFuzzer harness for differential testing: stateless decoder
  * (vv_decompress) vs streaming decoder (vv_dstream_*).

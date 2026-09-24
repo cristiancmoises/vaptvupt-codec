@@ -1,18 +1,33 @@
-VaptVupt Codec licensing notice
-================================
+VaptVupt Codec
+Copyright 2026 Cristian Cezar Moisés
 
-VaptVupt Codec first-party source is available under
-GPL-3.0-or-later or a separate commercial agreement signed by the applicable
-copyright holder and licensee. The complete GPL text is in LICENSE and
-LICENSE-GPL-3.0.
+The first-party source and documentation are licensed under the Apache
+License, Version 2.0. See LICENSE. Files carrying a different SPDX identifier
+remain under the license stated in that file.
 
-LICENSE-COMMERCIAL is an inquiry and scope notice, not a public commercial
-license grant. Per-file SPDX and copyright notices control the scope.
-Dependencies, generated material, test corpora, and separately noticed files
-retain their own licenses.
+The XXH64 implementation in src/vv_xxh64.c is derived from xxHash:
 
-The codec's GPL choice is deliberate and differs from the AGPL public option
-used by the broader VaptVupt application. Packaging them together does not
-erase that boundary.
+xxHash Library
+Copyright (c) 2012-2021 Yann Collet
+All rights reserved.
 
-Commercial licensing contact: sac@securityops.co
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

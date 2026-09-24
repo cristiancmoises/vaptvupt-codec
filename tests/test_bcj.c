@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  * BCJ filters (x86 + AArch64): standalone reversibility, full
  * compress/decompress roundtrip, and corrupt-input safety. */
 #include "vaptvupt.h"

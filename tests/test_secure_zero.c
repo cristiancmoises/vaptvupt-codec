@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * test_secure_zero — exercise every encoder cleanup path that invokes the
  * secure wipe helper before freeing plaintext-bearing scratch.
