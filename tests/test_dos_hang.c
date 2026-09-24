@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  *
  * test_dos_hang.c — regression test for Sprint 89/90 DoS vulnerability.
  *

@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 #
 # OOM-robustness sweep. Fails each allocation site in vv_compress and
 # vv_decompress in turn (via tests/oom_inject.c under LD_PRELOAD) and asserts

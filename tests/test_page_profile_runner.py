@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Synthetic evidence checks only; this test neither compiles nor benchmarks."""
 import copy
 import csv

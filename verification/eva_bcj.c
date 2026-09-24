@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  * Frama-C/Eva + RTE: the BCJ filters and the header detector raise no runtime
  * error (no invalid pointer access, no out-of-bounds, no UB) over
  * nondeterministic buffer contents and lengths. This is an abstract-

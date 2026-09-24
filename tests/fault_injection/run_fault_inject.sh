@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Allocation-fault injection regression harness.
 # Sprint 100: validates that VaptVupt handles malloc failures cleanly
 # (no crashes, no UB, no leaks) across encode/decode/MT paths.

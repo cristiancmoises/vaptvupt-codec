@@ -1,14 +1,18 @@
 # VaptVupt Security Posture
 
-**Document version**: 2.16 (v2.65.11)
-**Codebase audited**: v2.65.11 release delta, subject to the evidence scope below
-**License**: GPL-3.0-or-later (codec library; the VaptVupt tool is dual-licensed AGPL-3.0 + commercial)
+**Document version**: 2.16 (v2.65.12)
+**Codebase audited**: v2.65.12 release delta, subject to the evidence scope below
+**License**: Apache-2.0 for first-party work; BSD-2-Clause for the XXH64-derived file
 **Intended deployment**: Embedded codec library inside VaptVupt secure backup tool
 **Companion crypto library**: libpqvaptvupt v0.5.1 (post-quantum sealed-box)
 
 ---
 
-## v2.65.11 scope and kernel-port limitations
+## v2.65.12 scope and kernel-port limitations
+
+v2.65.12 changes licensing and release packaging only. It does not change the
+codec implementation or expand the security evidence. The checks below are
+retained from v2.65.11.
 
 Small fast-mode inputs initialize only the hash buckets their positions can
 reach. The full-width hash is unchanged, and the shortened circular chain
@@ -32,8 +36,9 @@ registers only, then runs userspace regressions. Compiler flags, external libc
 routines, stack limits, and allocator behavior remain the integrator's concern.
 The default x86-64 build uses inline AVX2 and requires an AVX2-capable host.
 
-This release is not a Linux kernel port. GPL-3.0-or-later licensing, userspace
-allocation/headers, remaining large stack frames, and unverified kernel
+This release is not a Linux kernel port. Apache-2.0-only is not sufficient for
+import into Linux's GPL-2.0-only tree; userspace allocation/headers, remaining
+large stack frames, and unverified kernel
 execution contexts block direct inclusion. See [INTEGRATION.md](INTEGRATION.md)
 for the requirements and submission boundary. No new formal-proof claim is
 made for the new workspace or sparse-initialization code.
@@ -884,4 +889,8 @@ document does not publish a project-specific PGP key.
 
 ## 11. License Note
 
-VaptVupt is GPL-3.0-or-later. Audit infrastructure (libFuzzer harnesses, regression reproducers, fault-injection scripts) is included in the source tree under the same license, allowing downstream users to run the same audit campaign on modifications.
+Copyright 2026 Cristian Cezar Moisés. First-party codec and audit sources are
+Apache-2.0. `src/vv_xxh64.c` retains its BSD-2-Clause notice and attribution in
+`NOTICE`. These grants let downstream users run the same audit campaign on
+modifications; they do not replace the integration and threat-model limits
+documented above.

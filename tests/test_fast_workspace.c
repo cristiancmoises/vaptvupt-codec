@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  * Caller-owned FAST context: legacy byte parity, reuse and checked ownership.
  * Define VV_TEST_ALLOC_WRAP and link --wrap=malloc/calloc/realloc/free for
  * zero-allocation checks. The counters and probe pointers remain observable

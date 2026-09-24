@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  * Exact-endpoint coverage for decoder framing, lengths and lookahead.
  *
  * One-shot calls use exact-sized input/output allocations (or a one-past

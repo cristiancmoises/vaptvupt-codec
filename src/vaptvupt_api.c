@@ -1,7 +1,7 @@
 /*
  * VaptVupt — VaptVupt Integration API Implementation
- * SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright 2026 Cristian.
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 Cristian Cezar Moisés.
  *
  * EMBED-COMPAT: thin wrapper over vv_compress/vv_decompress with
  * backup-optimized defaults. Decode speed prioritized over encode.

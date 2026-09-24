@@ -7,7 +7,7 @@ input). They are small, pure or bounded, which makes them tractable to verify
 rather than merely fuzz. This directory contains CBMC harnesses that
 machine-check their safety and correctness.
 
-## v2.65.11 currency and scalar portability gate
+## v2.65.12 currency and scalar portability gate
 
 `make scalar-test` builds all core translation units with
 `VV_DISABLE_SIMD=1`, `-ffreestanding`, `-fno-builtin`, and
@@ -25,8 +25,9 @@ that switch alone does not disable compiler auto-vectorization.
 Current delta checks cover sparse matcher initialization, fast-mode format
 selection and entropy workspaces. These are dynamic regressions. The formal
 harnesses have not changed, and the v2.65.10 proof-currency limitation below
-remains in force. No Linux kernel acceptance or new formal certification is
-claimed.
+remains in force. v2.65.12 changes licensing and release packaging only; it
+does not expand the formal evidence. No Linux kernel acceptance or new formal
+certification is claimed.
 
 ## v2.65.10 currency and scope (historical)
 

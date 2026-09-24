@@ -1,7 +1,7 @@
 /*
  * VaptVupt — VaptVupt Integration API
- * SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright 2026 Cristian.
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 Cristian Cezar Moisés.
  *
  * EMBED-COMPAT: This is the API that a host application calls. It wraps the internal
  * VaptVupt API with sensible defaults for backup workloads:

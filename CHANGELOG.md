@@ -2,6 +2,23 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.12 — Apache licensing and Zupt release packages
+
+This release changes distribution metadata and documentation; it does not
+change the codec wire format or compression behavior.
+
+- License first-party source, tests, and documentation under Apache-2.0 with
+  `Copyright 2026 Cristian Cezar Moisés`. Preserve the BSD-2-Clause license and
+  attribution for the XXH64-derived implementation in `src/vv_xxh64.c` and
+  `NOTICE`.
+- Publish new source packages as unencrypted `.zupt` archives created from the
+  signed tag with `zupt compress --vv -l 9`. Existing `.tar.gz` assets from
+  older releases remain unchanged.
+- Document package listing, integrity testing, extraction, checksums, signed
+  commits, and signed tags in English and Brazilian Portuguese.
+- Keep the Linux licensing gate explicit: Apache-2.0-only does not by itself
+  provide GPL-2.0-only-compatible rights for importing code into Linux.
+
 ## v2.65.11 — Sprint 141: page-sized setup, entropy workspace reuse and scalar builds
 
 This release improves small-input encoding and makes entropy-table ownership

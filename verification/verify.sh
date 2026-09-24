@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 #
 # Machine-checked verification of the BCJ branch filters with CBMC
 # (https://www.cprover.org/cbmc/). Proves, by bounded model checking over

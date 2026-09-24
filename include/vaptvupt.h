@@ -2,8 +2,8 @@
  * VaptVupt Codec — Next-generation lossless compression
  * Public API and data structures
  *
- * SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright 2026 Cristian.
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 Cristian Cezar Moisés.
  * Zero dependencies. Pure C11.
  */
 #ifndef VAPTVUPT_H
@@ -23,8 +23,8 @@ extern "C" {
 
 #define VV_VERSION_MAJOR  2
 #define VV_VERSION_MINOR  65
-#define VV_VERSION_PATCH  11
-#define VV_VERSION_STRING "2.65.11"
+#define VV_VERSION_PATCH  12
+#define VV_VERSION_STRING "2.65.12"
 
 #define VV_MAGIC          0x56560100u  /* "VV\x01\x00" */
 #define VV_MAX_BLOCK_SIZE (1u << 20)   /* 1 MB per block */

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  *
  * reference_decode_check.js <compressed.vv> <expected_plain>
  *

@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  *
  * test_api_contract.c — public API contract tests.
  *

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * encode_compat: small C wrapper around vv_compress() that sets
  * `vv_options_t::compat_v246_5_decoder = 1` to suppress lit_fmt=4

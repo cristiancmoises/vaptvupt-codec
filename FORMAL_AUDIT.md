@@ -1,10 +1,10 @@
 # VaptVupt Formal Audit Document
 
 **Document version**: 1.5
-**Codebase audit scope**: v2.65.11 release delta (regression/dynamic validation)
+**Codebase audit scope**: v2.65.12 release delta (regression/dynamic validation)
 **Formal evidence baseline**: inherited historical results, with original
-versions and bounds recorded below; no full formal-tool rerun for v2.65.11
-**License**: GPL-3.0-or-later
+versions and bounds recorded below; no full formal-tool rerun for v2.65.12
+**License**: Apache-2.0 for first-party work; BSD-2-Clause for the XXH64-derived file
 **Intended deployment**: Embedded codec library inside the VaptVupt secure backup tool, plus general-purpose use as a zstd/lz4 alternative
 
 This document is the formal audit reference for VaptVupt. It specifies what has been verified, by which mechanism, against what threat model, with what limits. It is intended to satisfy the due-diligence requirements of:
@@ -16,7 +16,11 @@ This document is the formal audit reference for VaptVupt. It specifies what has 
 
 It is intentionally specific about what is **not** verified, to support honest risk assessment.
 
-## v2.65.11 delta-validation scope
+## v2.65.12 delta-validation scope
+
+v2.65.12 changes licensing and release packaging only. It does not change the
+codec implementation or expand the formal evidence. The following v2.65.11
+checks remain the current implementation evidence.
 
 Sparse small-input matcher initialization is checked against full-matcher
 output and with MemorySanitizer, including exact-sized buffers. Fast-mode
@@ -31,7 +35,7 @@ kernel stack budget, a kernel build, all architectures, or allocation-free
 framed decoding. Linux integration also requires compatible licensing and
 human review of the contribution. No kernel submission is certified here.
 
-The existing formal harnesses are unchanged in v2.65.11. The v2.65.10 reader
+The existing formal harnesses are unchanged in v2.65.12. The v2.65.10 reader
 exception below still applies; CBMC/Frama-C results are not inferred from
 compiler or sanitizer success.
 
@@ -406,9 +410,10 @@ A missing tool or skipped target must be reported, not counted as a pass.
 
 ## 6. Reporting Vulnerabilities
 
-Report security issues via the contact in `SECURITY.md`. The codec is
-GPL-3.0-or-later; downstream projects building on it inherit the GPL
-obligations. The project does not advertise a paid bug-bounty program.
+Report security issues via the contact in `SECURITY.md`. First-party work is
+Apache-2.0, while the XXH64-derived file retains BSD-2-Clause terms and
+attribution in `NOTICE`. The project does not advertise a paid bug-bounty
+program.
 
 A vulnerability is defined as: any input that causes the *decoder* (one-shot or streaming) to:
 

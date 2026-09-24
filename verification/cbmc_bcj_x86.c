@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * CBMC harness: machine-checked proofs for the x86 BCJ filter.
  *   1. Memory safety: vv_bcj_x86 never accesses outside data[0..size).

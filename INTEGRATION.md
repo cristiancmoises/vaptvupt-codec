@@ -8,7 +8,7 @@ threat-model boundary. Numbers here point to measured data, not headline
 claims — see `bench/COMPARISON.md` for the page-sized one-shot API harness,
 paired encoder measurements, and separately labeled historical CLI/corpus data.
 
-Release alignment: **v2.65.11**. The wire layout is unchanged from v2.65.10;
+Release alignment: **v2.65.12**. The wire layout is unchanged from v2.65.10;
 valid encoded streams remain compatible. Malformed token extensions, offsets
 beyond the declared window, invalid ANS normalization and truncated Huffman
 bitstreams are rejected. Changing the streaming encoder's `format_v2` through
@@ -20,10 +20,12 @@ length before advancing a pointer. Both AVX2 prefetch phases validate literal
 capacity and match history before forming their lookahead pointer, and
 `vv_xxh64(NULL, 0, ...)` is accepted without null-pointer arithmetic.
 
-License: this codec library is GPL-3.0-or-later. Zupt is a separate userspace
-consumer, not a former name for this library or an interchangeable checkout
-of the broader VaptVupt application. A kernel adaptation belongs in
-vaptvupt-linux; Zupt does not require a kernel module to keep working.
+Copyright 2026 Cristian Cezar Moisés. First-party code and documentation use
+Apache-2.0; the XXH64-derived implementation retains BSD-2-Clause attribution
+in `NOTICE`. Zupt is a separate userspace consumer, not a former name for this
+library or an interchangeable checkout of the broader VaptVupt application. A
+kernel adaptation belongs in vaptvupt-linux; Zupt does not require a kernel
+module to keep working.
 
 ---
 
@@ -256,10 +258,10 @@ and `verification/README.md`.
 
 ## Linux kernel readiness
 
-v2.65.11 is not ready for upstream kernel inclusion. The public
-GPL-3.0-or-later license does not provide the GPL-2.0-only-compatible rights
-required for kernel code. A compatible licensing option needs authorization
-from all relevant rights holders; the release changes no license. See the
+v2.65.12 is not ready for upstream kernel inclusion. Apache-2.0-only does not
+by itself provide the GPL-2.0-only-compatible rights required for code imported
+into Linux. A compatible additional grant needs authorization from all
+relevant rights holders. See the
 [kernel licensing rules](https://docs.kernel.org/process/license-rules.html).
 
 The implementation still depends on libc and dynamic allocation. Heap and

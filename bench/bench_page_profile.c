@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * Userspace page profiles. Individual calls provide latency samples; separate
  * batches provide throughput. Neither is a kernel or consumer benchmark.

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later
+/* SPDX-License-Identifier: Apache-2.0
  *
  * Round-trip regression test for the JavaScript reference decoder
  * against C-encoded frames covering the `lit_fmt = 3` (single-stream

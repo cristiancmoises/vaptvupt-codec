@@ -4,7 +4,7 @@
  * Validates: hash4 binary ratio, specialized decode paths, SSE2 fallback,
  * portability (no __builtin_ in core), fuzz robustness, backward compat.
  *
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "vaptvupt.h"

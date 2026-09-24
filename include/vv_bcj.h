@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: Apache-2.0
  * VaptVupt — BCJ branch filters (see src/vv_bcj.c).
  *
  * Reversible, architecture-specific branch converters that improve the
