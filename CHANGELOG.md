@@ -2,6 +2,25 @@
 
 All notable changes to VaptVupt are documented in this file.
 
+## v2.65.13 — Bound small-input matcher preparation in all modes
+
+- Extend reachable-root initialization and input-sized match chains to
+  balanced/extreme one-shot inputs through 4096 bytes. Extreme's first-block
+  optimal-parse prepass now uses the same no-history setup.
+- Size optional hash3 chains from the matcher's actual circular capacity,
+  rather than the advertised file-compression window. Streaming keeps its
+  full-history allocation and reset behavior.
+- Treat NULL, zero-length one-shot inputs as no-history setup, avoiding the
+  previous 64 MiB chain request at window log 24. Add a reproducing allocation
+  limit case; the error under that limit becomes a valid empty frame.
+- Add 432 allocator-limit cases and extend exact one-shot/streaming byte
+  parity to all modes. Cross-version validation preserved 6,480 complete
+  frames and passed 25,920 old/new decoder combinations, with misaligned
+  buffers and explicit option/filter combinations.
+- Keep the wire grammar, public interfaces, first-party Apache-2.0 license,
+  and XXH64-derived BSD-2-Clause notices unchanged. This is not a kernel port
+  or evidence of a general advantage over LZ4/Zstd.
+
 ## v2.65.12 — Apache licensing and Zupt release packages
 
 This release changes distribution metadata and documentation; it does not
@@ -4670,7 +4689,7 @@ $ node reference/test_lit_fmt_3.js
 Running 10 round-trip tests for `lit_fmt = 3` (JavaScript reference)...
 
   PASS tiny_repetitive_300B: 300 → 44 bytes (14.7%)
-  PASS medium_text_4kb: 4050 → 101 bytes (2.5%)
+  PASS medium_text_4kb: 4320 → 101 bytes (2.5%)
   PASS large_text_64kb: 65548 → 94 bytes (0.1%)
   PASS 256_byte_ramp: 256 → 288 bytes (112.5%)
   PASS 100kb_repeating_phrase: 99990 → 134 bytes (0.1%)
@@ -4783,7 +4802,7 @@ $ python3 reference/test_lit_fmt_3.py
 Running 10 round-trip tests for `lit_fmt = 3`...
 
   PASS tiny_repetitive_300B: 300 → 44 bytes (14.7%)
-  PASS medium_text_4kb: 4050 → 101 bytes (2.5%)
+  PASS medium_text_4kb: 4320 → 101 bytes (2.5%)
   PASS large_text_64kb: 65548 → 94 bytes (0.1%)
   PASS 256_byte_ramp: 256 → 288 bytes (112.5%)
   PASS 100kb_repeating_phrase: 99990 → 134 bytes (0.1%)
@@ -9608,7 +9627,7 @@ decode including frame setup) confirms gains across the board:
 | json-1MB | 304.8 | 346.0 | +14% |
 | source-1MB | 1,090.5 | 1,281.1 | +18% |
 | random-1MB | 1,087.1 | 1,205.5 | +11% |
-| binary-1MB | 1,296.0 | 1,405.0 | +8% |
+| binary-1MB | 1,296.0 | 1,432.0 | +8% |
 | repeating-1MB | 1,025.7 | 1,108.8 | +8% |
 
 ### Test Suite — Still 6,263 / 0 / 0

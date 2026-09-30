@@ -6,7 +6,91 @@ machine noted below; none is aspirational. Where VaptVupt loses, the table
 says so. This document exists to keep the project honest about where it
 stands, per the project's "honesty over hype" rule.
 
-## Current scalar page profile (measured 2026-09-06)
+## v2.65.13 one-shot and small-input measurements (2026-09-30)
+
+Canonical baseline: v2.65.12, `649f98bc904b85caaf428ab9afd0448544b58e3d`.
+Candidate: the v2.65.13 small-input matcher changes. GCC 14.3.0 used
+`-O3 -flto -std=c11 -D_POSIX_C_SOURCE=200809L -DVV_DISABLE_SIMD=1` for both
+complete codec builds. Intel i7-13700HX, Linux 7.2.8, CPU 4 affinity,
+`intel_pstate`/`powersave`, SMT enabled. Other host workloads were not disabled;
+consumer builds were delayed or pinned away from CPU 4/16 during the paired
+run. Timing uses CLOCK_MONOTONIC with repeated cache-warm synthetic inputs.
+
+`bench/bench_encode.c` calibrates each batch to at least 80 ms. Five alternating
+old/new pairs cover 64/256/4096/4097 bytes, balanced/extreme and three fixtures.
+Every timed call starts an independent one-shot frame, includes internal
+allocation/initialization/checksum, and excludes caller buffer allocation.
+Columns are median amortized microseconds per call; the percentage is the
+median *paired* latency change, so it need not equal the ratio of the two
+independent medians. Sizes and frame fingerprints match in every pair.
+
+| Bytes | Mode | Fixture | Old µs | New µs | Paired latency change | New faster pairs |
+|---:|---|---|---:|---:|---:|---:|
+| 64 | balanced | varying words | 230.002 | 214.627 | −6.72% | 5/5 |
+| 64 | balanced | random | 169.777 | 154.418 | −9.05% | 5/5 |
+| 64 | balanced | periodic | 230.749 | 214.301 | −6.94% | 5/5 |
+| 64 | extreme | varying words | 687.826 | 300.686 | −56.27% | 5/5 |
+| 64 | extreme | random | 629.105 | 236.719 | −62.39% | 5/5 |
+| 64 | extreme | periodic | 687.912 | 286.926 | −58.25% | 5/5 |
+| 256 | balanced | varying words | 169.811 | 154.640 | −8.87% | 5/5 |
+| 256 | balanced | random | 179.319 | 165.107 | −7.81% | 5/5 |
+| 256 | balanced | periodic | 168.599 | 153.377 | −9.03% | 5/5 |
+| 256 | extreme | varying words | 629.031 | 278.838 | −55.67% | 5/5 |
+| 256 | extreme | random | 639.461 | 404.170 | −36.75% | 5/5 |
+| 256 | extreme | periodic | 641.953 | 240.692 | −62.52% | 5/5 |
+| 4096 | balanced | varying words | 197.323 | 192.084 | −2.65% | 5/5 |
+| 4096 | balanced | random | 179.385 | 176.986 | −1.29% | 5/5 |
+| 4096 | balanced | periodic | 168.017 | 163.557 | −2.52% | 5/5 |
+| 4096 | extreme | varying words | 1503.774 | 1157.818 | −22.84% | 5/5 |
+| 4096 | extreme | random | 723.803 | 643.289 | −11.18% | 5/5 |
+| 4096 | extreme | periodic | 644.117 | 257.555 | −59.99% | 5/5 |
+| 4097 | balanced | varying words | 200.455 | 199.195 | −0.63% | 4/5 |
+| 4097 | balanced | random | 295.635 | 298.668 | +1.03% | 1/5 |
+| 4097 | balanced | periodic | 168.767 | 168.976 | −0.11% | 3/5 |
+| 4097 | extreme | varying words | 1497.949 | 1444.738 | −3.73% | 5/5 |
+| 4097 | extreme | random | 827.574 | 823.591 | −0.48% | 4/5 |
+| 4097 | extreme | periodic | 642.705 | 634.873 | −1.36% | 5/5 |
+
+The 4097-byte controls do not use the new bounded setup. They include a 1.03%
+balanced random-input loss in four of five pairs and are not evidence of an
+optimization above the cutoff. An earlier run, before final empty-input
+handling, recorded a 9.79% extreme periodic-input loss at 4097 bytes and
+smaller balanced gains at 4096 bytes. Its raw log is retained separately;
+host/whole-binary timing is not isolated to the changed lines. The substantial
+results are concentrated in extreme's prepass.
+
+The separate `bench/bench_pages.c --samples 5 --min-ms 50` comparison covers
+60 profiles (4/16/64 KiB, text/records/random/repeating, five one-shot APIs).
+Three warmup calls precede calibrated batches of at least 50 ms; reported
+throughput is the median of five batches. LZ4 1.10.0 uses raw blocks without
+checksum; Zstd 1.5.7 levels 1/3 use frames with checksum disabled; VaptVupt
+uses v1 frames with XXH64 enabled. Installed competitor optimizations are
+retained. Do not confuse these results with reused-context or kernel latency.
+Current 4 KiB text numbers are reproduced in both READMEs. LZ4 is faster;
+Zstd achieves a stronger ratio. LZO-RLE was unavailable (`NOT_RUN`). No kernel
+runtime, reclaim or total-RAM comparison was performed.
+
+Raw `encode-pairs.csv/json`, `page-profile.csv`, `compatibility.csv/json`,
+build commands and fixture/frame hashes are retained outside the repository
+and intended as release evidence. The compatibility matrix uses 18 sizes,
+three fixtures, three modes, four windows and ten option variants: 6,480
+byte-identical frames and 25,920 cross-version decoder checks, with misaligned
+buffers. The allocation regression adds 432 combinations with every
+individual request bounded to 1 MiB; this is not a total-memory measurement.
+
+To reproduce the one-shot comparison with LZ4/Zstd discoverable by pkg-config:
+
+```sh
+gcc -O3 -flto -std=c11 -D_POSIX_C_SOURCE=200809L -DVV_DISABLE_SIMD=1 \
+  -Iinclude $(pkg-config --cflags liblz4 libzstd) bench/bench_pages.c \
+  src/vv_encoder.c src/vv_decoder.c src/vv_simd.c src/vv_xxh64.c \
+  src/vv_huffman.c src/vv_ans.c src/vv_bcj.c src/vaptvupt_api.c \
+  $(pkg-config --libs liblz4 libzstd) -o /path/outside/repository/bench-pages
+taskset -c 4 /path/outside/repository/bench-pages --samples 5 --min-ms 50 \
+  > /path/outside/repository/page-profile.csv
+```
+
+## Historical scalar context profile (measured 2026-09-06)
 
 Commit `a14e09f` was measured by `bench/run_page_profile.py` in one pinned
 userspace process on CPU 4. The VaptVupt objects use `VV_DISABLE_SIMD`, no
@@ -332,7 +416,7 @@ They remain historical v2.65.10 timings, not measurements of v2.65.11.
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
 | text.txt | 3.707 @141.3/397.5 | 7.055 @62.3/346.3 | 2.907 @280.6/381.4 | 5.768 @202.5/346.2 | 6.198 @185.6/356.1 |
-| records.jsonl | 3.142 @138.8/419.6 | 5.707 @53.8/353.6 | 3.505 @285.5/405.4 | 7.071 @216.8/344.5 | 6.521 @187.6/339.2 |
+| records.jsonl | 3.142 @138.8/419.6 | 5.707 @53.8/353.6 | 3.505 @285.5/432.4 | 7.071 @216.8/344.5 | 6.521 @187.6/339.2 |
 | records.bin | 1.347 @79.8/414.5 | 2.016 @18.6/249.5 | 1.371 @255.4/414.2 | 1.934 @191.9/348.5 | 2.183 @126.5/308.9 |
 | random.bin | 1.000 @383.3/443.8 | 1.000 @265.5/437.3 | 1.000 @397.3/385.8 | 1.000 @323.3/357.2 | 1.000 @280.3/343.9 |
 
@@ -523,7 +607,7 @@ structs.bin (1,200,000)
   zstd-3         752,116     1.595     114.5    288.5
   zstd-9         749,835     1.600      45.4    290.2
   zstd-19        630,874     1.902       6.3    265.1
-  lz4-1        1,200,019     1.000     405.7    355.1
+  lz4-1        1,200,019     1.000     432.7    355.1
   lz4-9        1,052,443     1.140      43.0    319.2
 
 table.csv (1,368,615)

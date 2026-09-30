@@ -10,15 +10,19 @@ byte-identical output and sanitizer-clean corrupt-input handling. The C decoder
 remains canonical for the full legacy H/A/I/C entropy surface; Python retains
 limited A-tag coverage, while JavaScript intentionally omits legacy tags.
 
-Version 2.65.12. Copyright 2026 Cristian Cezar Moisés. The first-party codec
+Version 2.65.13. Copyright 2026 Cristian Cezar Moisés. The first-party codec
 library, CLI, tests, and documentation are licensed under Apache-2.0. The
 XXH64-derived implementation retains its BSD-2-Clause notice; see `NOTICE`.
 
 ## Where it stands
 
-v2.65.12 changes licensing and release packaging without changing codec
-behavior or the wire format. It retains the v2.65.11 work that reduced
-fast-mode setup for inputs up to 4 KiB while preserving the full hash mapping,
+v2.65.13 extends small-input matcher setup to balanced and extreme encoding.
+Independent inputs up to 4 KiB initialize only reachable hash roots and use
+input-sized match chains; extreme's first-block prepass uses the same setup.
+The public API and encoded bytes are unchanged in the executed compatibility
+matrix. The first-party Apache-2.0 and XXH64-derived BSD-2-Clause licenses
+introduced in v2.65.12 remain unchanged. It retains the v2.65.11 work that
+reduced fast-mode setup while preserving the full hash mapping,
 added caller-owned workspaces for Huffman/ANS literal decoding, and provided an
 explicitly scalar build. Fast mode ignores
 `format_v2`, because its plain tokens require a minimum match length of four;
@@ -30,7 +34,33 @@ userspace improvements, not a claim to replace LZ4/Zstd or to be ready for
 Linux kernel inclusion. The [integration guide](INTEGRATION.md#linux-kernel-readiness)
 records the licensing, memory, portability, and validation work still needed.
 
-### Current bounded page profile (measured 2026-09-06)
+### Current one-shot comparison (v2.65.13, measured 2026-09-30)
+
+The retained `bench/bench_pages.c` harness measured synthetic 4 KiB text in a
+process pinned to CPU 4 on an i7-13700HX, Linux 7.2.8, GCC 14.3.0 `-O3 -flto`.
+VaptVupt used `VV_DISABLE_SIMD=1`; installed LZ4 1.10.0/Zstd 1.5.7 libraries
+retain their own optimizations. These are medians of five calibrated batches,
+not individual-call latency percentiles. Each API includes internal setup,
+but excludes caller buffer allocation. VaptVupt includes framing/XXH64,
+Zstd framing without checksum, and LZ4 raw blocks without framing/checksum.
+
+| One-shot API | Compressed bytes | Ratio | Encode MB/s | Decode MB/s |
+|---|---:|---:|---:|---:|
+| VaptVupt FAST | 1,412 | 2.901 | 93.396 | 1,514.648 |
+| VaptVupt balanced | 956 | 4.285 | 13.362 | 97.903 |
+| LZ4 default | 1,652 | 2.479 | 529.302 | 2,325.752 |
+| Zstd level 1 | 829 | 4.941 | 138.498 | 447.251 |
+| Zstd level 3 | 778 | 5.265 | 166.446 | 569.085 |
+
+The full 60-profile run covers text, records, random and repeating data at
+4/16/64 KiB. It does not establish replacement of LZ4/Zstd. Separate five-pair
+2.65.12/2.65.13 comparisons reduced extreme encoding latency by 56.27% on
+64-byte varying words and 22.84% on 4 KiB varying words; balanced improved
+6.72% and 2.65%, respectively. All corresponding bytes match. Controls above
+the 4 KiB cutoff include a 1.03% balanced random-input loss at 4097 bytes.
+See [measurement details](bench/COMPARISON.md) for all cases and noisy earlier runs.
+
+### Historical bounded context profile (measured 2026-09-06)
 
 Commit `a14e09f` was measured in-process on 64 independent synthetic 4 KiB
 text pages, pinned to CPU 4. VaptVupt was built without intrinsics or compiler
@@ -94,12 +124,12 @@ gcc 14.3, pinned to core 2. Each cell is the median of 7 measured runs after
 1 warm-up; zstd 1.5.6 ran single-threaded and lz4 is 1.10. Every decode was
 verified against the generated input by SHA-256. Cells are
 `ratio @ encode/decode MB/s`; ratio = raw / compressed.
-These are historical v2.65.10 timings, not measurements of v2.65.12.
+These are historical v2.65.10 timings, not measurements of v2.65.13.
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
 | text.txt | 3.707 @141.3/397.5 | 7.055 @62.3/346.3 | 2.907 @280.6/381.4 | 5.768 @202.5/346.2 | 6.198 @185.6/356.1 |
-| records.jsonl | 3.142 @138.8/419.6 | 5.707 @53.8/353.6 | 3.505 @285.5/405.4 | 7.071 @216.8/344.5 | 6.521 @187.6/339.2 |
+| records.jsonl | 3.142 @138.8/419.6 | 5.707 @53.8/353.6 | 3.505 @285.5/432.4 | 7.071 @216.8/344.5 | 6.521 @187.6/339.2 |
 | records.bin | 1.347 @79.8/414.5 | 2.016 @18.6/249.5 | 1.371 @255.4/414.2 | 1.934 @191.9/348.5 | 2.183 @126.5/308.9 |
 | random.bin | 1.000 @383.3/443.8 | 1.000 @265.5/437.3 | 1.000 @397.3/385.8 | 1.000 @323.3/357.2 | 1.000 @280.3/343.9 |
 
@@ -184,6 +214,10 @@ suite above.
 
 Recent releases, newest first:
 
+- **v2.65.13** — bound small balanced/extreme match chains and avoid clearing
+  unreachable roots, including extreme's first-block prepass. Add allocator
+  failure/limit and exact streaming-byte-parity coverage. The tested frame
+  bytes and existing interfaces remain unchanged.
 - **v2.65.12** — relicense first-party work under Apache-2.0, preserve the
   XXH64-derived BSD-2-Clause notice, and distribute new source releases as
   signed-tag `.zupt` packages. Codec behavior and the wire format are unchanged.
@@ -343,17 +377,17 @@ remain available and are not renamed or removed.
 With Zupt 5.2.9 or later, inspect, verify, and extract a package as follows:
 
 ```sh
-zupt list vaptvupt-codec-2.65.12.zupt
-zupt test vaptvupt-codec-2.65.12.zupt
-zupt extract -o ./vaptvupt-codec-2.65.12 \
-  vaptvupt-codec-2.65.12.zupt
+zupt list vaptvupt-codec-2.65.13.zupt
+zupt test vaptvupt-codec-2.65.13.zupt
+zupt extract -o ./vaptvupt-codec-2.65.13 \
+  vaptvupt-codec-2.65.13.zupt
 ```
 
 For maintainers, maximum compression is selected explicitly:
 
 ```sh
-zupt compress --vv -l 9 vaptvupt-codec-2.65.12.zupt \
-  vaptvupt-codec-2.65.12/
+zupt compress --vv -l 9 vaptvupt-codec-2.65.13.zupt \
+  vaptvupt-codec-2.65.13/
 ```
 
 The release archive is not encrypted. Verify its `SHA256SUMS` entry and the

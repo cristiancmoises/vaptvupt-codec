@@ -2,7 +2,7 @@
 
 Codec de compressão LZ + tANS em C11, sem dependências de runtime de terceiros, com
 formato aberto e decodificadores de referência em Python e JavaScript que
-reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.12**.
+reproduzem byte a byte a saída atual/padrão do encoder. Versão **2.65.13**.
 
 Copyright 2026 Cristian Cezar Moisés. O codec, a CLI, os testes e a
 documentação de autoria própria são licenciados sob Apache-2.0. A implementação
@@ -13,9 +13,13 @@ Leia também a [documentação técnica em português](DOCUMENTACAO.pt-BR.md) e 
 
 ## Situação atual
 
-O v2.65.12 altera a licença e o empacotamento do release, sem mudar o
-comportamento do codec nem o formato no fio. Ele preserva o trabalho do
-v2.65.11, que reduziu a inicialização do modo fast em entradas de até 4 KiB,
+O v2.65.13 estende a inicialização para entradas pequenas aos modos balanced
+e extreme. Entradas independentes de até 4 KiB inicializam somente as raízes
+hash alcançáveis e usam chains proporcionais à entrada; o prepass do primeiro
+bloco extreme usa a mesma preparação. A API e os bytes codificados não mudaram
+na matriz de compatibilidade executada. As licenças Apache-2.0 de autoria
+própria e BSD-2-Clause derivada de XXH64, adotadas no v2.65.12, permanecem.
+Ele preserva o trabalho do v2.65.11, que reduziu a inicialização do modo fast,
 manteve o mapeamento hash completo, ofereceu workspaces do chamador para
 decodificação literal Huffman/ANS e incluiu uma compilação explicitamente
 escalar. Fast ignora `format_v2`: seus tokens simples exigem matches
@@ -27,7 +31,34 @@ mudam. São melhorias de userspace, não evidência de substituição geral de L
 nem de prontidão para o kernel Linux. Os bloqueios de licença, memória e
 validação estão na [documentação técnica](DOCUMENTACAO.pt-BR.md#prontidão-para-o-kernel-linux).
 
-### Perfil atual limitado a páginas (medido em 06/09/2026)
+### Comparação one-shot atual (v2.65.13, medida em 30/09/2026)
+
+O harness `bench/bench_pages.c` mediu texto sintético de 4 KiB em um processo
+fixado na CPU 4: i7-13700HX, Linux 7.2.8, GCC 14.3.0 `-O3 -flto` e
+`VV_DISABLE_SIMD=1` no VaptVupt. LZ4 1.10.0/Zstd 1.5.7 mantêm suas próprias
+otimizações. São medianas de cinco lotes calibrados, não percentis de latência
+de chamadas individuais. As APIs incluem sua preparação interna, mas não a
+alocação dos buffers pelo chamador. VaptVupt inclui framing/XXH64; Zstd,
+framing sem checksum; LZ4, blocos raw sem framing/checksum.
+
+| API one-shot | Bytes comprimidos | Razão | Compressão MB/s | Descompressão MB/s |
+|---|---:|---:|---:|---:|
+| VaptVupt FAST | 1.412 | 2,901 | 93,396 | 1.514,648 |
+| VaptVupt balanced | 956 | 4,285 | 13,362 | 97,903 |
+| LZ4 padrão | 1.652 | 2,479 | 529,302 | 2.325,752 |
+| Zstd nível 1 | 829 | 4,941 | 138,498 | 447,251 |
+| Zstd nível 3 | 778 | 5,265 | 166,446 | 569,085 |
+
+A execução completa cobre 60 perfis de texto, registros, dados aleatórios e
+repetidos em 4/16/64 KiB. Não demonstra substituição de LZ4/Zstd. Cinco pares
+separados 2.65.12/2.65.13 reduziram a latência extreme em 56,27% para palavras
+variadas de 64 bytes e 22,84% em 4 KiB; balanced melhorou 6,72% e 2,65%.
+Os bytes correspondentes são idênticos. Os controles acima de 4 KiB incluem
+perda de 1,03% no balanced aleatório de 4097 bytes. As execuções anteriores
+ruidosas também foram preservadas nos detalhes.
+Consulte [os detalhes da medição](bench/COMPARISON.md).
+
+### Perfil histórico de contextos limitados (medido em 06/09/2026)
 
 O commit `a14e09f` foi medido in-process com 64 páginas independentes de texto
 sintético de 4 KiB, fixado na CPU 4. VaptVupt foi compilado sem intrínsecos e
@@ -94,7 +125,7 @@ fixada no core 2. Cada célula é a mediana de 7 execuções após 1 aquecimento
 zstd 1.5.6 usou uma thread e lz4 é 1.10. Todas as saídas decodificadas foram
 verificadas por SHA-256. As células mostram
 `razão @ compressão/decodificação MB/s`.
-São tempos históricos do v2.65.10, não medições do v2.65.12.
+São tempos históricos do v2.65.10, não medições do v2.65.13.
 
 | file | vv-fast | vv-balanced | lz4-1 | zstd-1 | zstd-3 |
 |---|---|---|---|---|---|
@@ -183,17 +214,17 @@ continuam disponíveis e não são renomeados nem removidos.
 Com Zupt 5.2.9 ou mais recente, inspecione, valide e extraia o pacote assim:
 
 ```sh
-zupt list vaptvupt-codec-2.65.12.zupt
-zupt test vaptvupt-codec-2.65.12.zupt
-zupt extract -o ./vaptvupt-codec-2.65.12 \
-  vaptvupt-codec-2.65.12.zupt
+zupt list vaptvupt-codec-2.65.13.zupt
+zupt test vaptvupt-codec-2.65.13.zupt
+zupt extract -o ./vaptvupt-codec-2.65.13 \
+  vaptvupt-codec-2.65.13.zupt
 ```
 
 O comando equivalente para criar o pacote com compressão máxima é:
 
 ```sh
-zupt compress --vv -l 9 vaptvupt-codec-2.65.12.zupt \
-  vaptvupt-codec-2.65.12/
+zupt compress --vv -l 9 vaptvupt-codec-2.65.13.zupt \
+  vaptvupt-codec-2.65.13/
 ```
 
 O pacote não é criptografado. Confira a entrada em `SHA256SUMS` e a tag Git

@@ -150,6 +150,11 @@ $(TEST23_BIN) $(TEST24_BIN) $(TEST25_BIN) $(TEST26_BIN): $(CORE_HEADERS)
 
 all: $(TARGET)
 
+.PHONY: small-alloc-test
+small-alloc-test: tests/test_small_encoder_alloc.c $(CORE_SRC) $(CORE_HEADERS)
+	$(CC) $(CFLAGS) -DVV_DISABLE_SIMD=1 tests/test_small_encoder_alloc.c $(CORE_SRC) $(LDFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc -o test_small_encoder_alloc
+	./test_small_encoder_alloc
+
 .PHONY: scalar-test
 scalar-test:
 	@CC="$(CC)" sh verification/scalar_gate.sh
@@ -370,6 +375,9 @@ test: $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_B
 	./$(TEST24_BIN)
 	./$(TEST25_BIN)
 	./$(TEST26_BIN)
+ifeq ($(shell uname -s),Linux)
+	$(MAKE) small-alloc-test
+endif
 	@echo ""
 	@echo "OOM-robustness sweep (no crash on any single allocation failure):"
 	@VV_BIN=./$(TARGET) CC="$(CC)" sh tests/oom_sweep.sh
@@ -622,6 +630,7 @@ bench: $(TARGET)
 	fi
 
 clean:
+	rm -f test_small_encoder_alloc
 	rm -f $(TARGET) $(TEST1_BIN) $(TEST2_BIN) $(TEST3_BIN) $(TEST4_BIN) $(TEST5_BIN) $(TEST6_BIN) $(TEST7_BIN) $(TEST8_BIN) $(TEST9_BIN) $(TEST10_BIN) $(TEST11_BIN) $(TEST12_BIN) $(TEST13_BIN) $(TEST14_BIN) $(TEST15_BIN) $(TEST16_BIN) $(TEST17_BIN) $(TEST18_BIN) $(TEST19_BIN) $(TEST20_BIN) $(TEST21_BIN) $(TEST22_BIN) $(TEST23_BIN) $(TEST24_BIN) $(TEST25_BIN) $(TEST26_BIN) *.vv *.zupt *.orig
 	rm -rf tests/corpus_bad
 

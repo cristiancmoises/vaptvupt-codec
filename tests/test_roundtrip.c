@@ -155,10 +155,10 @@ done:
 /* Streaming retains the fully initialized matcher. For a single v1 chunk,
  * its block/footer bytes must equal the one-shot small-input setup, including
  * boundary hashes and circular chains narrower than the advertised window. */
-static void test_small_fast_setup(uint8_t window_log) {
+static void test_small_setup(uint8_t window_log, vv_mode_t mode) {
     char label[96];
-    snprintf(label, sizeof(label), "Small fast setup vs full matcher (w=%u)",
-             (unsigned)window_log);
+    snprintf(label, sizeof(label), "Small setup vs full matcher (w=%u mode=%u)",
+             (unsigned)window_log, (unsigned)mode);
     TEST(label);
     static const size_t sizes[] = {
         0, 1, 2, 3, 4, 5, 6, 14, 15, 16, 18, 19, 20, 31, 32, 33,
@@ -166,7 +166,7 @@ static void test_small_fast_setup(uint8_t window_log) {
     };
     vv_options_t opts;
     vv_default_options(&opts);
-    opts.mode = VV_MODE_ULTRA_FAST;
+    opts.mode = mode;
     opts.window_log = window_log;
     vv_cstream_t *stream = vv_cstream_create(&opts);
     if (!stream) { FAIL("stream create failed"); return; }
@@ -207,7 +207,7 @@ static void test_small_fast_setup(uint8_t window_log) {
                            (int64_t)n || memcmp(src, decoded, n) != 0) {
                     error = "small setup roundtrip failed";
                 }
-                if (!error) {
+                if (!error && mode == VV_MODE_ULTRA_FAST) {
                     /* FAST cannot emit T tags, so requesting v2 must retain
                      * the same v1 tokens. The 255-byte periodic case used
                      * to encode a +3 match bias that the decoder read as +4. */
@@ -310,9 +310,11 @@ int main(void) {
         test_cstream_format_reset((vv_mode_t)mode, 1);
     }
 
-    test_small_fast_setup(10);
-    test_small_fast_setup(16);
-    test_small_fast_setup(24);
+    for (unsigned mode = 0; mode < 3; mode++) {
+        test_small_setup(10, (vv_mode_t)mode);
+        test_small_setup(16, (vv_mode_t)mode);
+        test_small_setup(24, (vv_mode_t)mode);
+    }
 
     fprintf(stderr, "\n═══════════════════════════════════════════\n");
     fprintf(stderr, "  Results: %d/%d passed\n", tests_passed, tests_run);

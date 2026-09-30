@@ -8,7 +8,7 @@ threat-model boundary. Numbers here point to measured data, not headline
 claims — see `bench/COMPARISON.md` for the page-sized one-shot API harness,
 paired encoder measurements, and separately labeled historical CLI/corpus data.
 
-Release alignment: **v2.65.12**. The wire layout is unchanged from v2.65.10;
+Release alignment: **v2.65.13**. The wire layout is unchanged from v2.65.10;
 valid encoded streams remain compatible. Malformed token extensions, offsets
 beyond the declared window, invalid ANS normalization and truncated Huffman
 bitstreams are rejected. Changing the streaming encoder's `format_v2` through
@@ -26,6 +26,18 @@ in `NOTICE`. Zupt is a separate userspace consumer, not a former name for this
 library or an interchangeable checkout of the broader VaptVupt application. A
 kernel adaptation belongs in vaptvupt-linux; Zupt does not require a kernel
 module to keep working.
+
+### Small independent one-shot inputs
+
+In v2.65.13, all three encoder modes use reachable-root initialization for
+inputs through 4096 bytes. The primary hash map remains 1 MiB; only its
+reachable roots are initialized, and the circular match chain is bounded to
+the next power of two covering the input. Extreme's no-history first-block
+prepass follows the same rule. Window flags, offset width, public API, and
+frame grammar remain unchanged. Streaming retains its full-history matcher;
+this change does not make balanced/extreme allocation-neutral or suitable
+for a kernel stack. A regression test exercises 432 combinations under a
+1 MiB maximum *individual* allocation, not a 1 MiB total-memory limit.
 
 ---
 
@@ -171,7 +183,7 @@ from 4704 to 608 bytes and from 5024 to 960 bytes. Those figures exclude nested
 callee frames and do not establish a kernel stack budget; the legacy ANS
 context encoder still has a 128 KiB local normalization array.
 
-For one-shot fast inputs up to 4 KiB, the encoder initializes only buckets
+For one-shot inputs up to 4 KiB in all modes, the encoder initializes only buckets
 reachable from input positions and sizes the chain to the next power of two
 covering the input, capped by the selected window. The full 18-bit hash
 mapping is preserved. At 4 KiB with the default window this avoids requesting
@@ -258,7 +270,7 @@ and `verification/README.md`.
 
 ## Linux kernel readiness
 
-v2.65.12 is not ready for upstream kernel inclusion. Apache-2.0-only does not
+v2.65.13 is not ready for upstream kernel inclusion. Apache-2.0-only does not
 by itself provide the GPL-2.0-only-compatible rights required for code imported
 into Linux. A compatible additional grant needs authorization from all
 relevant rights holders. See the
